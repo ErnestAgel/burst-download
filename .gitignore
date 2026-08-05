@@ -3,6 +3,13 @@ build/
 *.o
 *.obj
 
+# 仓库不跟踪的内容
+.vscode/
+zsync
+PROGRESS.md
+
 # 编辑器/系统
-.vscode/*.log
 Thumbs.db
+
+# 发布临时产物（已上传 GitHub Release）
+release/dist/
