@@ -37,6 +37,12 @@
   - README 使用章节重写为 CLI 传参示例（消除"编译进代码"旧说明），注意事项更新（跨平台/超时/续传）
   - Docker 验证：help ✓、传参下载 10MB ✓、挂起服务器 `--timeout 3` 约 6.5s 超时中断 ✓、log 记录 `curl error: Timeout was reached` ✓、成功/失败日志 ✓
 - [x] 删除 `src/demo.c`（纯 C 参考实现，不影响主程序），CMakeLists 去掉 demo 目标与 NOT WIN32 分支，README 特性/目录/构建产物章节同步清理
+- [x] **视频下载模式 `--video`**（本轮）：
+  - 新增 `video.h/cpp`：调用外部 yt-dlp（`-f "bestvideo+bestaudio/best" -g --no-playlist`）解析视频直链，支持 B站/YouTube 等 1000+ 网站（统一方案，不自研解析器）
+  - Ccurl 新增 `SetReferer()`（防盗链）：Downloading/探测请求均带 Referer；st_EasyList 增加 referer 字段
+  - main.cpp：`--video <url>` 模式，解析后逐个流用多线程分片下载器下载（视频轨 .mp4 + 音频轨 .m4a），DASH 分离时提示 ffmpeg 合并命令
+  - README：视频模式用法 + yt-dlp 依赖 + DASH 合并说明；特性/目录结构更新
+  - Docker 验证：编译 ✓、help ✓、直链 mp4 下载 788KB 完整 ✓、B站解析 ✓（音视频分离识别）、B站音频轨 34.6MB 下载 ✓（Referer 防盗链生效）、视频轨部分视频被 B站 CDN 返回 Access Denied（平台风控，非代码问题，真实场景需登录 Cookie，列为后续增强）
 - [x] 新增 `.gitignore`（忽略 build/、*.o）
 
 ## 进行中

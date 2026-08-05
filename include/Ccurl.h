@@ -45,6 +45,7 @@ typedef struct
     bool success;          /**< 本分片是否下载成功 */
     bool thread_created;   /**< 分片线程是否成功创建 */
     long timeout;          /**< 低速超时秒数（0=不限制，不自动中断） */
+    const char* referer;   /**< 防盗链 Referer（可为空），如 B站视频流需 https://www.bilibili.com */
 }st_EasyList;
 
 
@@ -87,6 +88,12 @@ public:
      * @return 是否成功
      */
     bool Uploading_Task(const char* server_url);
+
+    /**
+     * @brief 设置防盗链 Referer（部分视频流/资源需要，如 B站）
+     * @param referer 来源页 URL，可为空字符串
+     */
+    void SetReferer(const string& referer);
 
     /**
      * @brief 线程入口：下载单个分片
@@ -140,4 +147,5 @@ private:
     int m_thread_num;               /**< 实际使用的下载线程数 */
     bool m_range_supported;         /**< 服务器是否支持 HTTP Range */
     int m_timeout;                  /**< 低速超时秒数（0=不自动中断） */
+    string m_referer;               /**< 防盗链 Referer（可为空） */
 };

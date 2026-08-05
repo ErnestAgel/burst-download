@@ -1,0 +1,53 @@
+/**
+ * @file video.cpp
+ * @brief 视频直链解析模块实现：调用外部 yt-dlp 解析视频网页 URL
+ *
+ * 设计：不自行实现各网站解析器（避免"一个网站一个库"），统一交由 yt-dlp
+ * （支持 B站/YouTube 等 1000+ 网站）解析出媒体流直链，再由本项目的多线程
+ * 分片下载器下载。
+ *
+ * @author ErnestAgel
+ * @date 2026-08-06
+ */
+
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+#include "video.h"
+
+#ifdef _WIN32
+#define popen _popen
+#define pclose _pclose
+#endif
+
+using namespace std;
+
+bool ParseVideoUrls(const string& url, vector<string>& urls) {
+  urls.clear();
+
+  /* yt-dlp 参数说明：
+   *   -f "bestvideo+bestaudio/best"  优先音视频分离的最佳组合（或单文件 best）
+   *   -g                             只打印媒体流直链，不下载
+   *   --no-playlist                  视频 URL 属于合集时只取当前视频 */
+  string cmd = "yt-dlp -f \"bestvideo+bestaudio/best\" -g --no-playlist '" +
+               url + "' 2>/dev/null";
+
+  FILE* fp = popen(cmd.c_str(), "r");
+  if (fp == nullptr) {
+    return false;
+  }
+  char line[4096];
+  while (fgets(line, sizeof(line), fp) != nullptr) {
+    string s = line;
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) {
+      s.pop_back();
+    }
+    if (!s.empty()) {
+      urls.push_back(s);
+    }
+  }
+  int rc = pclose(fp);
+
+  return rc == 0 && !urls.empty();
+}

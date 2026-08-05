@@ -203,6 +203,10 @@ bool Ccurl::Init(const string url, string filename, int thread_num, int timeout)
   return flag;
 }
 
+void Ccurl::SetReferer(const string& referer) {
+  m_referer = referer;
+}
+
 void *Ccurl::Downloading(void* arg) {
   st_EasyList* info = (st_EasyList*)arg;
   char range[64] = {0};
@@ -238,6 +242,9 @@ void *Ccurl::Downloading(void* arg) {
     }
     curl_easy_setopt(curl, CURLOPT_URL, info->url);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    if (info->referer != nullptr && info->referer[0] != '\0') {
+      curl_easy_setopt(curl, CURLOPT_REFERER, info->referer);
+    }
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, File_Write);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, info);
 
@@ -476,6 +483,7 @@ bool Ccurl::File_Init(const char* filename) {
     m_Easy_List[i]->success = false;
     m_Easy_List[i]->thread_created = false;
     m_Easy_List[i]->timeout = m_timeout;
+    m_Easy_List[i]->referer = m_referer.c_str();
   }
   g_pInfoTable = m_Easy_List;
   g_resume_len = (double)m_resume_len;
@@ -503,6 +511,9 @@ bool Ccurl::get_Download_FileSize() {
 
   curl_easy_setopt(m_easyHandle, CURLOPT_URL, m_url.c_str());
   curl_easy_setopt(m_easyHandle, CURLOPT_FOLLOWLOCATION, 1L);
+  if (!m_referer.empty()) {
+    curl_easy_setopt(m_easyHandle, CURLOPT_REFERER, m_referer.c_str());
+  }
   curl_easy_setopt(
       m_easyHandle, CURLOPT_USERAGENT,
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
@@ -544,6 +555,9 @@ bool Ccurl::Check_Range_Support() {
   }
   curl_easy_setopt(curl, CURLOPT_URL, m_url.c_str());
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  if (!m_referer.empty()) {
+    curl_easy_setopt(curl, CURLOPT_REFERER, m_referer.c_str());
+  }
   curl_easy_setopt(curl, CURLOPT_RANGE, "0-0");      /* 只请求第一个字节 */
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DummyWrite);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);

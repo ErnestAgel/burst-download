@@ -23,14 +23,15 @@
 
 | | 说明 Description |
 |---|---|
-| ⚡ **多线程并发下载** | 11 个线程并行拉取文件的不同字节区间，充分利用带宽 |
+| ⚡ **多线程并发下载** | `-t` 1~10 线程并行拉取文件的不同字节区间，充分利用带宽 |
 | 📐 **HTTP Range 分片** | 每个线程通过 `Range: bytes=start-end` 只下载属于自己的片段 |
 | 🧠 **mmap 内存映射落盘** | 文件通过 `mmap` 映射到内存，分片数据直接写入对应偏移，免去额外缓冲拷贝 |
-| 📊 **实时进度显示** | 进度回调汇总所有线程的下载量，打印整体下载百分比 |
+| 📊 **实时进度显示** | 进度回调汇总所有线程的下载量，打印整体百分比 / 速率 / 剩余时间 |
 | 📏 **自动探测文件大小** | 下载前通过 `HEAD`（`NOBODY`）请求获取 `Content-Length` |
 | 🌐 **跨平台实现** | Windows / Linux（x86_64 / aarch64）条件编译 |
+| 🎬 **视频下载模式** | `--video` 模式：yt-dlp 解析视频网页（B站/YouTube 等 1000+ 网站）→ 多线程分片下载 |
 
-> **Multi-threaded concurrent download · HTTP Range chunks · mmap zero-copy write · live progress report · automatic file-size probing · C++ & C implementations**
+> **Multi-threaded concurrent download · HTTP Range chunks · mmap zero-copy write · live progress (percent/speed/ETA) · resume & retry · timeout & logging · cross-platform · video mode via yt-dlp**
 
 ---
 
@@ -67,11 +68,15 @@ curl_download/
 ├── CMakeLists.txt        # 构建脚本（生成 curl_download）
 ├── include/
 │   ├── Ccurl.h           # Ccurl 类声明
+│   ├── video.h           # 视频直链解析（yt-dlp）
 │   └── curl/             # libcurl 头文件
-├── lib/
-│   └── libcurl.so*       # libcurl 动态库
+├── lib/                  # 项目自带的 libcurl 库（按架构分目录）
+│   ├── linux-x86_64/     # Linux x86_64 库
+│   ├── linux-aarch64/    # Linux ARM64 库
+│   └── windows-x86_64/   # Windows 库（libcurl-4.dll）
 ├── src/
 │   ├── Ccurl.cpp         # C++ 封装实现
+│   ├── video.cpp         # 视频直链解析实现
 │   └── main.cpp          # 程序入口（命令行下载工具）
 └── zsync                 # zsync 二进制
 ```
@@ -132,6 +137,17 @@ mingw32-make
 ./curl_download -h
 ```
 
+**视频下载模式**（需已安装 yt-dlp，支持 B站/YouTube 等 1000+ 网站）：
+
+```bash
+# 下载 B站视频（自动解析媒体流直链，多线程分片下载）
+./curl_download --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
+
+# 音视频分离流会分别下载为 movie.mp4（视频轨）与 movie.m4a（音频轨），
+# 可用 ffmpeg 合并：
+# ffmpeg -i movie.mp4 -i movie.m4a -c copy movie_full.mp4
+```
+
 终端实时输出下载进度（百分比 / 速率 / 剩余时间）：
 
 ```
@@ -152,7 +168,8 @@ percent: 100%
 - 跨平台：**Linux（x86_64 / aarch64）与 Windows**；
 - 线程数用 `-t` 参数控制，范围 1~10，默认 10，最后一个分片负责余数部分；
 - **断点续传**：自动检测本地已存在文件大小并从断点继续；文件已完整时直接跳过；服务器不支持 Range 时会丢弃旧文件重新下载；
-- **超时机制**：默认 60 秒无进展自动中断，可用 `--timeout N` 调整或用 `--no-timeout` 禁用（详见上方"使用"章节）。
+- **超时机制**：默认 60 秒无进展自动中断，可用 `--timeout N` 调整或用 `--no-timeout` 禁用（详见上方"使用"章节）；
+- **视频模式**：`--video` 依赖已安装的 yt-dlp（`pip install yt-dlp` 或官网单文件），支持网站与 yt-dlp 一致；音视频分离流下载后需 ffmpeg 合并。
 
 > **Requires HTTP Range support (auto fallback to single stream) · Cross-platform (Linux x86_64 / aarch64, Windows) · threads via `-t` (1-10) · resume supported · timeout via `--timeout` / `--no-timeout`.**
 
