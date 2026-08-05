@@ -1,0 +1,8 @@
+# 构建产物
+build/
+*.o
+*.obj
+
+# 编辑器/系统
+.vscode/*.log
+Thumbs.db
