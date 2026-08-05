@@ -1,5 +1,7 @@
 <div align="center">
 
+[🇨🇳 中文](README.md) · [🇬🇧 English](README_EN.md)
+
 # ⚡ curlbolt
 
 **多线程分片下载器 · 支持视频下载**  
@@ -115,36 +117,20 @@ cmake --build build
 
 ---
 
-## 📁 目录结构 Project Structure
-
-```
-curlbolt/
-├── CMakeLists.txt        # 构建脚本（Debug 动态 / Release 静态单文件）
-├── include/
-│   ├── Ccurl.h           # 下载器封装类声明
-│   ├── video.h           # 视频直链解析
-│   └── curl/             # libcurl 头文件
-├── lib/                  # 项目自带的 libcurl 库（三平台 × 动态/静态）
-│   ├── linux-x86_64/     # Linux x86_64（libcurl.so / libcurl.a）
-│   ├── linux-aarch64/    # Linux ARM64（libcurl.so / libcurl.a）
-│   └── windows-x86_64/   # Windows（libcurl-4.dll / libcurl.a）
-├── scripts/
-│   └── build-static-libs.sh  # 重新构建三平台静态 libcurl 库
-├── src/
-│   ├── Ccurl.cpp         # 多线程分片下载实现
-│   ├── video.cpp         # 视频直链解析实现
-│   └── main.cpp          # 命令行入口
-└── zsync                 # zsync 二进制
-```
-
----
-
 ## ⚠️ 注意事项 Notes
 
 - 需要服务器支持 **HTTP Range**（静态文件服务器通常都支持；不支持时自动退化单线程）；
 - **视频模式**支持 B站/YouTube 等主流网站；B站 720p+ 高清流需登录态（`--cookies-from-browser chrome`）；
 - **断点续传**仅比较文件大小，远程内容变更时建议删除本地文件重新下载；
 - 超时机制：默认 60 秒无进展自动中断，`--timeout N` 调整，`--no-timeout` 禁用。
+
+---
+
+## ⚠️ 免责声明 Disclaimer
+
+本工具仅用于下载**您有权获取**的内容（如个人备份、学习研究、公有领域或 CC 协议素材）。请勿用于下载、传播或商用受版权保护的内容，也不得用于任何违法行为。**使用者应自行承担全部法律责任，作者不对任何使用行为负责。**
+
+This tool is intended only for downloading content **you have the right to obtain** (e.g. personal backups, study & research, public domain or CC-licensed material). Do not use it to download, redistribute or commercially exploit copyrighted content, nor for any unlawful purpose. **Users bear full legal responsibility; the author assumes no liability for any use of this tool.**
 
 ---
 

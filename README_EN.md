@@ -1,0 +1,140 @@
+<div align="center">
+
+[🇬🇧 English](README_EN.md) · [🇨🇳 中文](README.md)
+
+# ⚡ curlbolt
+
+**Multi-threaded chunked downloader with video download support**
+
+![C/C++](https://img.shields.io/badge/language-C%2FC%2B%2B-blue?style=for-the-badge)
+![libcurl](https://img.shields.io/badge/libcurl-green?style=for-the-badge&logo=curl&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-x86_64%20%7C%20ARM64-orange?style=for-the-badge&logo=linux&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-x86_64-blue?style=for-the-badge&logo=windows&logoColor=white)
+![CMake](https://img.shields.io/badge/build-CMake-yellow?style=for-the-badge&logo=cmake&logoColor=white)
+
+[![Stars](https://img.shields.io/github/stars/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/stargazers)
+[![Forks](https://img.shields.io/github/forks/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/network)
+[![Last commit](https://img.shields.io/github/last-commit/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/commits/main)
+
+> 🎬 **Video download**: one command to download videos from Bilibili / YouTube and other popular sites
+> ⚡ **Multi-threading**: HTTP Range chunking with 1–10 threads to saturate bandwidth
+> 📦 **Resume support**: continue from where it stopped instead of restarting
+> 🖥 **Single-file builds**: Linux x86_64 / ARM64 / Windows, statically linked Release binaries
+
+</div>
+
+---
+
+## ✨ Features
+
+| | Description |
+|---|---|
+| 🎬 **Video download** | `--video` mode: pass a video page URL, the built-in parser resolves the media stream (Bilibili / YouTube and more), then downloads with multi-threaded chunking |
+| ⚡ **Multi-threaded** | `-t` 1–10 threads, HTTP Range chunking, the last chunk absorbs the remainder |
+| 📦 **Resume** | Automatically detects an existing local file and resumes; falls back to single-thread when the server lacks Range support |
+| ⏱ **Timeout & logging** | `--timeout` / `--no-timeout` control; timeouts and failure details are written to `download.log` |
+| 🍪 **Cookie support** | `--cookies-from-browser` reads browser login state (Bilibili 720p+ streams), `--cookie` for manual cookies |
+| 🛡 **Referer** | Automatically sends the video page Referer to avoid anti-hotlinking 403s |
+| 🖥 **Cross-platform** | Linux x86_64 / Linux aarch64 / Windows; **Debug (dynamic libs) + Release (static single-file) dual builds** |
+
+---
+
+## 🎬 Video Download
+
+One command for any supported site:
+
+```bash
+# Download a Bilibili video (auto-resolve + multi-threaded download)
+./curlbolt --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
+
+# Bilibili 720p+ (requires being logged in to Bilibili in the browser)
+./curlbolt --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookies-from-browser chrome
+
+# YouTube and other popular video sites
+./curlbolt --video "https://www.youtube.com/watch?v=xxxxx" -o clip
+```
+
+- Works with Bilibili, YouTube and other popular sites — just paste the video page URL
+- Separated audio/video streams (DASH) are saved as `movie.mp4` (video) + `movie.m4a` (audio); merge them with ffmpeg:
+  ```bash
+  ffmpeg -i movie.mp4 -i movie.m4a -c copy movie_full.mp4
+  ```
+
+---
+
+## 🚀 Quick Start
+
+```bash
+./curlbolt <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
+./curlbolt --video <video-url> [-o basename] [-t threads] [--timeout sec]
+```
+
+```bash
+# Download a file (8 threads, 30s no-progress timeout)
+./curlbolt https://example.com/file.iso -o file.iso -t 8 --timeout 30
+
+# Download a video
+./curlbolt --video "https://www.bilibili.com/video/BVxxxx" -o movie
+
+# Force download without auto-interruption
+./curlbolt https://example.com/file.iso -o file.iso --no-timeout
+
+# Show help
+./curlbolt -h
+```
+
+Live **progress / speed / ETA** output:
+
+```
+percent: 42% speed: 3.20 MB/s ETA: 00:05:12
+```
+
+---
+
+## 🔨 Build
+
+The project ships prebuilt libcurl libraries for three platforms (`lib/`) — no need to install libcurl dev packages.
+
+**Debug (default)**: links dynamic libraries, convenient for gdb
+
+```bash
+cmake -B build . && cmake --build build        # Linux
+cmake -B build -G "MinGW Makefiles" .          # Windows
+```
+
+**Release**: links static libraries, producing a **single-file executable** (no dynamic dependencies, for distribution)
+
+```bash
+# Linux (static openssl prepared by the build script)
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT=/path/to/openssl \
+      -DCURL_STATIC_DEPS="/path/libz.a;/path/libzstd.a" .
+cmake --build build
+# Windows (native Schannel TLS, no openssl needed)
+cmake -B build -DCMAKE_BUILD_TYPE=Release .
+cmake --build build
+```
+
+---
+
+## ⚠️ Notes
+
+- Requires server support for **HTTP Range** (static file servers usually support it; falls back to single-thread otherwise);
+- **Video mode** works with Bilibili / YouTube and other popular sites; Bilibili 720p+ streams require login state (`--cookies-from-browser chrome`);
+- **Resume** compares file size only — delete the local file and re-download if the remote content changed;
+- Timeout: interrupts after 60s with no progress by default; `--timeout N` adjusts it, `--no-timeout` disables it.
+
+---
+
+## ⚠️ Disclaimer
+
+This tool is intended only for downloading content **you have the right to obtain** (e.g. personal backups, study & research, public domain or CC-licensed material). Do not use it to download, redistribute or commercially exploit copyrighted content, nor for any unlawful purpose. **Users bear full legal responsibility; the author assumes no liability for any use of this tool.**
+
+本工具仅用于下载**您有权获取**的内容（如个人备份、学习研究、公有领域或 CC 协议素材）。请勿用于下载、传播或商用受版权保护的内容，也不得用于任何违法行为。**使用者应自行承担全部法律责任，作者不对任何使用行为负责。**
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License** (Copyright © 2026 ErnestAgel) — free to use, modify, commercialize and redistribute.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
