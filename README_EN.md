@@ -39,6 +39,44 @@
 
 ---
 
+## 💡 Why curlbolt?
+
+**Compared with traditional download tools (curl / wget):**
+
+| | curl / wget | curlbolt |
+|---|---|---|
+| Connections | single-threaded, single connection | 1–10 concurrent connections |
+| Bandwidth | limited by TCP slow start / congestion window; often can't saturate high-bandwidth, high-latency links | parallel connections approach the bandwidth ceiling |
+| Resume | manual `curl -C -` | automatic detection & resume |
+| Video download | ❌ not supported | `--video` auto-resolves stream URLs |
+| Logging / timeout | none | timeout interrupt + `download.log` |
+
+**Good fit ✅**
+
+- GitHub Releases, software mirrors, CDNs and other Range-capable static resources
+- Large files: ISOs, archives, datasets, model weights
+- Direct video stream downloads (Bilibili / YouTube)
+
+**Not a fit ❌**
+
+- **Account-rate-limited** cloud drives (e.g. Baidu Pan): the server throttles per account, so more threads don't increase total throughput
+- Servers without Range support (automatically falls back to single-thread)
+- Private drives requiring login + dynamic signatures (no direct links)
+
+---
+
+## ⚙️ How It Works
+
+![Multi-thread chunked download](docs/how-it-works.en.svg)
+
+1. **HTTP Range chunking**: send requests like `Range: bytes=0-26214399` to split a large file into N chunks;
+2. **Multi-threaded concurrency**: N threads each hold an independent TCP connection and pull their own chunk simultaneously;
+3. **Why it's faster**: a single TCP connection is limited by **slow start + congestion window**, so the actual rate often stays below the bandwidth ceiling (especially on high-latency links, e.g. cross-border downloads); parallel connections add up and approach the ceiling;
+4. **Prerequisites**: the server must support Range and **not throttle per account** — static file servers / CDNs naturally qualify; account-limited drives like Baidu Pan don't, so more threads change nothing;
+5. **Final assembly**: chunks are written to disk and merged into the complete file (the last chunk absorbs the remainder).
+
+---
+
 ## 🎬 Video Download
 
 One command for any supported site:

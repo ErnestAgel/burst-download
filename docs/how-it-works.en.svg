@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="590" viewBox="0 0 860 590" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#546E7A"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1976D2"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#FF9800"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2E7D32"/>
+    </marker>
+  </defs>
+
+  <!-- background -->
+  <rect x="0" y="0" width="860" height="590" fill="#FAFAFA"/>
+
+  <!-- 1. server -->
+  <rect x="330" y="28" width="200" height="56" rx="10" fill="#E3F2FD" stroke="#1976D2" stroke-width="2"/>
+  <text x="430" y="50" text-anchor="middle" font-size="16" font-weight="bold" fill="#0D47A1">Server</text>
+  <text x="430" y="70" text-anchor="middle" font-size="12" fill="#1565C0">supports HTTP Range</text>
+
+  <!-- server -> file -->
+  <line x1="430" y1="84" x2="430" y2="118" stroke="#1976D2" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <text x="452" y="106" font-size="12" fill="#1976D2">HEAD / GET</text>
+
+  <!-- 2. whole file -->
+  <rect x="40" y="120" width="780" height="26" rx="6" fill="#37474F"/>
+  <text x="430" y="137" text-anchor="middle" font-size="13" font-weight="bold" fill="#FFFFFF">100MB File</text>
+
+  <!-- file -> chunks (split) -->
+  <g stroke="#FF9800" stroke-width="1.6" stroke-dasharray="5,4">
+    <line x1="136" y1="146" x2="136" y2="198" marker-end="url(#arrowOrange)"/>
+    <line x1="332" y1="146" x2="332" y2="198" marker-end="url(#arrowOrange)"/>
+    <line x1="528" y1="146" x2="528" y2="198" marker-end="url(#arrowOrange)"/>
+    <line x1="724" y1="146" x2="724" y2="198" marker-end="url(#arrowOrange)"/>
+  </g>
+  <text x="760" y="176" font-size="12" fill="#E65100">Range split</text>
+
+  <!-- 3. chunks -->
+  <g font-size="12" fill="#FFFFFF" text-anchor="middle">
+    <rect x="46"  y="200" width="180" height="50" rx="8" fill="#4CAF50"/>
+    <rect x="242" y="200" width="180" height="50" rx="8" fill="#2196F3"/>
+    <rect x="438" y="200" width="180" height="50" rx="8" fill="#FF9800"/>
+    <rect x="634" y="200" width="180" height="50" rx="8" fill="#9C27B0"/>
+    <text x="136" y="222" font-size="14" font-weight="bold">Chunk 1</text>
+    <text x="136" y="240">bytes=0~24M</text>
+    <text x="332" y="222" font-size="14" font-weight="bold">Chunk 2</text>
+    <text x="332" y="240">bytes=25M~49M</text>
+    <text x="528" y="222" font-size="14" font-weight="bold">Chunk 3</text>
+    <text x="528" y="240">bytes=50M~74M</text>
+    <text x="724" y="222" font-size="14" font-weight="bold">Chunk 4</text>
+    <text x="724" y="240">bytes=75M~99M</text>
+  </g>
+
+  <!-- threads -> chunks (concurrent requests) -->
+  <g stroke="#546E7A" stroke-width="2">
+    <line x1="136" y1="328" x2="136" y2="252" marker-end="url(#arrow)"/>
+    <line x1="332" y1="328" x2="332" y2="252" marker-end="url(#arrow)"/>
+    <line x1="528" y1="328" x2="528" y2="252" marker-end="url(#arrow)"/>
+    <line x1="724" y1="328" x2="724" y2="252" marker-end="url(#arrow)"/>
+  </g>
+  <text x="760" y="296" font-size="12" fill="#455A64">requests</text>
+
+  <!-- 4. threads -->
+  <g>
+    <rect x="76"  y="330" width="120" height="44" rx="8" fill="#ECEFF1" stroke="#607D8B" stroke-width="1.5"/>
+    <rect x="272" y="330" width="120" height="44" rx="8" fill="#ECEFF1" stroke="#607D8B" stroke-width="1.5"/>
+    <rect x="468" y="330" width="120" height="44" rx="8" fill="#ECEFF1" stroke="#607D8B" stroke-width="1.5"/>
+    <rect x="664" y="330" width="120" height="44" rx="8" fill="#ECEFF1" stroke="#607D8B" stroke-width="1.5"/>
+    <text x="136" y="356" text-anchor="middle" font-size="14" fill="#263238">Thread 1</text>
+    <text x="332" y="356" text-anchor="middle" font-size="14" fill="#263238">Thread 2</text>
+    <text x="528" y="356" text-anchor="middle" font-size="14" fill="#263238">Thread 3</text>
+    <text x="724" y="356" text-anchor="middle" font-size="14" fill="#263238">Thread 4</text>
+  </g>
+
+  <!-- chunk data -> merge -->
+  <g stroke="#2E7D32" stroke-width="1.8">
+    <line x1="136" y1="374" x2="352" y2="434" marker-end="url(#arrowGreen)"/>
+    <line x1="332" y1="374" x2="398" y2="434" marker-end="url(#arrowGreen)"/>
+    <line x1="528" y1="374" x2="462" y2="434" marker-end="url(#arrowGreen)"/>
+    <line x1="724" y1="374" x2="508" y2="434" marker-end="url(#arrowGreen)"/>
+  </g>
+  <text x="760" y="410" font-size="12" fill="#2E7D32">chunk data</text>
+
+  <!-- 5. merge -->
+  <rect x="290" y="436" width="280" height="52" rx="10" fill="#E8F5E9" stroke="#2E7D32" stroke-width="2"/>
+  <text x="430" y="460" text-anchor="middle" font-size="15" font-weight="bold" fill="#1B5E20">Merge (in order)</text>
+  <text x="430" y="478" text-anchor="middle" font-size="12" fill="#33691E">assemble the 4 chunks into one file</text>
+
+  <!-- merge -> complete file -->
+  <line x1="430" y1="488" x2="430" y2="512" stroke="#2E7D32" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <text x="430" y="532" text-anchor="middle" font-size="15" font-weight="bold" fill="#1B5E20">✅ Complete file</text>
+
+  <!-- 6. notes -->
+  <text x="430" y="560" text-anchor="middle" font-size="14" font-weight="bold" fill="#263238">4 parallel TCP connections → bandwidth adds up; chunks are merged in order when done</text>
+  <text x="430" y="580" text-anchor="middle" font-size="12" fill="#78909C">A single connection is limited by TCP slow start / congestion window and often can't saturate the link (notably on high-latency, cross-border downloads)</text>
+</svg>
