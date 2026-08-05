@@ -81,56 +81,82 @@ curl_download/
 
 ## 🔨 构建 Build
 
-依赖：**CMake ≥ 3.10**、**gcc/g++**、**libcurl**、**pthread**（Linux）
+**Linux（x86_64 / aarch64）**——自动选择项目自带 `lib/` 下的对应架构库，无需安装 libcurl：
 
 ```bash
 cmake .
 make
 ```
 
+**Windows（MinGW / MSVC）**——优先链接项目自带 `lib/windows-x86_64/` 的 mingw 版 libcurl，缺失时回退系统 curl（vcpkg / 官方安装包）：
+
+```bash
+cmake -G "MinGW Makefiles" .
+mingw32-make
+```
+
 构建产物：
 
 | 目标 Target | 说明 Description |
 |---|---|
-| `curl_download` | C++ 版主程序（`src/*.cpp`） |
-| `demo` | 纯 C 版示例（`src/demo.c`） |
+| `curl_download` | 主程序（`src/*.cpp`），跨平台 |
+| `demo` | Linux 专属纯 C 参考实现（依赖 mmap/pthread，Windows 下不构建） |
 
-> 仓库自带 `include/curl/` 头文件与 `lib/libcurl.so`，即使系统未安装 libcurl 开发包也可直接编译。
+> 项目自带 `include/curl/` 头文件与三种架构的 libcurl 库（`lib/linux-x86_64/`、`lib/linux-aarch64/`、`lib/windows-x86_64/`），无需安装 libcurl 开发包即可编译。
+> Windows 构建时 CMake 会自动把 `libcurl-4.dll` 复制到可执行文件同目录（运行时依赖）。
 
 ---
 
 ## 🚀 使用 Usage
 
-运行程序：
+命令行传参运行（无需修改代码）：
 
 ```bash
-./curl_download
+./curl_download <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout] [-h]
 ```
 
-下载地址在 `src/main.cpp` 中配置，修改后重新编译即可下载其他文件：
+示例：
 
-```cpp
-ptr->Init("https://releases.ubuntu.com/20.04/ubuntu-20.04.6-live-server-amd64.iso.zsync", "./test");
+```bash
+# 下载到默认文件名 ./test
+./curl_download https://example.com/file.iso
+
+# 指定文件名与线程数
+./curl_download https://example.com/file.iso -o file.iso -t 8
+
+# 设置 30 秒无进展超时自动中断
+./curl_download https://example.com/file.iso -o file.iso --timeout 30
+
+# 强制下载，不自动中断
+./curl_download https://example.com/file.iso -o file.iso --no-timeout
+
+# 查看帮助
+./curl_download -h
 ```
 
-运行后终端会实时输出下载进度：
+终端实时输出下载进度（百分比 / 速率 / 剩余时间）：
 
 ```
-percent: 1%
-percent: 2%
+percent: 24% speed: 3.20 MB/s ETA: 00:05:12
 ...
 percent: 100%
 ```
+
+**超时机制**：默认下载无进展（低于 1 字节/秒）持续 **60 秒**自动中断并记录日志；`--timeout N` 自定义秒数（0 表示不限）；`--no-timeout` 强制下载不自动中断。
+
+**日志**：超时中断、分片失败、任务完成等事件会写入同目录的 `download.log`（含时间戳、URL、分片范围、错误信息）。
 
 ---
 
 ## ⚠️ 注意事项 Notes
 
-- 需要服务器支持 **HTTP Range**（静态文件服务器通常都支持）；
-- 仅支持 **Linux**（依赖 `sys/mman.h`、`unistd.h`、`pthread`）；
-- 分片数由 `include/Ccurl.h` 中的 `MaxThread` 宏控制，默认为 10（实际起 11 个线程，最后一个线程负责余数部分）。
+- 需要服务器支持 **HTTP Range**（静态文件服务器通常都支持；不支持时会自动退化为单线程整段下载）；
+- 跨平台：**Linux（x86_64 / aarch64）与 Windows**；
+- 线程数用 `-t` 参数控制，范围 1~10，默认 10，最后一个分片负责余数部分；
+- **断点续传**：自动检测本地已存在文件大小并从断点继续；文件已完整时直接跳过；服务器不支持 Range 时会丢弃旧文件重新下载；
+- **超时机制**：默认 60 秒无进展自动中断，可用 `--timeout N` 调整或用 `--no-timeout` 禁用（详见上方"使用"章节）。
 
-> **Requires HTTP Range support on the server · Linux only · thread count is controlled by the `MaxThread` macro (default 10).**
+> **Requires HTTP Range support (auto fallback to single stream) · Cross-platform (Linux x86_64 / aarch64, Windows) · threads via `-t` (1-10) · resume supported · timeout via `--timeout` / `--no-timeout`.**
 
 ---
 
