@@ -4,6 +4,8 @@
  *
  * @author ErnestAgel
  * @date 2026-08-06
+ * @copyright Copyright (c) 2026 ErnestAgel
+ * @license SPDX-License-Identifier: MIT
  */
 
 #ifdef _WIN32

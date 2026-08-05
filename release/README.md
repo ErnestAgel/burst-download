@@ -1,64 +1,58 @@
-# curl_download v1.0.0
+# curlbolt v1.0.0
 
-基于 libcurl 的多线程分片下载器（支持视频下载）—— 跨平台预编译包
+**多线程分片下载器 · 支持视频下载** —— 三平台静态单文件发布
 
-对应源码版本：`v1.0.0`（[GitHub](https://github.com/ErnestAgel/curl_download/tree/v1.0.0)）
+对应源码版本：`v1.0.0`（[GitHub](https://github.com/ErnestAgel/curlbolt/tree/v1.0.0)）
 
-## 支持平台
+## 平台与文件（每个平台一个文件，静态编译，**无需任何动态库**）
 
-| 平台 | 目录 | 文件 |
-|------|------|------|
-| Linux x86_64 | `linux-x86_64/` | `curl_download` + `libcurl.so.4` |
-| Linux aarch64（ARM64） | `linux-aarch64/` | `curl_download` + `libcurl.so.4` |
-| Windows x86_64 | `windows-x86_64/` | `curl_download.exe` + `libcurl-4.dll` |
+| 平台 | 文件 |
+|------|------|
+| Linux x86_64 | `curlbolt-linux-x86_64` |
+| Linux aarch64（ARM64） | `curlbolt-linux-aarch64` |
+| Windows x86_64 | `curlbolt-windows-x86_64.exe` |
 
 ## 运行方式
 
 **Linux**：
 
 ```bash
-cd linux-x86_64            # 或 linux-aarch64
-chmod +x curl_download
-export LD_LIBRARY_PATH=$PWD:$LD_LIBRARY_PATH   # 使用同目录自带的 libcurl.so.4
-./curl_download -h
+chmod +x curlbolt-linux-x86_64        # 或 linux-aarch64
+./curlbolt-linux-x86_64 -h
 ```
 
-**Windows**：`curl_download.exe` 与 `libcurl-4.dll` 保持同目录，命令行运行或双击。
+**Windows**：直接命令行运行 `curlbolt-windows-x86_64.exe`。
 
 ## 功能
 
+- 🎬 **视频下载** `--video`：输入视频网页 URL 直接下载（B站/YouTube 等主流网站），多线程分片
 - ⚡ 多线程分片下载（`-t` 1~10，HTTP Range）
 - 📦 断点续传（自动检测本地文件，从断点继续）
-- ⏱ 超时中断与日志（`--timeout N` / `--no-timeout`，详情写入 `download.log`）
-- 🎬 视频下载（`--video`，经 yt-dlp 支持 B站/YouTube 等 1000+ 网站）
-- 🍪 Cookie 支持（`--cookies-from-browser chrome` 读浏览器登录态 / `--cookie "..."` 手动指定）
+- ⏱ 超时中断与日志（`--timeout` / `--no-timeout`，详情写入 `download.log`）
+- 🍪 Cookie 支持（`--cookies-from-browser chrome` / `--cookie "..."`）
 - 🛡 防盗链 Referer（B站等视频流）
 
 ## 用法示例
 
 ```bash
-# 普通文件下载（10 线程，30 秒无进展超时）
-./curl_download https://example.com/file.iso -o file.iso -t 10 --timeout 30
+# 下载文件
+./curlbolt https://example.com/file.iso -o file.iso -t 10 --timeout 30
 
-# 下载 B站视频（默认清晰度）
-./curl_download --video "https://www.bilibili.com/video/BVxxxx" -o movie
+# 下载 B站视频
+./curlbolt --video "https://www.bilibili.com/video/BVxxxx" -o movie
 
-# 下载 B站高清视频（需浏览器已登录 B站）
-./curl_download --video "https://www.bilibili.com/video/BVxxxx" -o movie --cookies-from-browser chrome
-
-# 强制下载不自动中断
-./curl_download https://example.com/file.iso -o file.iso --no-timeout
+# B站高清（浏览器已登录）
+./curlbolt --video "https://www.bilibili.com/video/BVxxxx" -o movie --cookies-from-browser chrome
 ```
 
 ## 依赖
 
-- **视频模式**需要系统已安装 [yt-dlp](https://github.com/yt-dlp/yt-dlp)（`pip install yt-dlp` 或官网单文件）
-- Linux 包内已含对应架构的 `libcurl.so.4`，运行时建议 `LD_LIBRARY_PATH` 指向包目录；需系统 glibc 及 libcurl 依赖的基础库
-- Windows 包自含 `libcurl-4.dll`，无额外依赖
+- 静态单文件，无 libcurl/openssl 动态库依赖
+- 视频模式需系统具备视频解析组件（详见 `curlbolt -h`）
 
 ## 校验
 
 ```bash
-sha256sum linux-x86_64/curl_download linux-aarch64/curl_download linux-x86_64/libcurl.so.4 linux-aarch64/libcurl.so.4
-certutil -hashfile windows-x86_64/curl_download.exe SHA256   # Windows
+sha256sum curlbolt-linux-x86_64 curlbolt-linux-aarch64
+certutil -hashfile curlbolt-windows-x86_64.exe SHA256   # Windows
 ```
