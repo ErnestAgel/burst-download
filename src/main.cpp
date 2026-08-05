@@ -1,3 +1,10 @@
+/**
+ * @file main.cpp
+ * @author Ernest
+ * @brief 
+ * @date 2026-08-06
+ */
+
 #include<iostream>
 #include<memory>
 #include <functional>
@@ -7,6 +14,12 @@
 using namespace std;
 
 
+/**
+ * @brief 程序入口
+ * @param argc 参数个数
+ * @param argv 参数数组
+ * @return 程序退出码
+ */
 int main(int argc, char **argv)
 {
   if(argc > 1)
