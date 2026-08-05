@@ -8,6 +8,8 @@
  *
  * @author ErnestAgel
  * @date 2026-08-06
+ * @copyright Copyright (c) 2026 ErnestAgel
+ * @license SPDX-License-Identifier: MIT
  */
 
 #include <cstdio>
@@ -30,8 +32,8 @@ static void PrintUsage(const char* prog) {
   printf("Usage: %s <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]\n", prog);
   printf("       %s --video <video-url> [-o basename] [-t threads] [--timeout sec]\n", prog);
   printf("  <url>          下载地址\n");
-  printf("  --video <url>  视频下载模式：通过 yt-dlp 解析视频网页 URL（B站/YouTube 等 1000+ 网站），\n");
-  printf("                 拿到媒体流直链后用多线程分片下载器下载（需已安装 yt-dlp）\n");
+  printf("  --video <url>  视频下载模式：解析视频网页 URL（B站/YouTube 等主流网站），\n");
+  printf("                 拿到媒体流直链后用多线程分片下载器下载（需安装视频解析组件）\n");
   printf("  --cookies-from-browser <name>  视频模式：从浏览器读取登录 Cookie（chrome/firefox/edge 等），\n");
   printf("                 用于解析需要登录态的高清视频流（如 B站 720p+）\n");
   printf("  --cookie <str> 请求 Cookie（如 \"SESSDATA=xxx; bili_jct=xxx\"），视频流与普通下载均适用\n");
@@ -62,7 +64,7 @@ static bool DownloadVideo(const string& video_url, const string& basename,
                           const string& cookie_str) {
   vector<string> streams;
   if (!ParseVideoUrls(video_url, streams, cookies_from_browser, "")) {
-    printf("视频解析失败: 请确认已安装 yt-dlp（pip install yt-dlp 或官网单文件），且 URL 有效/可访问\n");
+    printf("视频解析失败: 请确认已安装视频解析组件，且 URL 有效/可访问\n");
     return false;
   }
   printf("解析成功: 共 %zu 个媒体流\n", streams.size());
