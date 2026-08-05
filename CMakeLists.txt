@@ -54,12 +54,3 @@ else()
     BUILD_RPATH ${CURL_RPATH}
     INSTALL_RPATH ${CURL_RPATH})
 endif()
-
-# demo.c 为 Linux 参考实现（依赖 mmap/pthread），Windows 下不构建
-if(NOT WIN32)
-  add_executable(demo ${CMAKE_CURRENT_SOURCE_DIR}/src/demo.c)
-  target_link_libraries(demo pthread ${CURL_TARGETS})
-  set_target_properties(demo PROPERTIES
-    BUILD_RPATH ${CURL_RPATH}
-    INSTALL_RPATH ${CURL_RPATH})
-endif()

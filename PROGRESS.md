@@ -36,6 +36,7 @@
   - 日志：新增 `AppendLog()`（线程安全、带时间戳）写入 `download.log`——超时中断、分片重试耗尽、探测失败、任务完成/失败均记录
   - README 使用章节重写为 CLI 传参示例（消除"编译进代码"旧说明），注意事项更新（跨平台/超时/续传）
   - Docker 验证：help ✓、传参下载 10MB ✓、挂起服务器 `--timeout 3` 约 6.5s 超时中断 ✓、log 记录 `curl error: Timeout was reached` ✓、成功/失败日志 ✓
+- [x] 删除 `src/demo.c`（纯 C 参考实现，不影响主程序），CMakeLists 去掉 demo 目标与 NOT WIN32 分支，README 特性/目录/构建产物章节同步清理
 - [x] 新增 `.gitignore`（忽略 build/、*.o）
 
 ## 进行中

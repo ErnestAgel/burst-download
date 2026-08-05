@@ -28,7 +28,7 @@
 | 🧠 **mmap 内存映射落盘** | 文件通过 `mmap` 映射到内存，分片数据直接写入对应偏移，免去额外缓冲拷贝 |
 | 📊 **实时进度显示** | 进度回调汇总所有线程的下载量，打印整体下载百分比 |
 | 📏 **自动探测文件大小** | 下载前通过 `HEAD`（`NOBODY`）请求获取 `Content-Length` |
-| 🔧 **双语言实现** | C++ 封装类 `Ccurl` + 纯 C 参考实现 `demo.c` |
+| 🌐 **跨平台实现** | Windows / Linux（x86_64 / aarch64）条件编译 |
 
 > **Multi-threaded concurrent download · HTTP Range chunks · mmap zero-copy write · live progress report · automatic file-size probing · C++ & C implementations**
 
@@ -64,7 +64,7 @@
 
 ```
 curl_download/
-├── CMakeLists.txt        # 构建脚本（生成 curl_download 与 demo）
+├── CMakeLists.txt        # 构建脚本（生成 curl_download）
 ├── include/
 │   ├── Ccurl.h           # Ccurl 类声明
 │   └── curl/             # libcurl 头文件
@@ -72,8 +72,7 @@ curl_download/
 │   └── libcurl.so*       # libcurl 动态库
 ├── src/
 │   ├── Ccurl.cpp         # C++ 封装实现
-│   ├── main.cpp          # 程序入口（演示下载）
-│   └── demo.c            # 纯 C 参考实现
+│   └── main.cpp          # 程序入口（命令行下载工具）
 └── zsync                 # zsync 二进制
 ```
 
@@ -100,7 +99,6 @@ mingw32-make
 | 目标 Target | 说明 Description |
 |---|---|
 | `curl_download` | 主程序（`src/*.cpp`），跨平台 |
-| `demo` | Linux 专属纯 C 参考实现（依赖 mmap/pthread，Windows 下不构建） |
 
 > 项目自带 `include/curl/` 头文件与三种架构的 libcurl 库（`lib/linux-x86_64/`、`lib/linux-aarch64/`、`lib/windows-x86_64/`），无需安装 libcurl 开发包即可编译。
 > Windows 构建时 CMake 会自动把 `libcurl-4.dll` 复制到可执行文件同目录（运行时依赖）。
