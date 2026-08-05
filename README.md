@@ -143,6 +143,12 @@ mingw32-make
 # 下载 B站视频（自动解析媒体流直链，多线程分片下载）
 ./curl_download --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
 
+# 从浏览器读取登录 Cookie 下载高清流（B站 720p+ 需登录态）
+./curl_download --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookies-from-browser chrome
+
+# 手动指定 Cookie（视频流或普通需登录文件均适用）
+./curl_download --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookie "SESSDATA=xxx; bili_jct=xxx"
+
 # 音视频分离流会分别下载为 movie.mp4（视频轨）与 movie.m4a（音频轨），
 # 可用 ffmpeg 合并：
 # ffmpeg -i movie.mp4 -i movie.m4a -c copy movie_full.mp4

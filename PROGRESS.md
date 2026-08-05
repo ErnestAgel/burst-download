@@ -43,6 +43,10 @@
   - main.cpp：`--video <url>` 模式，解析后逐个流用多线程分片下载器下载（视频轨 .mp4 + 音频轨 .m4a），DASH 分离时提示 ffmpeg 合并命令
   - README：视频模式用法 + yt-dlp 依赖 + DASH 合并说明；特性/目录结构更新
   - Docker 验证：编译 ✓、help ✓、直链 mp4 下载 788KB 完整 ✓、B站解析 ✓（音视频分离识别）、B站音频轨 34.6MB 下载 ✓（Referer 防盗链生效）、视频轨部分视频被 B站 CDN 返回 Access Denied（平台风控，非代码问题，真实场景需登录 Cookie，列为后续增强）
+- [x] **Cookie 支持（方案 A+B）**（本轮）：
+  - A：`video.cpp` 解析支持 `--cookies-from-browser <chrome/firefox/edge>`（yt-dlp 从浏览器读登录态）与 `--cookies <file>`（Netscape 格式），解决 B站 720p+ 高清流解析
+  - B：`Ccurl::SetCookie()` + `CURLOPT_COOKIE`（下载与探测请求均携带），CLI `--cookie "SESSDATA=xxx; bili_jct=xxx"`，视频流与普通下载均适用
+  - README 更新 Cookie 用法；Docker 验证：编译 ✓、help ✓、直链回归 788KB ✓、带 --cookie 视频/普通下载 ✓（CURLOPT_COOKIE 生效）
 - [x] 新增 `.gitignore`（忽略 build/、*.o）
 
 ## 进行中

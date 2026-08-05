@@ -4,7 +4,8 @@
  *
  * 设计：不自行实现各网站解析器（避免"一个网站一个库"），统一交由 yt-dlp
  * （支持 B站/YouTube 等 1000+ 网站）解析出媒体流直链，再由本项目的多线程
- * 分片下载器下载。
+ * 分片下载器下载。高清流解析可携带浏览器登录 Cookie（--cookies-from-browser
+ * 或 --cookies 文件），如 B站 720p+ 需要登录态。
  *
  * @author ErnestAgel
  * @date 2026-08-06
@@ -23,15 +24,25 @@
 
 using namespace std;
 
-bool ParseVideoUrls(const string& url, vector<string>& urls) {
+bool ParseVideoUrls(const string& url, vector<string>& urls,
+                    const string& cookies_from_browser,
+                    const string& cookies_file) {
   urls.clear();
 
   /* yt-dlp 参数说明：
    *   -f "bestvideo+bestaudio/best"  优先音视频分离的最佳组合（或单文件 best）
    *   -g                             只打印媒体流直链，不下载
-   *   --no-playlist                  视频 URL 属于合集时只取当前视频 */
-  string cmd = "yt-dlp -f \"bestvideo+bestaudio/best\" -g --no-playlist '" +
-               url + "' 2>/dev/null";
+   *   --no-playlist                  视频 URL 属于合集时只取当前视频
+   *   --cookies-from-browser <name>  从浏览器读取登录 Cookie（高清流需登录态）
+   *   --cookies <file>               Netscape 格式 Cookie 文件 */
+  string cmd = "yt-dlp -f \"bestvideo+bestaudio/best\" -g --no-playlist";
+  if (!cookies_from_browser.empty()) {
+    cmd += " --cookies-from-browser " + cookies_from_browser;
+  }
+  if (!cookies_file.empty()) {
+    cmd += " --cookies '" + cookies_file + "'";
+  }
+  cmd += " '" + url + "' 2>/dev/null";
 
   FILE* fp = popen(cmd.c_str(), "r");
   if (fp == nullptr) {

@@ -46,6 +46,7 @@ typedef struct
     bool thread_created;   /**< 分片线程是否成功创建 */
     long timeout;          /**< 低速超时秒数（0=不限制，不自动中断） */
     const char* referer;   /**< 防盗链 Referer（可为空），如 B站视频流需 https://www.bilibili.com */
+    const char* cookie;    /**< Cookie 字符串（可为空），部分流/文件需登录态 */
 }st_EasyList;
 
 
@@ -94,6 +95,12 @@ public:
      * @param referer 来源页 URL，可为空字符串
      */
     void SetReferer(const string& referer);
+
+    /**
+     * @brief 设置请求 Cookie（部分视频流/资源需要登录态，如 B站高清流）
+     * @param cookie Cookie 字符串（如 "SESSDATA=xxx; bili_jct=xxx"），可为空字符串
+     */
+    void SetCookie(const string& cookie);
 
     /**
      * @brief 线程入口：下载单个分片
@@ -148,4 +155,5 @@ private:
     bool m_range_supported;         /**< 服务器是否支持 HTTP Range */
     int m_timeout;                  /**< 低速超时秒数（0=不自动中断） */
     string m_referer;               /**< 防盗链 Referer（可为空） */
+    string m_cookie;                /**< 请求 Cookie（可为空） */
 };

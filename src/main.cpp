@@ -32,6 +32,9 @@ static void PrintUsage(const char* prog) {
   printf("  <url>          下载地址\n");
   printf("  --video <url>  视频下载模式：通过 yt-dlp 解析视频网页 URL（B站/YouTube 等 1000+ 网站），\n");
   printf("                 拿到媒体流直链后用多线程分片下载器下载（需已安装 yt-dlp）\n");
+  printf("  --cookies-from-browser <name>  视频模式：从浏览器读取登录 Cookie（chrome/firefox/edge 等），\n");
+  printf("                 用于解析需要登录态的高清视频流（如 B站 720p+）\n");
+  printf("  --cookie <str> 请求 Cookie（如 \"SESSDATA=xxx; bili_jct=xxx\"），视频流与普通下载均适用\n");
   printf("  -o filename    保存的文件名（默认 ./test；--video 模式为输出基础名，默认 ./video）\n");
   printf("  -t threads     下载线程数 1~%d（默认 %d）\n", MaxThread, MaxThread);
   printf("  --timeout N    下载无进展 N 秒后自动中断（默认 60，0 表示不限）\n");
@@ -40,6 +43,8 @@ static void PrintUsage(const char* prog) {
   printf("示例:\n");
   printf("  %s https://example.com/file.iso -o file.iso -t 8 --timeout 30\n", prog);
   printf("  %s --video https://www.bilibili.com/video/BVxxxx -o movie -t 8\n", prog);
+  printf("  %s --video https://www.bilibili.com/video/BVxxxx -o movie --cookies-from-browser chrome\n", prog);
+  printf("  %s https://example.com/private.zip -o p.zip --cookie \"SESSDATA=xxx\"\n", prog);
   printf("日志: 超时中断/失败/完成详情写入 download.log\n");
 }
 
@@ -52,9 +57,11 @@ static void PrintUsage(const char* prog) {
  * @return 是否全部成功
  */
 static bool DownloadVideo(const string& video_url, const string& basename,
-                          int threads, int timeout) {
+                          int threads, int timeout,
+                          const string& cookies_from_browser,
+                          const string& cookie_str) {
   vector<string> streams;
-  if (!ParseVideoUrls(video_url, streams)) {
+  if (!ParseVideoUrls(video_url, streams, cookies_from_browser, "")) {
     printf("视频解析失败: 请确认已安装 yt-dlp（pip install yt-dlp 或官网单文件），且 URL 有效/可访问\n");
     return false;
   }
@@ -66,6 +73,9 @@ static bool DownloadVideo(const string& video_url, const string& basename,
     printf("正在下载第 %zu 个流 -> %s\n", i + 1, out.c_str());
     unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
     ptr->SetReferer(video_url);  /* 防盗链：以视频页 URL 作为 Referer（如 B站视频流） */
+    if (!cookie_str.empty()) {
+      ptr->SetCookie(cookie_str);  /* 下载流时携带 Cookie（高清流需登录态） */
+    }
     if (!ptr->Init(streams[i], out, threads, timeout)) {
       all_ok = false;
       break;
@@ -105,6 +115,8 @@ int main(int argc, char** argv) {
   int timeout = 60;
   bool video_mode = false;
   string video_url;
+  string cookies_from_browser;
+  string cookie_str;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--video") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
@@ -118,6 +130,10 @@ int main(int argc, char** argv) {
       timeout = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--no-timeout") == 0) {
       timeout = 0;  /* 强制下载，不自动中断 */
+    } else if (strcmp(argv[i], "--cookies-from-browser") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
+      cookies_from_browser = argv[++i];
+    } else if (strcmp(argv[i], "--cookie") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
+      cookie_str = argv[++i];
     } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       PrintUsage(argv[0]);
       return 0;
@@ -139,7 +155,8 @@ int main(int argc, char** argv) {
     if (filename == "./test") {
       filename = "video";  /* 视频模式默认输出 ./video.mp4 */
     }
-    if (!DownloadVideo(video_url, filename, threads, timeout)) {
+    if (!DownloadVideo(video_url, filename, threads, timeout,
+                       cookies_from_browser, cookie_str)) {
       printf("视频下载失败（详见 download.log）\n");
       return 1;
     }
@@ -152,6 +169,9 @@ int main(int argc, char** argv) {
   }
 
   unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
+  if (!cookie_str.empty()) {
+    ptr->SetCookie(cookie_str);  /* 普通下载也可携带 Cookie（如需登录的文件） */
+  }
   if (!ptr->Init(url, filename, threads, timeout)) {
     return 1;
   }
