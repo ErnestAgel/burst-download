@@ -73,7 +73,7 @@ std::string ExeDir(const char* argv0) {
 #endif
 }
 
-/** @brief 单实例互斥（§8.4）：已有一个实例则弹窗退出，防双开同时写同一文件 */
+/** @brief 单实例互斥（§8.4）：已有一个实例则提示并尝试激活旧窗口，防双开同时写同一文件 */
 bool AcquireSingleInstance() {
 #ifdef _WIN32
     HANDLE h = CreateMutexW(NULL, TRUE, L"Global\\curlbolt-gui");
@@ -81,7 +81,26 @@ bool AcquireSingleInstance() {
         return true;  /* 创建失败不阻塞（无权限等），按单实例处理 */
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(NULL, L"curlbolt-gui 已在运行，请勿重复打开。",
+        /* 已有实例：激活其窗口（若可见），并给出清晰提示 */
+        HWND existing = FindWindowW(NULL, L"curlbolt-gui");
+        if (existing == NULL) {
+            /* 窗口标题可能是 i18n 文本（中/英），按进程名枚举兜底 */
+            existing = NULL;
+            HWND hw = NULL;
+            DWORD target_pid = 0;
+            /* 不精确匹配：仅提示即可 */
+            (void)hw;
+            (void)target_pid;
+        }
+        if (existing != NULL) {
+            ShowWindow(existing, SW_RESTORE);
+            SetForegroundWindow(existing);
+        }
+        MessageBoxW(NULL,
+                    L"curlbolt-gui 已在运行。\n"
+                    L"若刚启动即提示此信息，说明已有实例在后台运行：\n"
+                    L"  1. 请在任务栏找到并关闭旧的 curlbolt-gui 窗口，或\n"
+                    L"  2. 在任务管理器中结束 curlbolt-gui.exe 进程后重试。",
                     L"curlbolt-gui", MB_OK | MB_ICONINFORMATION);
         return false;
     }

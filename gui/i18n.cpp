@@ -49,6 +49,9 @@ const Entry kStrings[] = {
     {"button.download", "开始下载", "Start Download"},
     {"button.downloading", "下载中…", "Downloading..."},
     {"button.cancel", "取消", "Cancel"},
+    {"button.minimize", "最小化", "Minimize"},
+    {"button.maximize", "最大化", "Maximize"},
+    {"button.close", "关闭", "Close"},
     /* 进度区 */
     {"label.total", "总进度", "Total"},
     {"label.speed", "速度", "Speed"},

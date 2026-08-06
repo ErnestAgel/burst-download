@@ -364,20 +364,33 @@ void RenderLog(const std::vector<std::string>& log) {
     ImGui::EndChild();
 }
 
-/* ---- 自绘标题栏（无边框窗口：标题 + 设置 + 最小化/最大化/关闭 + 拖动） ---- */
+/* ---- Mac 风格圆形窗口按钮（红=关闭/黄=最小化/绿=最大化，hover 提示文字） ---- */
+bool MacCircleButton(float cx, float cy, float d, ImU32 color, ImU32 hover,
+                     const char* tip) {
+    ImGui::SetCursorScreenPos(ImVec2(cx - d * 0.5f, cy - d * 0.5f));
+    ImGui::InvisibleButton("##macbtn", ImVec2(d, d));
+    bool hovered = ImGui::IsItemHovered();
+    bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddCircleFilled(ImVec2(cx, cy), d * 0.5f, hovered ? hover : color, 24);
+    if (hovered && tip != nullptr) {
+        ImGui::SetTooltip("%s", tip);
+    }
+    return clicked;
+}
+
+/* ---- 自绘标题栏（无边框窗口：设置 + 标题 + Mac 风格窗口按钮 + 拖动） ---- */
 void RenderTitleBar() {
     const ImGuiIO& io = ImGui::GetIO();
-    const float btn_w = 46.0f;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, kTitleBarH),
                              ImGuiCond_Always);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImGui::GetColorU32(ImGuiCol_TitleBg));
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.34f, 0.42f, 1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.4f, 0.5f, 1));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg,
+                          ImGui::GetColorU32(ImGuiCol_PopupBg));
     ImGui::Begin("##titlebar", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
@@ -386,17 +399,14 @@ void RenderTitleBar() {
                      ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    /* 标题 + 拖动区（标题栏空白处按住可拖动窗口） */
-    ImGui::SetCursorPosY((kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f);
-    ImGui::Text("%s", i18n::T("window.title"));
-    ImGui::SameLine();
+    const float cy = kTitleBarH * 0.5f;  /* 按钮垂直中心 */
 
-    /* 设置按钮（语言切换，替代原 MainMenuBar） */
-    const char* settings_label = u8"⚙";
-    ImGui::SameLine(io.DisplaySize.x - btn_w * 4 - 6);
-    if (ImGui::Button(settings_label, ImVec2(btn_w, kTitleBarH))) {
+    /* 左侧：设置按钮（与右侧窗口控制分离，符合常规软件逻辑） */
+    ImGui::SetCursorPos(ImVec2(8, (kTitleBarH - 26) * 0.5f));
+    if (ImGui::Button(u8"⚙", ImVec2(26, 26))) {
         ImGui::OpenPopup("##settings_popup");
     }
+    ImGui::SetItemTooltip("%s", i18n::T("menu.settings"));
     if (ImGui::BeginPopup("##settings_popup")) {
         ImGui::Text("%s:", i18n::T("menu.language"));
         int cur = (i18n::GetLang() == i18n::Lang::Zh) ? 0 : 1;
@@ -409,38 +419,52 @@ void RenderTitleBar() {
         ImGui::EndPopup();
     }
 
-    /* 最小化 */
-    ImGui::SameLine(io.DisplaySize.x - btn_w * 3);
-    if (ImGui::Button("_", ImVec2(btn_w, kTitleBarH)) && g_window != nullptr) {
+    /* 标题文本 */
+    ImGui::SameLine();
+    ImGui::SetCursorPosY((kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f);
+    ImGui::Text("%s", i18n::T("window.title"));
+
+    /* 右侧：Mac 风格三色圆钮（红=关闭 最右，绿=最大化，黄=最小化） */
+    const float btn_d = 14.0f;
+    const float gap = 12.0f;
+    const float margin = 18.0f; /* 距右缘 */
+    /* 红（关闭） */
+    float rx = io.DisplaySize.x - margin - btn_d * 0.5f;
+    /* 绿（最大化） */
+    float gx = rx - btn_d - gap;
+    /* 黄（最小化） */
+    float yx = gx - btn_d - gap;
+    const ImU32 cRed = IM_COL32(0xE0, 0x6C, 0x75, 255);
+    const ImU32 cRedH = IM_COL32(0xF0, 0x8A, 0x92, 255);
+    const ImU32 cYellow = IM_COL32(0xE5, 0xC0, 0x7B, 255);
+    const ImU32 cYellowH = IM_COL32(0xF2, 0xD3, 0x9A, 255);
+    const ImU32 cGreen = IM_COL32(0x98, 0xC3, 0x79, 255);
+    const ImU32 cGreenH = IM_COL32(0xB2, 0xD5, 0x97, 255);
+
+    if (MacCircleButton(yx, cy, btn_d, cYellow, cYellowH,
+                        i18n::T("button.minimize")) &&
+        g_window != nullptr) {
         glfwIconifyWindow(g_window);
     }
-    /* 最大化 / 还原 */
-    bool maximized =
-        (g_window != nullptr) &&
-        (glfwGetWindowAttrib(g_window, GLFW_MAXIMIZED) == GLFW_TRUE);
-    ImGui::SameLine(io.DisplaySize.x - btn_w * 2);
-    if (ImGui::Button(maximized ? u8"❐" : u8"□",
-                      ImVec2(btn_w, kTitleBarH)) &&
+    if (MacCircleButton(gx, cy, btn_d, cGreen, cGreenH,
+                        i18n::T("button.maximize")) &&
         g_window != nullptr) {
-        if (maximized) {
+        if (glfwGetWindowAttrib(g_window, GLFW_MAXIMIZED) == GLFW_TRUE) {
             glfwRestoreWindow(g_window);
         } else {
             glfwMaximizeWindow(g_window);
         }
     }
-    /* 关闭（hover 红色） */
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.42f, 0.46f, 1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.78f, 0.32f, 0.36f, 1));
-    ImGui::SameLine(io.DisplaySize.x - btn_w);
-    if (ImGui::Button("X", ImVec2(btn_w, kTitleBarH)) && g_window != nullptr) {
+    if (MacCircleButton(rx, cy, btn_d, cRed, cRedH, i18n::T("button.close")) &&
+        g_window != nullptr) {
         glfwSetWindowShouldClose(g_window, GLFW_TRUE);
     }
-    ImGui::PopStyleColor(2);
 
     /* 标题栏拖动（按住空白区拖动窗口；用按下时位置+鼠标位移，避免漂移） */
     ImGui::SetCursorPos(ImVec2(0, 0));
     ImGui::InvisibleButton("##titlebar_drag",
-                           ImVec2(io.DisplaySize.x - btn_w * 4 - 6,
+                           ImVec2(io.DisplaySize.x - btn_d * 3 - gap * 2 -
+                                      margin * 2 - 8,
                                   kTitleBarH));
     static bool dragging = false;
     static int drag_x0 = 0, drag_y0 = 0;
@@ -459,7 +483,7 @@ void RenderTitleBar() {
     }
 
     ImGui::End();
-    ImGui::PopStyleColor(4);
+    ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 }
 
