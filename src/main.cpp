@@ -98,6 +98,13 @@ static bool DownloadVideo(const string& video_url, const string& basename,
     string merr;
     if (MergeMp4(vfile, afile, merged, merr)) {
       printf("已自动合并音视频轨 -> %s\n", merged.c_str());
+      /* 合并成功：删除音视频中间文件，仅保留合并产物 */
+      if (remove(vfile.c_str()) == 0 && remove(afile.c_str()) == 0) {
+        printf("已清理中间文件: %s, %s\n", vfile.c_str(), afile.c_str());
+      } else {
+        printf("提示: 中间文件清理失败，可手动删除 %s 和 %s\n",
+               vfile.c_str(), afile.c_str());
+      }
     } else {
       printf("自动合并失败: %s\n", merr.c_str());
       printf("提示: 可保留两轨文件，用外部工具手动合并: "
