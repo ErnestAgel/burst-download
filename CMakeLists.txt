@@ -21,23 +21,6 @@ file(GLOB SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 add_compile_options(-g)
 add_executable(curlbolt ${SRC})
 
-# ---- Python 嵌入（进程内 yt_dlp 解析，静态 libpython，Debug/Release 共用） ----
-set(PYTHON_EMBED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/python)
-include_directories(${PYTHON_EMBED_DIR}/include)
-target_compile_definitions(curlbolt PRIVATE
-  PYTHON_RUNTIME_FALLBACK="${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/runtime")
-if(EXISTS ${PYTHON_EMBED_DIR}/linux-x86_64/libpython3.11.a)
-  target_link_libraries(curlbolt ${PYTHON_EMBED_DIR}/linux-x86_64/libpython3.11.a)
-endif()
-if(UNIX)
-  # libpython 依赖：openssl/zlib 用 third_party 干净静态库
-  # （系统 openssl 静态库带 jitterentropy/zstd 依赖，全静态链接会失败）
-  set(PY_DEPS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/linux-x86_64/static)
-  target_link_libraries(curlbolt
-    ${PY_DEPS_DIR}/libssl.a ${PY_DEPS_DIR}/libcrypto.a ${PY_DEPS_DIR}/libz.a
-    lzma bz2 dl pthread m util)
-endif()
-
 # ---- 平台目录：third_party/<PLATFORM_DIR> ----
 if(WIN32)
   set(PLATFORM_DIR windows-x86_64)
@@ -47,9 +30,42 @@ else()
   set(PLATFORM_DIR linux-x86_64)
 endif()
 
+# ---- Python 嵌入（进程内 yt_dlp 解析，静态 libpython，Debug/Release 共用） ----
+set(PYTHON_EMBED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/python)
+# include 平台优先（pyconfig.h 为平台 configure 生成）；无平台 include 时回退共享目录（x86）
+if(EXISTS ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/include)
+  include_directories(${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/include)
+else()
+  include_directories(${PYTHON_EMBED_DIR}/include)
+endif()
+target_compile_definitions(curlbolt PRIVATE
+  PYTHON_RUNTIME_FALLBACK="${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/runtime")
+if(EXISTS ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/libpython3.11.a)
+  target_link_libraries(curlbolt ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/libpython3.11.a)
+endif()
+if(UNIX)
+  # libpython 依赖：openssl/zlib 用 third_party 干净静态库
+  # （系统 openssl 静态库带 jitterentropy/zstd 依赖，全静态链接会失败）
+  set(PY_DEPS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/static)
+  set(_PY_LIBS ${PY_DEPS_DIR}/libssl.a ${PY_DEPS_DIR}/libcrypto.a ${PY_DEPS_DIR}/libz.a
+               dl pthread m util)
+  # lzma/bz2 仅在系统存在静态库时链接（aarch64 交叉无对应库且 libpython 不引用时跳过）
+  foreach(_pyx lzma bz2)
+    if(EXISTS "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/lib${_pyx}.a")
+      list(APPEND _PY_LIBS ${_pyx})
+    endif()
+  endforeach()
+  target_link_libraries(curlbolt ${_PY_LIBS})
+endif()
+
 # ---- FFmpeg 嵌入（进程内 remux 合并音视频轨，静态库，Debug/Release 共用） ----
 set(FFMPEG_EMBED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg)
-include_directories(${FFMPEG_EMBED_DIR}/include)
+# include 平台优先（avconfig.h 为平台 configure 生成）；无平台 include 时回退共享目录（x86）
+if(EXISTS ${FFMPEG_EMBED_DIR}/${PLATFORM_DIR}/include)
+  include_directories(${FFMPEG_EMBED_DIR}/${PLATFORM_DIR}/include)
+else()
+  include_directories(${FFMPEG_EMBED_DIR}/include)
+endif()
 set(FFMPEG_LIB_DIR ${FFMPEG_EMBED_DIR}/${PLATFORM_DIR})
 if(EXISTS ${FFMPEG_LIB_DIR}/libavformat.a)
   message(STATUS "链接 FFmpeg 静态库: ${FFMPEG_LIB_DIR}")

@@ -1,6 +1,7 @@
 # 构建产物
 build/
 build-rel/
+.build-cache/
 *.o
 *.obj
 
@@ -14,3 +15,4 @@ Thumbs.db
 
 # 发布临时产物（已上传 GitHub Release）
 release/dist/
+build-arm/
