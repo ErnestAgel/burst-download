@@ -29,7 +29,7 @@
 
 | | Description |
 |---|---|
-| 🎬 **Video download** | `--video` mode: pass a video page URL, the built-in parser resolves the media stream (Bilibili / YouTube and more), then downloads with multi-threaded chunking |
+| 🎬 **Video download** | `--video` mode: pass a video page URL, the built-in parser resolves the media stream (Bilibili / YouTube and more), then downloads with multi-threaded chunking; DASH streams are **auto-merged** into one file (MP4 / WebM containers) |
 | ⚡ **Multi-threaded** | `-t` 1–10 threads, HTTP Range chunking, the last chunk absorbs the remainder |
 | 📦 **Resume** | Automatically detects an existing local file and resumes; falls back to single-thread when the server lacks Range support |
 | ⏱ **Timeout & logging** | `--timeout` / `--no-timeout` control; timeouts and failure details are written to `download.log` |
@@ -93,10 +93,8 @@ One command for any supported site:
 ```
 
 - Works with Bilibili, YouTube and other popular sites — just paste the video page URL
-- Separated audio/video streams (DASH) are saved as `movie.mp4` (video) + `movie.m4a` (audio); merge them with ffmpeg:
-  ```bash
-  ffmpeg -i movie.mp4 -i movie.m4a -c copy movie_full.mp4
-  ```
+- DASH streams: video + audio tracks are downloaded and **auto-merged** into one file (in-process, no external tools). The output container follows the video codec: VP9/AV1 → `.mkv`, otherwise → `.mp4`. Temporary tracks are deleted after a successful merge.
+- **Overwrite protection**: without `-o`, names come from the URL plus a timestamp (e.g. `10Mb_20260807_123456.dat`, `BVxxxx_20260807_123456_full.mkv`); with explicit `-o`, if the target already exists a timestamp is appended instead of overwriting.
 
 ---
 
