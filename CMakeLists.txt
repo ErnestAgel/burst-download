@@ -200,9 +200,9 @@ function(curlbolt_copy_mingw_runtime_dlls TARGET)
 endfunction()
 curlbolt_copy_mingw_runtime_dlls(curlbolt)
 
-# ==================== GUI（Phase 0 冒烟目标；Phase 1 替换为正式 curlbolt-gui） ====================
+# ==================== GUI（curlbolt-gui 正式目标 + curlbolt-gui-smoke 开发冒烟） ====================
 # 依赖：Dear ImGui（third_party/imgui，MIT）+ GLFW（third_party/glfw，zlib）+ Noto Sans SC 子集字体
-# 冒烟目标只验证窗口/字体/渲染链路，不链接 curl/ffmpeg/python；正式 GUI 目标见设计文档 §7.4
+# curlbolt-gui：Phase 1 MVP（文件模式），链接核心 Ccurl + curl；视频/解析模块 Phase 2 加入
 option(BUILD_GUI "Build curlbolt GUI" ON)
 if(BUILD_GUI)
   set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -219,6 +219,66 @@ if(BUILD_GUI)
     third_party/imgui/backends/imgui_impl_glfw.cpp
     third_party/imgui/backends/imgui_impl_opengl3.cpp)
 
+  # ---- 正式 GUI 目标（Phase 1 MVP：文件模式闭环） ----
+  add_executable(curlbolt-gui WIN32
+    gui/main_gui.cpp
+    gui/ui.cpp
+    gui/toggle.cpp
+    gui/i18n.cpp
+    gui/worker.cpp
+    gui/dialogs.cpp
+    gui/crashguard.cpp
+    src/Ccurl.cpp
+    ${IMGUI_SRC})
+  target_include_directories(curlbolt-gui PRIVATE
+    third_party/imgui
+    third_party/imgui/backends
+    gui
+    include)
+  target_compile_options(curlbolt-gui PRIVATE
+    -finput-charset=UTF-8 -fexec-charset=UTF-8)
+  target_link_libraries(curlbolt-gui PRIVATE glfw)
+
+  if(MINGW)
+    target_link_libraries(curlbolt-gui PRIVATE
+      opengl32 gdi32 user32 shell32 advapi32 winmm)
+  endif()
+
+  # curl 链接（与 curlbolt 同策略：Release 静态 / Debug 动态）
+  if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(GUI_CURL_STATIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/static/libcurl.a)
+    if(EXISTS ${GUI_CURL_STATIC})
+      target_compile_definitions(curlbolt-gui PRIVATE CURL_STATICLIB)
+      if(WIN32)
+        target_link_libraries(curlbolt-gui PRIVATE
+          ${GUI_CURL_STATIC} crypt32 ws2_32 bcrypt)
+      else()
+        target_link_libraries(curlbolt-gui PRIVATE
+          ${GUI_CURL_STATIC} dl pthread)
+      endif()
+    endif()
+  else()
+    if(WIN32)
+      set(GUI_CURL_DYN ${CMAKE_CURRENT_SOURCE_DIR}/third_party/windows-x86_64/dynamic)
+      if(EXISTS ${GUI_CURL_DYN}/libcurl.dll.a)
+        target_link_libraries(curlbolt-gui PRIVATE
+          ${GUI_CURL_DYN}/libcurl.dll.a bcrypt ws2_32)
+        if(EXISTS ${GUI_CURL_DYN}/libcurl-4.dll)
+          add_custom_command(TARGET curlbolt-gui POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${GUI_CURL_DYN}/libcurl-4.dll $<TARGET_FILE_DIR:curlbolt-gui>)
+        endif()
+      endif()
+    else()
+      target_link_libraries(curlbolt-gui PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic/libcurl.so pthread)
+      set_target_properties(curlbolt-gui PROPERTIES
+        BUILD_RPATH ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic)
+    endif()
+  endif()
+  curlbolt_copy_mingw_runtime_dlls(curlbolt-gui)
+
+  # ---- 开发冒烟目标（Phase 0 验证窗口/字体链路，仅开发用） ----
   add_executable(curlbolt-gui-smoke WIN32
     gui/smoke_test.cpp ${IMGUI_SRC})
   target_include_directories(curlbolt-gui-smoke PRIVATE

@@ -13,6 +13,7 @@
 #include <cstdarg>
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <fcntl.h>
 #include <errno.h>
@@ -31,6 +32,21 @@
 
 #include "Ccurl.h"
 #include "curl/mprintf.h"
+
+#ifdef _WIN32
+/**
+ * @brief UTF-8 字符串转 UTF-16（Windows 宽字符文件路径，见 gui-design.md §5.4）
+ * @param s UTF-8 输入
+ * @return UTF-16 输出（空输入返回空串）
+ */
+static std::wstring Utf8ToWide(const std::string& s) {
+  if (s.empty()) return std::wstring();
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
+  std::wstring w(n, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+  return w;
+}
+#endif
 
 /** @brief 将 libcurl 返回码转换为布尔值 */
 #define CHECK_CURL(value) value == CURLE_OK ? true : false
@@ -82,6 +98,7 @@ static int g_print = 1;                 /**< 下一次要打印的百分比 */
 static double g_last_total = 0;         /**< 上次打印时的累计下载量 */
 static time_t g_last_t = 0;             /**< 上次打印时间 */
 static std::mutex g_progress_mutex;     /**< 进度回调互斥锁 */
+static std::chrono::steady_clock::time_point g_last_cb_time; /**< GUI onProgress 节流时间戳（~200ms） */
 
 extern "C" {
 
@@ -95,6 +112,10 @@ extern "C" {
  */
 size_t File_Write(char* ptr, size_t size, size_t memb, void* userdata) {
   st_EasyList* info = (st_EasyList*)userdata;
+  /* ---- 取消检查点（§5.2）：返回非 CURL_WRITEFUNC_OK 即中断本分片传输，延迟 < 1s ---- */
+  if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
+    return 0;
+  }
   size_t total = size * memb;
   size_t n = total;
   int64_t end_pos = info->end + 1;
@@ -141,6 +162,12 @@ size_t progressFunc(void* userdata,
   st_EasyList* info = (st_EasyList*)userdata;
   info->download_len = nowDownload;
 
+  /* ---- 取消检查点（§5.2）：进度回调返回非 0 即中止传输 ---- */
+  if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
+    g_progress_mutex.unlock();
+    return 1;
+  }
+
   int percent = 0;
   double allDownload = g_resume_len;  /* 续传时以本地已存在字节数为基数 */
   if (totalDownload > 0) {
@@ -152,6 +179,54 @@ size_t progressFunc(void* userdata,
     percent = (int)(allDownload / g_filelen * 100);
   }
 
+  /* ---- GUI 模式：~200ms 时间节流回调（原 1% 门控打印让位于实时节流，见 §5.1/§5.2） ---- */
+  if (info->on_progress != nullptr && *info->on_progress) {
+    auto now_cb = std::chrono::steady_clock::now();
+    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now_cb - g_last_cb_time)
+                       .count();
+    if (ms >= 200) {
+      g_last_cb_time = now_cb;
+      time_t now = time(NULL);
+      double speed = 0;
+      if (g_last_t > 0 && now > g_last_t) {
+        speed = (allDownload - g_last_total) / (now - g_last_t);
+      }
+      g_last_total = allDownload;
+      g_last_t = now;
+
+      std::vector<ThreadProgress> tp;
+      tp.reserve(MaxThread);
+      for (int i = 0; i < MaxThread + 1; i++) {
+        st_EasyList* p = g_pInfoTable[i];
+        if (p == nullptr) {
+          continue;
+        }
+        ThreadProgress t;
+        t.id = i;
+        t.downloaded = (long long)p->download_len;
+        t.total = p->part_total;
+        t.percent = (p->part_total > 0)
+                        ? (p->download_len / (double)p->part_total * 100.0)
+                        : 0.0;
+        /* 本线程速率：本分片在节流窗口内的增量 */
+        time_t dt = (p->last_t > 0) ? (now - p->last_t) : 0;
+        if (dt > 0 && p->download_len >= p->last_len) {
+          t.speed = (p->download_len - p->last_len) / (double)dt;
+        } else {
+          t.speed = 0;
+        }
+        p->last_len = p->download_len;
+        p->last_t = now;
+        tp.push_back(t);
+      }
+      (*info->on_progress)(tp, (double)percent, speed);
+    }
+    g_progress_mutex.unlock();
+    return 0;
+  }
+
+  /* ---- CLI 模式：保留原 1% 门控打印（默认回调，见 §5.1/R6） ---- */
   if (percent >= g_print) {
     time_t now = time(NULL);
     double speed = 0;
@@ -197,12 +272,24 @@ bool Ccurl::Init(const string url, string filename, int thread_num, int timeout)
   m_filename = filename;
   m_thread_num = thread_num < 1 ? 1 : (thread_num > MaxThread ? MaxThread : thread_num);
   m_timeout = timeout < 0 ? 0 : timeout;
+  m_cancel_flag.store(false);   /* 每次任务前重置取消标志（复用实例/多任务串行） */
+  g_print = 1;                  /* 重置 CLI 1% 门控进度打印状态 */
+  g_last_total = 0;
+  g_last_t = 0;
   LOG_INFO(">>>>>\n");
   bool flag = this->Check_Range_Support();
   LOG_INFO("HTTP Range support: %s\n", flag ? "yes" : "no (fallback to single stream)");
   flag = this->File_Init(filename.c_str());
 
   return flag;
+}
+
+void Ccurl::Cancel() {
+  m_cancel_flag.store(true);
+}
+
+bool Ccurl::IsCanceled() const {
+  return m_cancel_flag.load();
 }
 
 void Ccurl::SetReferer(const string& referer) {
@@ -240,6 +327,11 @@ void *Ccurl::Downloading(void* arg) {
   }
 
   for (int attempt = 0; attempt < max_retry; attempt++) {
+    /* 取消检查点：取消后不再重试，直接结束本分片 */
+    if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
+      info->success = false;
+      return nullptr;
+    }
     info->offset = base_offset;  /* 重试前恢复本分片起点 */
     CURL* curl = curl_easy_init();
     if (curl == nullptr) {
@@ -277,6 +369,11 @@ void *Ccurl::Downloading(void* arg) {
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
+    /* 取消检查点：perform 因取消中止（写回调返回 0 / 进度回调返回 1），不视为失败也不重试 */
+    if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
+      info->success = false;
+      return nullptr;
+    }
     bool http_ok = (http_code == 200 || http_code == 206);
     if (http_ok && CHECK_CURL(res) && info->offset >= info->end + 1) {
       info->success = true;  /* 本分片下载成功且已写满 */
@@ -321,6 +418,10 @@ bool Ccurl::Download_Task() {
   if (m_Easy_List[0] == nullptr) {
     return true;  /* 无分片任务（文件已完整），直接视为成功 */
   }
+  /* 取消检查点：任务开始前已被取消则直接返回 */
+  if (m_cancel_flag.load()) {
+    return false;
+  }
   for (int i = 0; i < m_thread_num; i++) {
 #ifdef _WIN32
     m_Easy_List[i]->thid = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&Downloading,
@@ -355,6 +456,11 @@ bool Ccurl::Download_Task() {
       all_ok = false;
     }
   }
+  /* 取消检查点：任务结束后区分"取消"与"失败"，GUI 依据 IsCanceled() 显示"已取消" */
+  if (m_cancel_flag.load()) {
+    AppendLog("[INFO] download canceled: url=%s", m_url.c_str());
+    return false;
+  }
   if (all_ok) {
     AppendLog("[INFO] download complete: url=%s", m_url.c_str());
   } else {
@@ -378,8 +484,9 @@ bool Ccurl::File_Init(const char* filename) {
   /* 断点续传：检测本地已存在文件大小 */
   m_resume_len = 0;
 #ifdef _WIN32
+  std::wstring wfile = Utf8ToWide(filename);  /* UTF-8 → UTF-16，支持中文路径（§5.4） */
   struct _stat64 st;
-  if (_stat64(filename, &st) == 0 && (st.st_mode & _S_IFREG)) {
+  if (_wstat64(wfile.c_str(), &st) == 0 && (st.st_mode & _S_IFREG)) {
     m_resume_len = (int64_t)st.st_size;
   }
 #else
@@ -416,7 +523,7 @@ bool Ccurl::File_Init(const char* filename) {
 
 #ifdef _WIN32
   DWORD dwCreation = (open_flags & O_TRUNC) ? CREATE_ALWAYS : OPEN_ALWAYS;
-  m_hFile = CreateFileA(filename, GENERIC_READ | GENERIC_WRITE,
+  m_hFile = CreateFileW(wfile.c_str(), GENERIC_READ | GENERIC_WRITE,
                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                         dwCreation, FILE_ATTRIBUTE_NORMAL, NULL);
   if (m_hFile == INVALID_HANDLE_VALUE) {
@@ -439,7 +546,7 @@ bool Ccurl::File_Init(const char* filename) {
     m_hFile = INVALID_HANDLE_VALUE;
     return false;
   }
-  m_hMapping = CreateFileMappingA(m_hFile, NULL, PAGE_READWRITE, 0, 0, NULL);
+  m_hMapping = CreateFileMappingW(m_hFile, NULL, PAGE_READWRITE, 0, 0, NULL);
   if (m_hMapping == NULL) {
     LOG_ERR("Mapping file failed\n");
     CloseHandle(m_hFile);
@@ -494,7 +601,8 @@ bool Ccurl::File_Init(const char* filename) {
   int64_t part_Size = remain / m_thread_num;
   for (int i = 0; i < m_thread_num; i++) {
     m_Easy_List[i] = (st_EasyList*)malloc(sizeof(st_EasyList));
-    m_Easy_List[i]->offset = m_resume_len + i * part_Size;
+    m_Easy_List[i]->part_start = m_resume_len + i * part_Size;   /* 初始偏移（算分片总长） */
+    m_Easy_List[i]->offset = m_Easy_List[i]->part_start;
     if (i < m_thread_num - 1) {
       m_Easy_List[i]->end = m_resume_len + (i + 1) * part_Size - 1;
     } else {
@@ -509,6 +617,12 @@ bool Ccurl::File_Init(const char* filename) {
     m_Easy_List[i]->timeout = m_timeout;
     m_Easy_List[i]->referer = m_referer.c_str();
     m_Easy_List[i]->cookie = m_cookie.c_str();
+    /* GUI 进度/取消扩展（§4.2/§5.2） */
+    m_Easy_List[i]->part_total = m_Easy_List[i]->end - m_Easy_List[i]->part_start + 1;
+    m_Easy_List[i]->last_len = 0;
+    m_Easy_List[i]->last_t = 0;
+    m_Easy_List[i]->cancel_flag = &m_cancel_flag;
+    m_Easy_List[i]->on_progress = onProgress ? &onProgress : nullptr;
   }
   g_pInfoTable = m_Easy_List;
   g_resume_len = (double)m_resume_len;

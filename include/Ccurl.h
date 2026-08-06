@@ -18,6 +18,11 @@
 #include<string>
 #include<mutex>
 #include<vector>
+#include<atomic>
+#include<functional>
+#include<ctime>
+
+#include "../src/progress.h"
 
 #ifndef _WIN32
 #include <pthread.h>
@@ -35,7 +40,7 @@ typedef struct
 {
     const char* url;       /**< 分片所属的下载 URL */
     char *file_ptr;        /**< 映射文件内存起始地址（mmap / MapViewOfFile） */
-    int64_t offset;        /**< 本分片的起始字节偏移 */
+    int64_t offset;        /**< 本分片的起始字节偏移（下载过程中随写入推进） */
     int64_t end;           /**< 本分片的结束字节偏移 */
 #ifdef _WIN32
     HANDLE thid;           /**< 下载线程句柄（Windows） */
@@ -49,6 +54,14 @@ typedef struct
     long timeout;          /**< 低速超时秒数（0=不限制，不自动中断） */
     const char* referer;   /**< 防盗链 Referer（可为空），如 B站视频流需 https://www.bilibili.com */
     const char* cookie;    /**< Cookie 字符串（可为空），部分流/文件需登录态 */
+    /* ---- GUI 进度/取消扩展（Phase 1，见 gui-design.md §4.2/§5.2） ---- */
+    int64_t part_start;    /**< 本分片初始起始偏移（File_Init 时保存，供计算分片总长与百分比） */
+    int64_t part_total;    /**< 本分片总长（end - start + 1，回调里直接取用） */
+    double  last_len;      /**< 上次进度回调时的下载量（算本线程速率） */
+    time_t  last_t;        /**< 上次进度回调时间（算本线程速率） */
+    std::atomic<bool>* cancel_flag;  /**< 指向所属 Ccurl 的取消标志（写回调/进度回调检查点） */
+    const std::function<void(const std::vector<ThreadProgress>&,
+                             double, double)>* on_progress;  /**< 指向 Ccurl::onProgress（可空） */
 }st_EasyList;
 
 
@@ -105,6 +118,24 @@ public:
     void SetCookie(const string& cookie);
 
     /**
+     * @brief 请求取消：置取消标志，下载线程在写回调/进度回调检查点中止（延迟 < 1s）
+     * @note GUI 取消按钮与关窗退出调用；取消后残留分片文件保留（供断点续传）
+     */
+    void Cancel();
+
+    /**
+     * @brief 查询是否已请求取消
+     * @return 已取消返回 true
+     */
+    bool IsCanceled() const;
+
+    /**
+     * @brief 进度回调（GUI 注入）：每个节流周期（~200ms）调用一次
+     * @note 参数：(各分片进度, 总百分比, 总速率 B/s)；CLI 不设置则保留原 1% 门控打印
+     */
+    std::function<void(const std::vector<ThreadProgress>&, double, double)> onProgress;
+
+    /**
      * @brief 线程入口：下载单个分片
      * @param arg 指向 st_EasyList 的指针
      * @return 线程返回值（恒为 nullptr）
@@ -158,4 +189,5 @@ private:
     int m_timeout;                  /**< 低速超时秒数（0=不自动中断） */
     string m_referer;               /**< 防盗链 Referer（可为空） */
     string m_cookie;                /**< 请求 Cookie（可为空） */
+    std::atomic<bool> m_cancel_flag{false};  /**< 取消标志（Cancel() 置位，回调检查点读取） */
 };

@@ -1,0 +1,459 @@
+/**
+ * @file ui.cpp
+ * @brief 主界面渲染实现（见 ui.h）
+ *
+ * @author ErnestAgel
+ * @date 2026-08-07
+ * @license SPDX-License-Identifier: MIT
+ */
+
+#include "ui.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <thread>
+
+#include "dialogs.h"
+#include "i18n.h"
+#include "imgui.h"
+#include "toggle.h"
+#include "Ccurl.h"  /* MaxThread */
+
+#ifdef _WIN32
+#include <windows.h>
+#include <commdlg.h>
+#endif
+
+namespace ui {
+
+namespace {
+
+/* ---- 表单状态（UI 主线程独占，工作线程不触碰） ---- */
+/* 本机可用线程上限：min(10, hardware_concurrency())（F4） */
+const int kHardwareMax =
+    std::min(MaxThread, (int)std::thread::hardware_concurrency());
+
+char g_url[2048] = {0};
+char g_path[2048] = {0};
+int g_threads = kHardwareMax;   /* 默认 = 本机上限 */
+bool g_video_mode = false;
+
+/* 前向声明（RenderForm 在 OnStartClicked/StartDownload 之前定义） */
+void OnStartClicked(DownloadWorker& worker);
+void StartDownload(DownloadWorker& worker, const std::string& url,
+                   const std::string& path, int threads);
+
+/* 弹窗状态 */
+bool g_exists_open = false;
+bool g_error_open = false;
+bool g_done_open = false;
+std::string g_error_title, g_error_msg, g_error_guide;
+std::string g_done_path;
+
+/* 上次快照 stage（检测完成/取消/错误的边沿，避免重复弹窗） */
+int g_last_stage = STAGE_IDLE;
+bool g_started = false;   /* 本会话是否启动过任务（边沿检测使能） */
+
+/* 待启动任务（文件已存在弹窗选择后执行） */
+struct Pending {
+    bool active = false;
+    std::string url, path;
+    int threads = 1;
+    int exist_choice = 0;  /* 0 等待选择；1 Resume；2 Overwrite；3 Rename；4 Cancel */
+} g_pending;
+
+/* 日志自动滚动 */
+bool g_log_autoscroll = true;
+
+#ifdef _WIN32
+/** UTF-16 → UTF-8 */
+std::string WideToUtf8(const std::wstring& w) {
+    if (w.empty()) return std::string();
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0,
+                                NULL, NULL);
+    std::string s(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &s[0], n, NULL,
+                        NULL);
+    return s;
+}
+
+/** UTF-8 → UTF-16 */
+std::wstring Utf8ToWide(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
+    std::wstring w(n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+    return w;
+}
+#endif
+
+/** URL scheme 预检（R11）：http/https */
+bool UrlSchemeOk(const std::string& url) {
+    return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+}
+
+/** 目标路径是否存在（F11 触发条件） */
+bool PathExists(const std::string& path) {
+#ifdef _WIN32
+    DWORD attr = GetFileAttributesW(Utf8ToWide(path).c_str());
+    return attr != INVALID_FILE_ATTRIBUTES;
+#else
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f) {
+        fclose(f);
+        return true;
+    }
+    return false;
+#endif
+}
+
+/** 删除本地文件（覆盖选择用） */
+void RemoveFile(const std::string& path) {
+#ifdef _WIN32
+    DeleteFileW(Utf8ToWide(path).c_str());
+#else
+    remove(path.c_str());
+#endif
+}
+
+/** 当前时间戳（YYYYMMDD_HHMMSS，改名用） */
+std::string CurrentTimeStamp() {
+    char buf[32];
+    time_t t = time(nullptr);
+    struct tm* tm_now = localtime(&t);
+    if (tm_now != nullptr) {
+        strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", tm_now);
+    } else {
+        snprintf(buf, sizeof(buf), "%ld", (long)t);
+    }
+    return std::string(buf);
+}
+
+/** 时间戳改名：file.zip -> file_20260807_123000.zip（F11 改名语义，与 CLI 一致） */
+std::string StampName(const std::string& path) {
+    std::string base = path;
+    std::string ts = CurrentTimeStamp();
+    size_t dot = base.find_last_of('.');
+    size_t slash = base.find_last_of("/\\");
+    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+        return base.substr(0, dot) + "_" + ts + base.substr(dot);
+    }
+    return base + "_" + ts;
+}
+
+/** 触发错误弹窗（F12） */
+void ShowErrorPopup(const std::string& title, const std::string& msg,
+                    const std::string& guide = "") {
+    g_error_title = title;
+    g_error_msg = msg;
+    g_error_guide = guide;
+    g_error_open = true;
+}
+
+/** 按 §8.3 表格对错误分类并给出指引 */
+std::string ErrorGuide(const std::string& err) {
+    /* MVP 简易分类：信息不足时给通用指引 */
+    if (err.find("初始化失败") != std::string::npos) {
+        return i18n::T("err.guide.init");
+    }
+    return i18n::T("err.guide.generic");
+}
+
+/* ---- 表单渲染 ---- */
+void RenderForm(DownloadWorker& worker) {
+    bool running = worker.IsRunning();
+
+    /* 模式拨动开关（F1）：切换时 URL 占位联动 */
+    bool toggled = ToggleMode(i18n::T("mode.file"), i18n::T("mode.video"),
+                              g_video_mode);
+
+    /* URL 输入（占位提示随模式联动） */
+    ImGui::SetNextItemWidth(-1.0f);
+    if (toggled) {
+        ImGui::SetKeyboardFocusHere();
+    }
+    ImGui::InputTextWithHint(
+        "##url", g_video_mode ? i18n::T("placeholder.url.video")
+                              : i18n::T("placeholder.url.file"),
+        g_url, sizeof(g_url),
+        running ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None);
+
+    /* 保存路径 + 浏览（Windows 原生 GetSaveFileName，§3） */
+    ImGui::SetNextItemWidth(-70.0f);
+    ImGui::InputText("##path", g_path, sizeof(g_path),
+                     running ? ImGuiInputTextFlags_ReadOnly
+                             : ImGuiInputTextFlags_None);
+#ifdef _WIN32
+    ImGui::SameLine();
+    if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0)) && !running) {
+        OPENFILENAMEW ofn{};
+        wchar_t buf[MAX_PATH * 2] = {0};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = NULL;
+        ofn.lpstrFilter = L"All Files (*.*)\0*.*\0";
+        ofn.lpstrFile = buf;
+        ofn.nMaxFile = MAX_PATH * 2;
+        ofn.lpstrTitle = L"curlbolt";
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+        if (GetSaveFileNameW(&ofn)) {
+            std::string s = WideToUtf8(ofn.lpstrFile);
+            snprintf(g_path, sizeof(g_path), "%s", s.c_str());
+        }
+    }
+#endif
+
+    /* 线程数：上限 = min(10, 核数)，超出自动钳位并提示（F4） */
+    ImGui::Text("%s:", i18n::T("label.threads"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f);
+    int clamped = g_threads;
+    if (ImGui::InputInt("##threads", &clamped, 1, 4,
+                        running ? ImGuiInputTextFlags_ReadOnly
+                                : ImGuiInputTextFlags_None)) {
+        if (clamped < 1) clamped = 1;
+        if (clamped > kHardwareMax) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), i18n::T("warn.threads.clamped"),
+                     kHardwareMax);
+            worker.AddLog("[WARN] " + std::string(buf));
+            clamped = kHardwareMax;
+        }
+        g_threads = clamped;
+    }
+    ImGui::SameLine();
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf), i18n::T("hint.threads"), kHardwareMax);
+        ImGui::TextDisabled("%s", buf);
+    }
+
+    /* 下载 / 取消按钮（F9/F10） */
+    ImGui::Separator();
+    float avail = ImGui::GetContentRegionAvail().x;
+    ImGui::BeginDisabled(running || g_pending.active);
+    if (ImGui::Button(i18n::T("button.download"),
+                      ImVec2(avail * 0.5f - 4.0f, 0))) {
+        OnStartClicked(worker);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!running);
+    if (ImGui::Button(i18n::T("button.cancel"),
+                      ImVec2(avail * 0.5f - 4.0f, 0))) {
+        worker.Cancel();
+    }
+    ImGui::EndDisabled();
+}
+
+void OnStartClicked(DownloadWorker& worker) {
+    std::string url(g_url);
+    std::string path(g_path);
+
+    /* URL 预检（R11） */
+    if (url.empty() || !UrlSchemeOk(url)) {
+        ShowErrorPopup(i18n::T("dialog.error.title"),
+                       i18n::T("err.url.invalid"));
+        return;
+    }
+    /* 视频模式：Phase 2 实现，MVP 提示 */
+    if (g_video_mode) {
+        ShowErrorPopup(i18n::T("dialog.error.title"),
+                       i18n::T("err.video.phase2"));
+        return;
+    }
+    if (path.empty()) {
+        ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.path.empty"));
+        return;
+    }
+
+    /* 文件已存在（F11）：弹四选一，选择后启动 */
+    if (PathExists(path)) {
+        g_pending.active = true;
+        g_pending.url = url;
+        g_pending.path = path;
+        g_pending.threads = g_threads;
+        g_pending.exist_choice = 0;
+        g_exists_open = true;
+        return;
+    }
+    StartDownload(worker, url, path, g_threads);
+}
+
+void StartDownload(DownloadWorker& worker, const std::string& url,
+                   const std::string& path, int threads) {
+    worker.AddLog(std::string("[INFO] URL: ") + url);
+    worker.AddLog(std::string("[INFO] 保存到: ") + path);
+    g_last_stage = STAGE_IDLE;
+    if (!worker.StartFileDownload(url, path, threads, 60)) {
+        ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
+    }
+}
+
+/* ---- 进度区渲染（F5/F6/F8） ---- */
+void RenderProgress(const DownloadSnapshot& snap) {
+    ImGui::Separator();
+    ImGui::Text("%s", i18n::T("label.total"));
+    /* 总进度条 */
+    char buf[128];
+    if (snap.totalSpeed > 0) {
+        snprintf(buf, sizeof(buf), "%.1f%%  |  %.2f MB/s  |  ETA %s",
+                 snap.totalPercent, snap.totalSpeed / (1024.0 * 1024.0),
+                 snap.eta.c_str());
+    } else {
+        snprintf(buf, sizeof(buf), "%.1f%%  |  ETA %s", snap.totalPercent,
+                 snap.eta.c_str());
+    }
+    ImGui::ProgressBar((float)(snap.totalPercent / 100.0),
+                       ImVec2(-1.0f, 0), buf);
+
+    /* 每线程进度表（F5） */
+    if (!snap.threads.empty()) {
+        ImGui::Text("%s", i18n::T("label.thread"));
+        ImGui::BeginChild("##threads_list",
+                          ImVec2(0, ImGui::GetTextLineHeightWithSpacing() *
+                                         snap.threads.size() +
+                                         8.0f),
+                          true);
+        for (const auto& t : snap.threads) {
+            char label[256];
+            snprintf(label, sizeof(label), "%s #%d", i18n::T("label.thread"),
+                     t.id);
+            char overlay[128];
+            double mb_done = t.downloaded / (1024.0 * 1024.0);
+            double mb_total = t.total / (1024.0 * 1024.0);
+            snprintf(overlay, sizeof(overlay), "%.1f/%.1f MB | %.2f MB/s",
+                     mb_done, mb_total, t.speed / (1024.0 * 1024.0));
+            ImGui::ProgressBar((float)(t.percent / 100.0),
+                               ImVec2(-1.0f, 0), overlay);
+        }
+        ImGui::EndChild();
+    }
+
+    /* 阶段状态文本（F8） */
+    const char* stage_txt = i18n::T("stage.idle");
+    switch (snap.stage) {
+        case STAGE_DOWNLOADING: stage_txt = i18n::T("stage.downloading"); break;
+        case STAGE_PARSING:     stage_txt = i18n::T("stage.parsing"); break;
+        case STAGE_MERGING:     stage_txt = i18n::T("stage.merging"); break;
+        case STAGE_DONE:        stage_txt = i18n::T("stage.done"); break;
+        case STAGE_CANCELED:    stage_txt = i18n::T("stage.canceled"); break;
+        case STAGE_ERROR:       stage_txt = i18n::T("stage.error"); break;
+        default: break;
+    }
+    ImGui::Text("%s: %s", i18n::T("label.status"), stage_txt);
+}
+
+/* ---- 日志区（F7） ---- */
+void RenderLog(const std::vector<std::string>& log) {
+    ImGui::Separator();
+    ImGui::Text("%s", i18n::T("label.log"));
+    ImGui::BeginChild("##log", ImVec2(0, 160), true);
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f) {
+        g_log_autoscroll = true;
+    }
+    for (const auto& line : log) {
+        ImGui::TextWrapped("%s", line.c_str());
+    }
+    if (g_log_autoscroll && ImGui::GetScrollMaxY() > 0) {
+        ImGui::SetScrollY(ImGui::GetScrollMaxY());
+    }
+    ImGui::EndChild();
+}
+
+/* ---- 设置菜单（F14 语言切换） ---- */
+void RenderMenuBar() {
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu(i18n::T("menu.settings"))) {
+            ImGui::Text("%s:", i18n::T("menu.language"));
+            int cur = (i18n::GetLang() == i18n::Lang::Zh) ? 0 : 1;
+            /* Combo 选项以 \0 分隔的单个字符串 */
+            char lang_items[128];
+            snprintf(lang_items, sizeof(lang_items), "%s%c%s%c",
+                     i18n::T("lang.zh"), '\0', i18n::T("lang.en"), '\0');
+            if (ImGui::Combo("##lang", &cur, lang_items, 2)) {
+                i18n::SetLang(cur == 0 ? i18n::Lang::Zh : i18n::Lang::En);
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+}
+
+}  // namespace
+
+bool Render(DownloadWorker& worker) {
+    RenderMenuBar();
+
+    /* 主窗口 */
+    ImGui::SetNextWindowPos(ImVec2(0, 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(720, 560), ImGuiCond_FirstUseEver);
+    ImGui::Begin(i18n::T("window.title"), nullptr,
+                 ImGuiWindowFlags_NoCollapse);
+
+    RenderForm(worker);
+
+    /* 快照读取（每帧一次，锁内拷贝） */
+    DownloadSnapshot snap;
+    int stage = worker.GetSnapshot(snap);
+
+    /* 阶段边沿 → 弹窗（完成 F13 / 错误 F12 / 取消提示） */
+    if (g_started && stage != g_last_stage) {
+        g_last_stage = stage;
+        if (stage == STAGE_DONE) {
+            g_done_path = snap.status;  /* 完成路径在日志里，此处仅提示 */
+            g_done_open = true;
+        } else if (stage == STAGE_ERROR) {
+            ShowErrorPopup(i18n::T("dialog.error.title"), snap.error,
+                           ErrorGuide(snap.error));
+        }
+    }
+    g_started = worker.IsRunning() || g_started;
+
+    RenderProgress(snap);
+    RenderLog(snap.log);
+    ImGui::End();
+
+    /* 文件已存在四选一（F11）处理 */
+    if (g_pending.active && g_exists_open) {
+        dialogs::ExistsChoice c = dialogs::ShowFileExists(g_pending.path,
+                                                          g_exists_open);
+        if (c != dialogs::ExistsChoice::None) {
+            switch (c) {
+                case dialogs::ExistsChoice::Resume:
+                    StartDownload(worker, g_pending.url, g_pending.path,
+                                  g_pending.threads);
+                    break;
+                case dialogs::ExistsChoice::Overwrite:
+                    RemoveFile(g_pending.path);
+                    worker.AddLog("[INFO] 已删除旧文件（覆盖）: " +
+                                  g_pending.path);
+                    StartDownload(worker, g_pending.url, g_pending.path,
+                                  g_pending.threads);
+                    break;
+                case dialogs::ExistsChoice::Rename: {
+                    std::string newpath = StampName(g_pending.path);
+                    worker.AddLog("[INFO] 已改名: " + newpath);
+                    StartDownload(worker, g_pending.url, newpath,
+                                  g_pending.threads);
+                    break;
+                }
+                default:  /* Cancel */
+                    worker.AddLog("[INFO] 已取消（文件已存在弹窗）");
+                    break;
+            }
+            g_pending.active = false;
+        }
+    }
+
+    /* 错误弹窗（F12） */
+    dialogs::ShowError(g_error_title, g_error_msg, g_error_guide,
+                       g_error_open);
+
+    /* 完成弹窗（F13） */
+    dialogs::ShowDone(g_done_path, g_done_open);
+
+    return true;
+}
+
+}  // namespace ui
