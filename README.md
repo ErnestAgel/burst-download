@@ -30,7 +30,7 @@
 
 | | 说明 Description |
 |---|---|
-| 🎬 **视频下载** | `--video` 模式：输入视频网页 URL，自动解析媒体流直链（B站/YouTube 等主流网站），多线程分片下载 |
+| 🎬 **视频下载** | `--video` 模式：输入视频网页 URL，自动解析媒体流直链（B站/YouTube 等主流网站），多线程分片下载；音视频分离流（DASH）下载后**自动合并**为单文件 |
 | 🔄 **解析器在线更新** | `--update-parser` 一键把内置视频解析组件升级到最新版（需网络，无需重新编译/重新发布） |
 | ⚡ **多线程并发** | `-t` 1~10 线程，HTTP Range 分片，最后一个分片负责余数 |
 | 📦 **断点续传** | 自动检测本地已存在文件并从断点继续；服务器不支持 Range 时自动退化为单线程 |
@@ -95,10 +95,7 @@
 ```
 
 - 支持 B站、YouTube 等主流视频网站，视频网页地址直接可用
-- 音视频分离流（DASH）自动下载为 `movie.mp4`（视频轨）+ `movie.m4a`（音频轨），用 ffmpeg 一键合并：
-  ```bash
-  ffmpeg -i movie.mp4 -i movie.m4a -c copy movie_full.mp4
-  ```
+- 音视频分离流（DASH）自动下载视频轨 `movie.mp4` + 音频轨 `movie.m4a`，并**自动合并**为单文件 `movie_full.mp4`（内置合并引擎，全程进程内，无需外部工具）
 
 ---
 
@@ -137,7 +134,7 @@ percent: 42% speed: 3.20 MB/s ETA: 00:05:12
 
 ## 🔨 构建 Build
 
-项目自带三平台 libcurl 库（`third_party/`），无需安装 libcurl 开发包。
+项目自带三平台 libcurl 库与最小化 FFmpeg 静态库（`third_party/`），无需安装开发包。
 
 **Debug（默认）**：链接动态库，便于 gdb 调试
 
@@ -181,5 +178,7 @@ This tool is intended only for downloading content **you have the right to obtai
 
 本项目采用 **MIT License**（Copyright © 2026 ErnestAgel），允许自由使用、修改、商用与分发。  
 **This project is licensed under the MIT License.**
+
+内置 **FFmpeg**（[LGPL v2.1+](https://www.ffmpeg.org/legal.html)）静态库，仅用于音视频封装合并（remux），未作修改；LGPL 许可要求下，本仓库随附全部源码与链接说明。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

@@ -25,7 +25,7 @@ chmod +x curlbolt-linux-x86_64        # 或 linux-aarch64
 
 ## 功能
 
-- 🎬 **视频下载** `--video`：输入视频网页 URL 直接下载（B站/YouTube 等主流网站），多线程分片
+- 🎬 **视频下载** `--video`：输入视频网页 URL 直接下载（B站/YouTube 等主流网站），多线程分片；DASH 分离流**自动合并**为单文件
 - 🔄 **解析器在线更新** `--update-parser`：一键升级内置视频解析组件（需网络，无需重新编译）
 - ⚡ 多线程分片下载（`-t` 1~10，HTTP Range）
 - 📦 断点续传（自动检测本地文件，从断点继续）
@@ -52,6 +52,7 @@ chmod +x curlbolt-linux-x86_64        # 或 linux-aarch64
 ## 依赖
 
 - 静态单文件，无 libcurl/openssl 动态库依赖
+- 内置 FFmpeg（LGPL）静态库，音视频分离流下载后自动合并，无外部工具依赖
 - 视频模式需系统具备视频解析组件（`--update-parser` 可在线升级；详见 `curlbolt -h`）
 
 ## 校验
