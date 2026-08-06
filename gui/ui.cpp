@@ -16,6 +16,12 @@
 
 #include <GLFW/glfw3.h>
 
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <windows.h>
+#endif
+
 #include "dialogs.h"
 #include "i18n.h"
 #include "imgui.h"
@@ -443,26 +449,39 @@ void RenderTitleBar() {
         glfwSetWindowShouldClose(g_window, GLFW_TRUE);
     }
 
-    /* 标题栏拖动（按住空白区拖动窗口；用按下时位置+鼠标位移，避免漂移） */
+    /* 标题栏拖动：按下时触发 Windows 原生窗口拖动（WM_NCLBUTTONDOWN/HTCAPTION），
+     * 由系统平滑移动窗口 → 无重影、无渲染干扰；非 Windows 回退为位置计算 */
     ImGui::SetCursorPos(ImVec2(0, 0));
     ImGui::InvisibleButton("##titlebar_drag",
                            ImVec2(io.DisplaySize.x - btn_d * 3 - gap * 2 -
                                       margin * 2 - 8,
                                   kTitleBarH));
-    static bool dragging = false;
-    static int drag_x0 = 0, drag_y0 = 0;
-    static ImVec2 drag_mouse0;
-    if (ImGui::IsItemActive() && !dragging) {
-        dragging = true;
-        glfwGetWindowPos(g_window, &drag_x0, &drag_y0);
-        drag_mouse0 = io.MousePos;
-    } else if (!ImGui::IsItemActive() && dragging) {
-        dragging = false;
-    }
-    if (dragging && g_window != nullptr) {
-        glfwSetWindowPos(g_window,
-                         drag_x0 + (int)(io.MousePos.x - drag_mouse0.x),
-                         drag_y0 + (int)(io.MousePos.y - drag_mouse0.y));
+    if (ImGui::IsItemActivated() && g_window != nullptr) {
+#ifdef _WIN32
+        HWND hwnd = glfwGetWin32Window(g_window);
+        if (hwnd != NULL) {
+            ReleaseCapture();
+            SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+        }
+#else
+        /* 非 Windows 回退：记录按下位置逐帧移动 */
+        static bool dragging = false;
+        static int drag_x0 = 0, drag_y0 = 0;
+        static ImVec2 drag_mouse0;
+        if (!dragging) {
+            dragging = true;
+            glfwGetWindowPos(g_window, &drag_x0, &drag_y0);
+            drag_mouse0 = io.MousePos;
+        }
+        if (dragging) {
+            glfwSetWindowPos(g_window,
+                             drag_x0 + (int)(io.MousePos.x - drag_mouse0.x),
+                             drag_y0 + (int)(io.MousePos.y - drag_mouse0.y));
+        }
+        if (!ImGui::IsItemActive()) {
+            dragging = false;
+        }
+#endif
     }
 
     ImGui::End();
@@ -470,21 +489,28 @@ void RenderTitleBar() {
     ImGui::PopStyleVar();
 }
 
-/* ---- 右下角 resize 手柄（无边框窗口无系统手柄，自绘） ---- */
+/* ---- 右下角 resize 手柄（无边框窗口无系统手柄，自绘；hover 高亮 + 缩放光标） ---- */
 void RenderResizeGrip() {
     const ImGuiIO& io = ImGui::GetIO();
-    const float grip = 16.0f;
+    const float grip = 24.0f;
     ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - grip,
                                io.DisplaySize.y - kTitleBarH - grip));
     ImGui::InvisibleButton("##resize_grip", ImVec2(grip, grip));
+    bool hovered = ImGui::IsItemHovered();
+    bool active = ImGui::IsItemActive();
+#ifdef _WIN32
+    if (hovered) {
+        SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_SIZENWSE));
+    }
+#endif
     static bool resizing = false;
     static int rw0 = 0, rh0 = 0;
     static ImVec2 rmouse0;
-    if (ImGui::IsItemActive() && !resizing && g_window != nullptr) {
+    if (active && !resizing && g_window != nullptr) {
         resizing = true;
         glfwGetWindowSize(g_window, &rw0, &rh0);
         rmouse0 = io.MousePos;
-    } else if (!ImGui::IsItemActive() && resizing) {
+    } else if (!active && resizing) {
         resizing = false;
     }
     if (resizing && g_window != nullptr) {
@@ -492,12 +518,14 @@ void RenderResizeGrip() {
                           rw0 + (int)(io.MousePos.x - rmouse0.x),
                           rh0 + (int)(io.MousePos.y - rmouse0.y));
     }
-    /* 手柄样式：画一个右下角小三角 */
+    /* 手柄样式：右下角三角（hover 高亮） */
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetWindowPos();
-    ImVec2 c = ImVec2(p.x + io.DisplaySize.x - 2, p.y + io.DisplaySize.y - kTitleBarH - 2);
-    ImU32 col = ImGui::GetColorU32(ImGuiCol_SeparatorHovered);
-    dl->AddTriangleFilled(ImVec2(c.x - 8, c.y), c, ImVec2(c.x, c.y - 8), col);
+    ImVec2 c = ImVec2(p.x + io.DisplaySize.x - 2,
+                      p.y + io.DisplaySize.y - kTitleBarH - 2);
+    ImU32 col = ImGui::GetColorU32(hovered ? ImGuiCol_SeparatorActive
+                                           : ImGuiCol_SeparatorHovered);
+    dl->AddTriangleFilled(ImVec2(c.x - 12, c.y), c, ImVec2(c.x, c.y - 12), col);
 }
 
 }  // namespace

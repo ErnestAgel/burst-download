@@ -30,12 +30,12 @@ void ApplyOneDark() {
     const ImVec4 cBg        = C(0x28, 0x2C, 0x34);  /* 窗口背景 */
     const ImVec4 cPanel     = C(0x21, 0x25, 0x2B);  /* 面板/弹层 */
     const ImVec4 cPanelDeep = C(0x1B, 0x1E, 0x24);  /* 更深面板 */
-    const ImVec4 cFrame     = C(0x3B, 0x40, 0x48);  /* 控件底 */
-    const ImVec4 cFrameHov  = C(0x4B, 0x52, 0x63);
-    const ImVec4 cFrameAct  = C(0x5B, 0x64, 0x72);
-    const ImVec4 cBorder    = C(0x3E, 0x44, 0x51);
-    const ImVec4 cText      = C(0xAB, 0xB2, 0xBF);
-    const ImVec4 cTextDim   = C(0x5C, 0x63, 0x70);
+    const ImVec4 cFrame     = C(0x3E, 0x44, 0x52);  /* 控件底(提亮,增强立体) */
+    const ImVec4 cFrameHov  = C(0x4E, 0x55, 0x66);
+    const ImVec4 cFrameAct  = C(0x5E, 0x67, 0x78);
+    const ImVec4 cBorder    = C(0x4B, 0x52, 0x63);  /* 边框(提亮,可见) */
+    const ImVec4 cText      = C(0xD7, 0xDA, 0xE0);  /* 主文本(调亮,暗色下更清晰) */
+    const ImVec4 cTextDim   = C(0x7A, 0x82, 0x92);
     const ImVec4 cBlue      = C(0x61, 0xAF, 0xEF);
     const ImVec4 cBlueAct   = C(0x52, 0x8B, 0xFF);
     const ImVec4 cGreen     = C(0x98, 0xC3, 0x79);
@@ -102,7 +102,7 @@ void ApplyOneDark() {
     s.WindowBorderSize  = 1.0f;
     s.ChildBorderSize   = 1.0f;
     s.PopupBorderSize   = 1.0f;
-    s.FrameBorderSize   = 0.0f;
+    s.FrameBorderSize   = 1.0f;  /* 控件描边 → 立体感 */
     s.WindowPadding     = ImVec2(10, 10);
     s.FramePadding      = ImVec2(8, 4);
     s.ItemSpacing       = ImVec2(8, 6);
