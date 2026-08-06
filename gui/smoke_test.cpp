@@ -90,6 +90,10 @@ int main() {
     while (!glfwWindowShouldClose(window) && frames < 600 &&
            glfwGetTime() - start < 8.0) {
         glfwPollEvents();
+        /* 每帧清屏（防 resize 拖影，与 main_gui 一致） */
+        glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+        glClearColor(0.10f, 0.10f, 0.12f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();

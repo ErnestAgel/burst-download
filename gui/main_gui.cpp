@@ -113,8 +113,8 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    GLFWwindow* window =
-        glfwCreateWindow(860, 640, "curlbolt-gui", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(860, 640, i18n::T("window.title"),
+                                          NULL, NULL);
     if (window == nullptr) {
         /* R14：OpenGL 3.3+ 不可用（虚拟机/旧驱动）→ 弹窗指引，不崩溃 */
         ShowFatal("无法创建 OpenGL 3.3+ 窗口。\n"
@@ -131,13 +131,16 @@ int main(int argc, char** argv) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    /* 嵌入字体（GB2312 全量 + ASCII，中英一套字体，§3.3/§7.3） */
+    /* 嵌入字体（GB2312 全量 + ASCII，中英一套字体，§3.3/§7.3）
+     * OversampleH/V 提高位图密度 → 中文渲染更清晰（代价：atlas 体积增大） */
     {
         ImFontConfig cfg;
         cfg.FontDataOwnedByAtlas = false;
+        cfg.OversampleH = 2;
+        cfg.OversampleV = 2;
         ImFont* font = io.Fonts->AddFontFromMemoryTTF(
             (void*)third_party_fonts_NotoSansSC_subset_ttf,
-            (int)third_party_fonts_NotoSansSC_subset_ttf_len, 17.0f, &cfg,
+            (int)third_party_fonts_NotoSansSC_subset_ttf_len, 18.0f, &cfg,
             io.Fonts->GetGlyphRangesChineseFull());
         if (font == nullptr) {
             ShowFatal("字体加载失败。");
@@ -161,6 +164,12 @@ int main(int argc, char** argv) {
     DownloadWorker worker;
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+
+        /* 每帧清屏：修复窗口 resize 时旧帧残留导致的拖影 */
+        glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+        glClearColor(0.10f, 0.10f, 0.12f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();

@@ -385,11 +385,19 @@ void RenderMenuBar() {
 bool Render(DownloadWorker& worker) {
     RenderMenuBar();
 
-    /* 主窗口 */
-    ImGui::SetNextWindowPos(ImVec2(0, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(720, 560), ImGuiCond_FirstUseEver);
-    ImGui::Begin(i18n::T("window.title"), nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    /* 主窗口：无自绘标题栏，铺满客户区（系统标题栏可见，避免两层标题栏混淆）
+     * 尺寸动态跟随窗口（DisplaySize），resize 后内容自动适配 */
+    const ImGuiIO& io = ImGui::GetIO();
+    float menu_h = ImGui::GetFrameHeight();  /* MainMenuBar 高度 */
+    ImGui::SetNextWindowPos(ImVec2(0.0f, menu_h), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(
+        ImVec2(io.DisplaySize.x, io.DisplaySize.y - menu_h),
+        ImGuiCond_Always);
+    ImGui::Begin("##main", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoSavedSettings);
 
     RenderForm(worker);
 
