@@ -31,6 +31,7 @@
 | | 说明 Description |
 |---|---|
 | 🎬 **视频下载** | `--video` 模式：输入视频网页 URL，自动解析媒体流直链（B站/YouTube 等主流网站），多线程分片下载 |
+| 🔄 **解析器在线更新** | `--update-parser` 一键把内置视频解析组件升级到最新版（需网络，无需重新编译/重新发布） |
 | ⚡ **多线程并发** | `-t` 1~10 线程，HTTP Range 分片，最后一个分片负责余数 |
 | 📦 **断点续传** | 自动检测本地已存在文件并从断点继续；服务器不支持 Range 时自动退化为单线程 |
 | ⏱ **超时中断与日志** | `--timeout` / `--no-timeout` 控制；超时中断、失败详情写入 `download.log` |
@@ -106,6 +107,7 @@
 ```bash
 ./curlbolt <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
 ./curlbolt --video <video-url> [-o basename] [-t threads] [--timeout sec]
+./curlbolt --update-parser
 ```
 
 ```bash
@@ -117,6 +119,9 @@
 
 # 强制下载不自动中断
 ./curlbolt https://example.com/file.iso -o file.iso --no-timeout
+
+# 在线更新视频解析组件（网站改版导致解析失效时自愈，无需重新编译）
+./curlbolt --update-parser
 
 # 查看帮助
 ./curlbolt -h
