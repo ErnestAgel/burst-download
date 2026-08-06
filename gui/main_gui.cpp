@@ -168,6 +168,7 @@ int main(int argc, char** argv) {
         ui::Render(worker);
 
         ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
     }
 

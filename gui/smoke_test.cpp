@@ -105,6 +105,7 @@ int main() {
         ImGui::End();
 
         ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
         frames++;
     }
