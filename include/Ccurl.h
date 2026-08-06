@@ -130,6 +130,12 @@ public:
     bool IsCanceled() const;
 
     /**
+     * @brief 最近一次失败的具体原因（Init/Download_Task 失败后读取，供 GUI 弹窗显示）
+     * @return 错误描述（UTF-8；无错误时为空串）
+     */
+    std::string LastError() const;
+
+    /**
      * @brief 进度回调（GUI 注入）：每个节流周期（~200ms）调用一次
      * @note 参数：(各分片进度, 总百分比, 总速率 B/s)；CLI 不设置则保留原 1% 门控打印
      */
@@ -190,4 +196,5 @@ private:
     string m_referer;               /**< 防盗链 Referer（可为空） */
     string m_cookie;                /**< 请求 Cookie（可为空） */
     std::atomic<bool> m_cancel_flag{false};  /**< 取消标志（Cancel() 置位，回调检查点读取） */
+    std::string m_last_error;       /**< 最近一次失败的具体原因（LastError() 读取） */
 };

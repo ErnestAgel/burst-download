@@ -14,6 +14,7 @@
 #include <filesystem>
 
 #include "Ccurl.h"
+#include "i18n.h"
 
 DownloadWorker::DownloadWorker() {
     m_snapshot.stage = STAGE_IDLE;
@@ -199,9 +200,13 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
         if (m_cancel.load()) {
             SetStage(STAGE_CANCELED, "canceled", "[INFO] 已取消");
         } else {
+            std::string detail = cc->LastError();
+            if (detail.empty()) {
+                detail = i18n::T("err.guide.init");
+            }
             std::string err = "[ERROR] 初始化失败: " + url;
             SetStage(STAGE_ERROR, "error", err);
-            m_snapshot.error = "初始化失败（URL 无效/网络不可达/路径错误），详见 download.log";
+            m_snapshot.error = detail;  /* 具体原因（供 F12 弹窗） */
         }
         m_running.store(false);
         return;

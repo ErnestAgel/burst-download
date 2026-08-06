@@ -292,6 +292,10 @@ bool Ccurl::IsCanceled() const {
   return m_cancel_flag.load();
 }
 
+std::string Ccurl::LastError() const {
+  return m_last_error;
+}
+
 void Ccurl::SetReferer(const string& referer) {
   m_referer = referer;
 }
@@ -478,6 +482,7 @@ bool Ccurl::File_Init(const char* filename) {
   this->get_Download_FileSize();
   if (m_fileLen <= 0) {
     LOG_ERR("invalid file length: %lld\n", (long long)m_fileLen);
+    m_last_error = "服务器未返回有效的文件大小（链接可能不是直接下载地址，或服务器不支持 HEAD）";
     return false;
   }
 
@@ -528,6 +533,7 @@ bool Ccurl::File_Init(const char* filename) {
                         dwCreation, FILE_ATTRIBUTE_NORMAL, NULL);
   if (m_hFile == INVALID_HANDLE_VALUE) {
     LOG_ERR("CreateFile:%s failed\n", filename);
+    m_last_error = "无法创建本地文件（保存路径不存在或不可写）";
     return false;
   }
   /* 将文件扩展到目标大小并写满末尾 1 字节，保证映射覆盖整个文件 */
