@@ -138,7 +138,8 @@ static bool DownloadVideo(const string& video_url, const string& basename,
     /* 音视频分离流（DASH）：内置合并器自动合并为单文件（进程内，无需外部工具） */
     string vfile = basename + ".mp4";
     string afile = basename + ".m4a";
-    string merged = basename + "_full.mp4";
+    /* 输出容器按视频轨编码自动选择：VP9/AV1 -> .mkv，其余 -> .mp4 */
+    string merged = basename + "_full" + SuggestMergeExt(vfile);
     string merr;
     if (MergeMp4(vfile, afile, merged, merr)) {
       printf("已自动合并音视频轨 -> %s\n", merged.c_str());

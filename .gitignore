@@ -32,3 +32,8 @@ build-win-release/
 
 # *.pyd 是 Windows Python 扩展模块(非缓存),必须入库
 !*.pyd
+
+# 发布构建目录
+build-rel-x64/
+build-rel-arm64/
+build-win-rel/

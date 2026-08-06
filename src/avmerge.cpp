@@ -21,10 +21,20 @@
 
 extern "C" {
 #include <libavformat/avformat.h>
+#include <libavcodec/codec_id.h>
 #include <libavutil/opt.h>
 }
 
 namespace {
+
+/* 根据视频流编码建议容器扩展名：VP9/AV1/VP8（WebM 典型）-> .mkv，其余 -> .mp4 */
+std::string ExtForVideoCodec(int codec_id) {
+  if (codec_id == AV_CODEC_ID_VP9 || codec_id == AV_CODEC_ID_VP8 ||
+      codec_id == AV_CODEC_ID_AV1) {
+    return ".mkv";
+  }
+  return ".mp4";
+}
 
 /* 将包时间戳从输入流时基换算到输出流时基 */
 void RescalePkt(AVPacket* pkt, const AVStream* is, const AVStream* os) {
@@ -64,6 +74,22 @@ int AddInput(AVFormatContext** in_ctx, const char* path,
 
 }  // namespace
 
+std::string SuggestMergeExt(const std::string& video_path) {
+  AVFormatContext* c = nullptr;
+  if (avformat_open_input(&c, video_path.c_str(), nullptr, nullptr) != 0 || !c) {
+    return ".mp4";  /* 打不开时按默认 mp4 处理 */
+  }
+  std::string ext = ".mp4";
+  for (unsigned i = 0; i < c->nb_streams; i++) {
+    if (c->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+      ext = ExtForVideoCodec(c->streams[i]->codecpar->codec_id);
+      break;
+    }
+  }
+  avformat_close_input(&c);
+  return ext;
+}
+
 bool MergeMp4(const std::string& video_path, const std::string& audio_path,
               const std::string& output_path, std::string& err) {
   av_log_set_level(AV_LOG_ERROR);
@@ -99,7 +125,11 @@ bool MergeMp4(const std::string& video_path, const std::string& audio_path,
       }
     }
     AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "movflags", "+faststart", 0);
+    /* 仅 MP4 输出启用 moov 前置（faststart）；Matroska 输出无此选项，传入会报错 */
+    if (output_path.size() > 4 &&
+        output_path.compare(output_path.size() - 4, 4, ".mp4") == 0) {
+      av_dict_set(&opts, "movflags", "+faststart", 0);
+    }
     if (avformat_write_header(octx, &opts) < 0) {
       err = "写入输出头失败（编码格式可能不受支持）";
       av_dict_free(&opts);
