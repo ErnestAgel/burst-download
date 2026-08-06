@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -25,6 +26,48 @@
 #include "avmerge.h"
 
 using namespace std;
+
+/**
+ * @brief 当前时间戳字符串（YYYYMMDD_HHMMSS，用于默认命名防覆盖）
+ */
+static string CurrentTimeStamp() {
+  char buf[32];
+  time_t t = time(nullptr);
+  struct tm* tm_now = localtime(&t);
+  if (tm_now != nullptr) {
+    strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", tm_now);
+  } else {
+    snprintf(buf, sizeof(buf), "%ld", (long)t);
+  }
+  return string(buf);
+}
+
+/**
+ * @brief 从 URL 推断基础名称：取最后一个路径段，去掉查询串与片段
+ * @param url 下载地址（普通文件或视频页）
+ * @return 推断名（可能带扩展名；无法推断时返回空串）
+ */
+static string UrlBaseName(const string& url) {
+  string u = url;
+  size_t q = u.find_first_of("?#");
+  if (q != string::npos) u = u.substr(0, q);
+  while (!u.empty() && u.back() == '/') u.pop_back();
+  size_t slash = u.find_last_of("/\\");
+  return (slash != string::npos) ? u.substr(slash + 1) : u;
+}
+
+/**
+ * @brief 在基础名上追加时间戳（插到扩展名之前）：file.iso -> file_20260807_043000.iso
+ */
+static string StampName(const string& base) {
+  string ts = CurrentTimeStamp();
+  size_t dot = base.find_last_of('.');
+  size_t slash = base.find_last_of("/\\");
+  if (dot != string::npos && (slash == string::npos || dot > slash)) {
+    return base.substr(0, dot) + "_" + ts + base.substr(dot);
+  }
+  return base + "_" + ts;
+}
 
 /**
  * @brief 打印用法说明
@@ -39,7 +82,8 @@ static void PrintUsage(const char* prog) {
   printf("  --cookies-from-browser <name>  视频模式：从浏览器读取登录 Cookie（chrome/firefox/edge 等），\n");
   printf("                 用于解析需要登录态的高清视频流（如 B站 720p+）\n");
   printf("  --cookie <str> 请求 Cookie（如 \"SESSDATA=xxx; bili_jct=xxx\"），视频流与普通下载均适用\n");
-  printf("  -o filename    保存的文件名（默认 ./test；--video 模式为输出基础名，默认 ./video）\n");
+  printf("  -o filename    保存的文件名（未指定时按 URL 推断 + 时间戳自动命名防覆盖；"
+         "--video 模式为输出基础名，默认 <URL名>_<时间戳>）\n");
   printf("  -t threads     下载线程数 1~%d（默认 %d）\n", MaxThread, MaxThread);
   printf("  --timeout N    下载无进展 N 秒后自动中断（默认 60，0 表示不限）\n");
   printf("  --no-timeout   强制下载不自动中断（等价 --timeout 0）\n");
@@ -193,8 +237,13 @@ int main(int argc, char** argv) {
       printf("缺少 --video 参数值\n");
       return 1;
     }
+    /* 未指定 -o 时：视频模式按视频页 URL 推断基础名 + 时间戳自动命名（防覆盖） */
     if (filename == "./test") {
-      filename = "video";  /* 视频模式默认输出 ./video.mp4 */
+      string base = UrlBaseName(video_url);
+      size_t dot = base.find_last_of('.');
+      if (dot != string::npos) base = base.substr(0, dot);  /* basename 不带扩展名 */
+      if (base.empty()) base = "video";
+      filename = base + "_" + CurrentTimeStamp();
     }
     if (!DownloadVideo(video_url, filename, threads, timeout,
                        cookies_from_browser, cookie_str)) {
@@ -207,6 +256,13 @@ int main(int argc, char** argv) {
   if (url.empty()) {
     PrintUsage(argv[0]);
     return 1;
+  }
+
+  /* 未指定 -o 时：普通下载按 URL 推断 + 时间戳自动命名（防覆盖，便于多次下载不同文件） */
+  if (filename == "./test") {
+    string base = UrlBaseName(url);
+    if (base.empty()) base = "download.dat";
+    filename = "./" + StampName(base);
   }
 
   unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
