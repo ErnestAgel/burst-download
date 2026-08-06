@@ -20,7 +20,7 @@
 > 🎬 **视频下载**：一条命令下载 B站 / YouTube 等主流网站的视频，多线程分片下载
 > ⚡ **多线程加速**：HTTP Range 分片，1~10 线程并发，榨干带宽
 > 📦 **断点续传**：中断后从断点继续，不重头来
-> 🖥 **三平台单文件**：Linux x86_64 / ARM64 / Windows，Release 静态编译零依赖
+> 🖥 **三平台构建**：Linux x86_64 / ARM64 / Windows；Linux Release 静态单文件零依赖，Windows Release 随附 Python 运行 dll（CMake 自动复制到 exe 目录）
 
 </div>
 
@@ -37,7 +37,7 @@
 | ⏱ **超时中断与日志** | `--timeout` / `--no-timeout` 控制；超时中断、失败详情写入 `download.log` |
 | 🍪 **Cookie 支持** | `--cookies-from-browser` 读浏览器登录态（B站 720p+ 高清流）、`--cookie` 手动指定 |
 | 🛡 **防盗链 Referer** | 自动携带视频页 Referer，B站等视频流防 403 |
-| 🖥 **跨平台** | Linux x86_64 / Linux aarch64 / Windows；**Debug（动态库调试）+ Release（静态单文件发布）双构建** |
+| 🖥 **跨平台** | Linux x86_64 / Linux aarch64 / Windows；**Debug（动态库调试）+ Release（静态单文件发布）双构建**；Windows 因内嵌 Python 解释器，Release 需将运行 dll 与 exe 同目录（构建时自动复制） |
 
 ---
 
@@ -134,16 +134,16 @@ percent: 42% speed: 3.20 MB/s ETA: 00:05:12
 
 ## 🔨 构建 Build
 
-项目自带三平台 libcurl 库与最小化 FFmpeg 静态库（`third_party/`），无需安装开发包。
+项目自带三平台 libcurl 库、最小化 FFmpeg 静态库与 Python 嵌入运行时（`third_party/`），无需安装开发包。
 
 **Debug（默认）**：链接动态库，便于 gdb 调试
 
 ```bash
 cmake -B build . && cmake --build build        # Linux
-cmake -B build -G "MinGW Makefiles" .          # Windows
+cmake -B build -G "MinGW Makefiles" .          # Windows（MSYS2/mingw64 环境，gcc 与 mingw32-make 需在 PATH）
 ```
 
-**Release**：链接静态库，产出**单文件可执行程序**（无动态依赖，用于发布）
+**Release**：链接静态库，Linux 产出**单文件可执行程序**（无动态依赖，用于发布）；Windows 由于内嵌 Python 解释器，需将 `third_party/python/windows-x86_64/dll/` 下的 dll 与 exe 同目录（CMake 构建时自动复制）
 
 ```bash
 # Linux（openssl 静态库由构建脚本准备）

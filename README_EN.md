@@ -19,7 +19,7 @@
 > 🎬 **Video download**: one command to download videos from Bilibili / YouTube and other popular sites
 > ⚡ **Multi-threading**: HTTP Range chunking with 1–10 threads to saturate bandwidth
 > 📦 **Resume support**: continue from where it stopped instead of restarting
-> 🖥 **Single-file builds**: Linux x86_64 / ARM64 / Windows, statically linked Release binaries
+> 🖥 **Three-platform builds**: Linux x86_64 / ARM64 / Windows; Linux Release is a static single file with zero deps, Windows Release ships the embedded-Python runtime DLLs (copied to the exe dir by CMake)
 
 </div>
 
@@ -35,7 +35,7 @@
 | ⏱ **Timeout & logging** | `--timeout` / `--no-timeout` control; timeouts and failure details are written to `download.log` |
 | 🍪 **Cookie support** | `--cookies-from-browser` reads browser login state (Bilibili 720p+ streams), `--cookie` for manual cookies |
 | 🛡 **Referer** | Automatically sends the video page Referer to avoid anti-hotlinking 403s |
-| 🖥 **Cross-platform** | Linux x86_64 / Linux aarch64 / Windows; **Debug (dynamic libs) + Release (static single-file) dual builds** |
+| 🖥 **Cross-platform** | Linux x86_64 / Linux aarch64 / Windows; **Debug (dynamic libs) + Release (static single-file) dual builds**; on Windows the embedded-Python runtime DLLs must sit next to the exe (copied automatically by CMake) |
 
 ---
 
@@ -131,16 +131,16 @@ percent: 42% speed: 3.20 MB/s ETA: 00:05:12
 
 ## 🔨 Build
 
-The project ships prebuilt libcurl libraries for three platforms (`third_party/`) — no need to install libcurl dev packages.
+The project ships prebuilt libcurl libraries, a minimal static FFmpeg and the embedded Python runtime for all three platforms (`third_party/`) — no need to install dev packages.
 
 **Debug (default)**: links dynamic libraries, convenient for gdb
 
 ```bash
 cmake -B build . && cmake --build build        # Linux
-cmake -B build -G "MinGW Makefiles" .          # Windows
+cmake -B build -G "MinGW Makefiles" .          # Windows (MSYS2/mingw64 env, gcc and mingw32-make on PATH)
 ```
 
-**Release**: links static libraries, producing a **single-file executable** (no dynamic dependencies, for distribution)
+**Release**: links static libraries; on Linux this yields a **single-file executable** (no dynamic dependencies, for distribution). On Windows, since the Python interpreter is embedded, the DLLs under `third_party/python/windows-x86_64/dll/` must sit next to the exe (copied automatically by CMake)
 
 ```bash
 # Linux (static openssl prepared by the build script)
