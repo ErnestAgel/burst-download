@@ -182,3 +182,55 @@ if(WIN32)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_dll} $<TARGET_FILE_DIR:curlbolt>)
   endforeach()
 endif()
+
+# ==================== Windows：MinGW 运行时 dll 随程序分发 ====================
+# 非全静态构建（Debug、GUI 目标等）依赖 libgcc_s_seh-1.dll / libstdc++-6.dll /
+# libwinpthread-1.dll，随仓库分发（third_party/mingw64-runtime/），POST_BUILD 复制到 exe 目录。
+# Release CLI 使用 -static 全静态链接，不依赖这些 DLL，但复制无害且统一。
+# 通用函数：给任意 Windows 目标追加 MinGW 运行时 dll 复制
+function(curlbolt_copy_mingw_runtime_dlls TARGET)
+  if(WIN32)
+    file(GLOB MINGW_RT_DLLS
+         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mingw64-runtime/windows-x86_64/dll/*.dll)
+    foreach(_dll ${MINGW_RT_DLLS})
+      add_custom_command(TARGET ${TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_dll} $<TARGET_FILE_DIR:${TARGET}>)
+    endforeach()
+  endif()
+endfunction()
+curlbolt_copy_mingw_runtime_dlls(curlbolt)
+
+# ==================== GUI（Phase 0 冒烟目标；Phase 1 替换为正式 curlbolt-gui） ====================
+# 依赖：Dear ImGui（third_party/imgui，MIT）+ GLFW（third_party/glfw，zlib）+ Noto Sans SC 子集字体
+# 冒烟目标只验证窗口/字体/渲染链路，不链接 curl/ffmpeg/python；正式 GUI 目标见设计文档 §7.4
+option(BUILD_GUI "Build curlbolt GUI" ON)
+if(BUILD_GUI)
+  set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+  set(BUILD_SHARED_LIBS   OFF CACHE BOOL "GLFW 静态编译" FORCE)
+  add_subdirectory(third_party/glfw)
+
+  set(IMGUI_SRC
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/backends/imgui_impl_glfw.cpp
+    third_party/imgui/backends/imgui_impl_opengl3.cpp)
+
+  add_executable(curlbolt-gui-smoke WIN32
+    gui/smoke_test.cpp ${IMGUI_SRC})
+  target_include_directories(curlbolt-gui-smoke PRIVATE
+    third_party/imgui
+    third_party/imgui/backends
+    gui)                                  # font_data.h
+  target_compile_options(curlbolt-gui-smoke PRIVATE
+    -finput-charset=UTF-8 -fexec-charset=UTF-8)
+  target_link_libraries(curlbolt-gui-smoke PRIVATE glfw)
+  if(MINGW)
+    target_link_libraries(curlbolt-gui-smoke PRIVATE
+      opengl32 gdi32 user32 shell32 advapi32 winmm)
+  endif()
+  curlbolt_copy_mingw_runtime_dlls(curlbolt-gui-smoke)
+endif()
