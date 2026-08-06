@@ -21,6 +21,7 @@
 #include <vector>
 #include "Ccurl.h"
 #include "video.h"
+#include "embed_python.h"
 
 using namespace std;
 
@@ -33,7 +34,7 @@ static void PrintUsage(const char* prog) {
   printf("       %s --video <video-url> [-o basename] [-t threads] [--timeout sec]\n", prog);
   printf("  <url>          下载地址\n");
   printf("  --video <url>  视频下载模式：解析视频网页 URL（B站/YouTube 等主流网站），\n");
-  printf("                 拿到媒体流直链后用多线程分片下载器下载（需安装视频解析组件）\n");
+  printf("                 拿到媒体流直链后用多线程分片下载器下载（内置解析引擎）\n");
   printf("  --cookies-from-browser <name>  视频模式：从浏览器读取登录 Cookie（chrome/firefox/edge 等），\n");
   printf("                 用于解析需要登录态的高清视频流（如 B站 720p+）\n");
   printf("  --cookie <str> 请求 Cookie（如 \"SESSDATA=xxx; bili_jct=xxx\"），视频流与普通下载均适用\n");
@@ -63,8 +64,8 @@ static bool DownloadVideo(const string& video_url, const string& basename,
                           const string& cookies_from_browser,
                           const string& cookie_str) {
   vector<string> streams;
-  if (!ParseVideoUrls(video_url, streams, cookies_from_browser, "")) {
-    printf("视频解析失败: 请确认已安装视频解析组件，且 URL 有效/可访问\n");
+  if (!ParseVideoUrls(video_url, streams, cookies_from_browser, cookie_str)) {
+    printf("视频解析失败: 请确认 URL 有效/可访问，且 Python 运行时资源完整\n");
     return false;
   }
   printf("解析成功: 共 %zu 个媒体流\n", streams.size());
@@ -109,6 +110,17 @@ int main(int argc, char** argv) {
   if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
     PrintUsage(argv[0]);
     return 0;
+  }
+
+  /* 初始化嵌入的 Python 运行时（优先可执行文件同目录 python_runtime/，
+   * 否则回退到编译期宏 PYTHON_RUNTIME_FALLBACK 的源码树资源） */
+  {
+    string exe_dir(argv[0]);
+    size_t slash = exe_dir.find_last_of("/\\");
+    string py_home = (slash != string::npos)
+                         ? exe_dir.substr(0, slash) + "/python_runtime"
+                         : "";
+    EmbedPythonInit(py_home);
   }
 
   string url;

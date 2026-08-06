@@ -21,6 +21,23 @@ file(GLOB SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 add_compile_options(-g)
 add_executable(curlbolt ${SRC})
 
+# ---- Python 嵌入（进程内 yt_dlp 解析，静态 libpython，Debug/Release 共用） ----
+set(PYTHON_EMBED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/python)
+include_directories(${PYTHON_EMBED_DIR}/include)
+target_compile_definitions(curlbolt PRIVATE
+  PYTHON_RUNTIME_FALLBACK="${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/runtime")
+if(EXISTS ${PYTHON_EMBED_DIR}/linux-x86_64/libpython3.11.a)
+  target_link_libraries(curlbolt ${PYTHON_EMBED_DIR}/linux-x86_64/libpython3.11.a)
+endif()
+if(UNIX)
+  # libpython 依赖：openssl/zlib 用 third_party 干净静态库
+  # （系统 openssl 静态库带 jitterentropy/zstd 依赖，全静态链接会失败）
+  set(PY_DEPS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/linux-x86_64/static)
+  target_link_libraries(curlbolt
+    ${PY_DEPS_DIR}/libssl.a ${PY_DEPS_DIR}/libcrypto.a ${PY_DEPS_DIR}/libz.a
+    lzma bz2 dl pthread m util)
+endif()
+
 # ---- 平台目录：third_party/<PLATFORM_DIR> ----
 if(WIN32)
   set(PLATFORM_DIR windows-x86_64)
