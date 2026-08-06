@@ -37,3 +37,6 @@ build-win-release/
 build-rel-x64/
 build-rel-arm64/
 build-win-rel/
+
+# GUI Phase 0 临时构建目录
+build-gui-p0/
