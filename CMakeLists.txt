@@ -47,6 +47,18 @@ else()
   set(PLATFORM_DIR linux-x86_64)
 endif()
 
+# ---- FFmpeg 嵌入（进程内 remux 合并音视频轨，静态库，Debug/Release 共用） ----
+set(FFMPEG_EMBED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg)
+include_directories(${FFMPEG_EMBED_DIR}/include)
+set(FFMPEG_LIB_DIR ${FFMPEG_EMBED_DIR}/${PLATFORM_DIR})
+if(EXISTS ${FFMPEG_LIB_DIR}/libavformat.a)
+  message(STATUS "链接 FFmpeg 静态库: ${FFMPEG_LIB_DIR}")
+  target_link_libraries(curlbolt
+    ${FFMPEG_LIB_DIR}/libavformat.a
+    ${FFMPEG_LIB_DIR}/libavcodec.a
+    ${FFMPEG_LIB_DIR}/libavutil.a)
+endif()
+
 # ==================== Release：静态链接（单文件，用于发布） ====================
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   message(STATUS "Release 构建：静态链接 third_party/${PLATFORM_DIR}/libcurl.a")

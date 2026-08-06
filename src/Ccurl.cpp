@@ -248,6 +248,9 @@ void *Ccurl::Downloading(void* arg) {
     }
     curl_easy_setopt(curl, CURLOPT_URL, info->url);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                     "(KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36");
     if (info->referer != nullptr && info->referer[0] != '\0') {
       curl_easy_setopt(curl, CURLOPT_REFERER, info->referer);
     }
@@ -271,8 +274,11 @@ void *Ccurl::Downloading(void* arg) {
     }
 
     CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
-    if (CHECK_CURL(res) && info->offset >= info->end + 1) {
+    bool http_ok = (http_code == 200 || http_code == 206);
+    if (http_ok && CHECK_CURL(res) && info->offset >= info->end + 1) {
       info->success = true;  /* 本分片下载成功且已写满 */
       return nullptr;
     }
@@ -282,6 +288,15 @@ void *Ccurl::Downloading(void* arg) {
               (long long)info->offset, (long long)info->end, info->timeout);
       AppendLog("[WARN] timeout on part %lld-%lld (url=%s, no progress for %ld s)",
                 (long long)info->offset, (long long)info->end, info->url, info->timeout);
+      info->success = false;
+      return nullptr;
+    }
+    if (!http_ok) {
+      /* HTTP 错误（403/404 等）：错误页已被写回调接收，直接判失败，不重试 */
+      LOG_ERR("HTTP %ld on part %lld-%lld (url=%s)\n", http_code,
+              (long long)info->offset, (long long)info->end, info->url);
+      AppendLog("[ERROR] HTTP %ld on part %lld-%lld (url=%s)", http_code,
+                (long long)info->offset, (long long)info->end, info->url);
       info->success = false;
       return nullptr;
     }

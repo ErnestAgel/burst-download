@@ -22,6 +22,7 @@
 #include "Ccurl.h"
 #include "video.h"
 #include "embed_python.h"
+#include "avmerge.h"
 
 using namespace std;
 
@@ -90,9 +91,19 @@ static bool DownloadVideo(const string& video_url, const string& basename,
     }
   }
   if (all_ok && streams.size() > 1) {
-    printf("提示: 音视频分离流，可用 ffmpeg 合并: "
-           "ffmpeg -i %s.mp4 -i %s.m4a -c copy %s_full.mp4\n",
-           basename.c_str(), basename.c_str(), basename.c_str());
+    /* 音视频分离流（DASH）：内置合并器自动合并为单文件（进程内，无需外部工具） */
+    string vfile = basename + ".mp4";
+    string afile = basename + ".m4a";
+    string merged = basename + "_full.mp4";
+    string merr;
+    if (MergeMp4(vfile, afile, merged, merr)) {
+      printf("已自动合并音视频轨 -> %s\n", merged.c_str());
+    } else {
+      printf("自动合并失败: %s\n", merr.c_str());
+      printf("提示: 可保留两轨文件，用外部工具手动合并: "
+             "ffmpeg -i %s -i %s -c copy %s\n",
+             vfile.c_str(), afile.c_str(), merged.c_str());
+    }
   }
   return all_ok;
 }
