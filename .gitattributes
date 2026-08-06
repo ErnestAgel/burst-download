@@ -1,0 +1,15 @@
+# 统一行尾策略：所有文本文件按 LF 规范化入库（仓库内已全为 LF），
+# 避免 core.autocrlf 在不同环境下的差异导致全仓文件被标记为 modified
+* text=auto
+
+# 二进制/库文件：禁止任何行尾转换或归一化
+*.a     binary
+*.lib   binary
+*.so    binary
+*.so.*  binary
+*.dll   binary
+*.exe   binary
+*.o     binary
+*.obj   binary
+*.pyc   binary
+*.dat   binary
