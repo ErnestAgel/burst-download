@@ -367,10 +367,12 @@ void RenderLog(const std::vector<std::string>& log) {
 /* ---- Mac 风格圆形窗口按钮（红=关闭/黄=最小化/绿=最大化，hover 提示文字） ---- */
 bool MacCircleButton(float cx, float cy, float d, ImU32 color, ImU32 hover,
                      const char* tip) {
+    ImGui::PushID((int)color); /* 颜色唯一 → 三个按钮 ID 不冲突（修复 Program error） */
     ImGui::SetCursorScreenPos(ImVec2(cx - d * 0.5f, cy - d * 0.5f));
     ImGui::InvisibleButton("##macbtn", ImVec2(d, d));
     bool hovered = ImGui::IsItemHovered();
     bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    ImGui::PopID();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddCircleFilled(ImVec2(cx, cy), d * 0.5f, hovered ? hover : color, 24);
     if (hovered && tip != nullptr) {
@@ -401,27 +403,8 @@ void RenderTitleBar() {
 
     const float cy = kTitleBarH * 0.5f;  /* 按钮垂直中心 */
 
-    /* 左侧：设置按钮（与右侧窗口控制分离，符合常规软件逻辑） */
-    ImGui::SetCursorPos(ImVec2(8, (kTitleBarH - 26) * 0.5f));
-    if (ImGui::Button(u8"⚙", ImVec2(26, 26))) {
-        ImGui::OpenPopup("##settings_popup");
-    }
-    ImGui::SetItemTooltip("%s", i18n::T("menu.settings"));
-    if (ImGui::BeginPopup("##settings_popup")) {
-        ImGui::Text("%s:", i18n::T("menu.language"));
-        int cur = (i18n::GetLang() == i18n::Lang::Zh) ? 0 : 1;
-        char lang_items[128];
-        snprintf(lang_items, sizeof(lang_items), "%s%c%s%c",
-                 i18n::T("lang.zh"), '\0', i18n::T("lang.en"), '\0');
-        if (ImGui::Combo("##lang", &cur, lang_items, 2)) {
-            i18n::SetLang(cur == 0 ? i18n::Lang::Zh : i18n::Lang::En);
-        }
-        ImGui::EndPopup();
-    }
-
-    /* 标题文本 */
-    ImGui::SameLine();
-    ImGui::SetCursorPosY((kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f);
+    /* 标题文本（设置入口已移至主窗口"设置"菜单栏，见 Render()） */
+    ImGui::SetCursorPos(ImVec2(12, (kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::Text("%s", i18n::T("window.title"));
 
     /* 右侧：Mac 风格三色圆钮（红=关闭 最右，绿=最大化，黄=最小化） */
@@ -527,17 +510,34 @@ bool Render(DownloadWorker& worker) {
     /* 自绘标题栏（无边框窗口） */
     RenderTitleBar();
 
-    /* 主窗口：从标题栏下方铺满客户区 */
+    /* 主窗口：从标题栏下方铺满客户区；自带"设置"菜单栏（语言切换，常规软件逻辑） */
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0.0f, kTitleBarH), ImGuiCond_Always);
     ImGui::SetNextWindowSize(
         ImVec2(io.DisplaySize.x, io.DisplaySize.y - kTitleBarH),
         ImGuiCond_Always);
     ImGui::Begin("##main", nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                 ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar |
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoBringToFrontOnFocus |
                      ImGuiWindowFlags_NoSavedSettings);
+
+    /* 设置菜单栏：语言（中/英） */
+    if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu(i18n::T("menu.settings"))) {
+            bool zh = (i18n::GetLang() == i18n::Lang::Zh);
+            bool en = !zh;
+            if (ImGui::MenuItem(i18n::T("lang.zh"), nullptr, zh)) {
+                i18n::SetLang(i18n::Lang::Zh);
+            }
+            if (ImGui::MenuItem(i18n::T("lang.en"), nullptr, en)) {
+                i18n::SetLang(i18n::Lang::En);
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+    }
 
     RenderForm(worker);
 
@@ -560,10 +560,11 @@ bool Render(DownloadWorker& worker) {
 
     RenderProgress(snap);
     RenderLog(snap.log);
-    ImGui::End();
 
-    /* 右下角 resize 手柄（无边框窗口） */
+    /* 右下角 resize 手柄（无边框窗口，须在窗口 End 前绘制） */
     RenderResizeGrip();
+
+    ImGui::End();
 
     /* 文件已存在四选一（F11）处理 */
     if (g_pending.active && g_exists_open) {
