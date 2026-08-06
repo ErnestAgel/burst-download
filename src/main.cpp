@@ -17,6 +17,14 @@
 #include <cstring>
 #include <ctime>
 #include <iostream>
+
+#ifdef _WIN32
+#include <io.h>
+#define access _access
+#define F_OK 0
+#else
+#include <unistd.h>
+#endif
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,6 +34,26 @@
 #include "avmerge.h"
 
 using namespace std;
+
+/**
+ * @brief 文件是否已存在
+ */
+static bool FileExists(const std::string& path) {
+  return access(path.c_str(), F_OK) == 0;
+}
+
+/**
+ * @brief 视频模式输出是否已存在（视频轨/音频轨/合并产物任一命中即视为冲突）
+ */
+static bool VideoOutputExists(const std::string& basename) {
+  const char* exts[] = {".mp4", ".m4a", ".mkv", ".webm"};
+  for (const char* e : exts) {
+    if (FileExists(basename + e) || FileExists(basename + "_full" + e)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * @brief 当前时间戳字符串（YYYYMMDD_HHMMSS，用于默认命名防覆盖）
@@ -238,13 +266,17 @@ int main(int argc, char** argv) {
       printf("缺少 --video 参数值\n");
       return 1;
     }
-    /* 未指定 -o 时：视频模式按视频页 URL 推断基础名 + 时间戳自动命名（防覆盖） */
+    /* 未指定 -o 时：视频模式按视频页 URL 推断基础名 + 时间戳自动命名（防覆盖）
+     * 指定 -o 但同名输出已存在时：基础名追加时间戳避让 */
     if (filename == "./test") {
       string base = UrlBaseName(video_url);
       size_t dot = base.find_last_of('.');
       if (dot != string::npos) base = base.substr(0, dot);  /* basename 不带扩展名 */
       if (base.empty()) base = "video";
       filename = base + "_" + CurrentTimeStamp();
+    } else if (VideoOutputExists(filename)) {
+      filename += "_" + CurrentTimeStamp();
+      printf("同名输出已存在，为避免覆盖改用: %s\n", filename.c_str());
     }
     if (!DownloadVideo(video_url, filename, threads, timeout,
                        cookies_from_browser, cookie_str)) {
@@ -259,11 +291,15 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  /* 未指定 -o 时：普通下载按 URL 推断 + 时间戳自动命名（防覆盖，便于多次下载不同文件） */
+  /* 未指定 -o 时：普通下载按 URL 推断 + 时间戳自动命名（防覆盖，便于多次下载不同文件）
+   * 指定 -o 但目标文件已存在时：追加时间戳避让，避免覆盖已有文件 */
   if (filename == "./test") {
     string base = UrlBaseName(url);
     if (base.empty()) base = "download.dat";
     filename = "./" + StampName(base);
+  } else if (FileExists(filename)) {
+    filename = StampName(filename);
+    printf("目标文件已存在，为避免覆盖改用: %s\n", filename.c_str());
   }
 
   unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
