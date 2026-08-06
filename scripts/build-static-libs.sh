@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# 一次性构建三平台静态 libcurl 库 → lib/<platform>/libcurl.a
+# 一次性构建三平台静态 libcurl 库 → third_party/<platform>/libcurl.a
 # 供 CMake Release（静态单文件）使用；Debug 仍走现有动态库
 #
 #   Linux x86_64 : openssl 3.0.13 静态 + curl 7.88.1 静态
@@ -42,8 +42,8 @@ make -j4 >/dev/null && make install_sw >/dev/null
 cd /tmp/curl-7.88.1
 ./configure ${CURL_OPTS} --with-openssl=/tmp/x86-ssl --with-zlib >/dev/null
 make -j4 >/dev/null
-cp lib/.libs/libcurl.a /src/lib/linux-x86_64/libcurl.a
-echo "[OK] lib/linux-x86_64/libcurl.a"
+cp lib/.libs/libcurl.a /src/third_party/linux-x86_64/libcurl.a
+echo "[OK] third_party/linux-x86_64/libcurl.a"
 
 # ---------- 2) Windows x86_64（Schannel） ----------
 echo "=== [2/3] Windows x86_64 ==="
@@ -51,8 +51,8 @@ cd /tmp/curl-8.12.1
 ./configure --host=x86_64-w64-mingw32 ${CURL_OPTS} \
   --with-schannel --without-zlib --without-openssl >/dev/null
 make -j4 >/dev/null
-cp lib/.libs/libcurl.a /src/lib/windows-x86_64/libcurl.a
-echo "[OK] lib/windows-x86_64/libcurl.a"
+cp lib/.libs/libcurl.a /src/third_party/windows-x86_64/libcurl.a
+echo "[OK] third_party/windows-x86_64/libcurl.a"
 
 # ---------- 3) Linux aarch64 ----------
 echo "=== [3/3] Linux aarch64 ==="
@@ -66,11 +66,11 @@ make distclean >/dev/null 2>&1 || true
 ./configure --host=aarch64-linux-gnu ${CURL_OPTS} \
   --with-openssl=/tmp/arm-ssl --with-zlib >/dev/null
 make -j4 >/dev/null
-cp lib/.libs/libcurl.a /src/lib/linux-aarch64/libcurl.a
-echo "[OK] lib/linux-aarch64/libcurl.a"
+cp lib/.libs/libcurl.a /src/third_party/linux-aarch64/libcurl.a
+echo "[OK] third_party/linux-aarch64/libcurl.a"
 INNER
 
 echo "=== 完成，静态库清单 ==="
-ls -la "${ROOT}/lib/linux-x86_64/libcurl.a" \
-       "${ROOT}/lib/linux-aarch64/libcurl.a" \
-       "${ROOT}/lib/windows-x86_64/libcurl.a"
+ls -la "${ROOT}/third_party/linux-x86_64/libcurl.a" \
+       "${ROOT}/third_party/linux-aarch64/libcurl.a" \
+       "${ROOT}/third_party/windows-x86_64/libcurl.a"

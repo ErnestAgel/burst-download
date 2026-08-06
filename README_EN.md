@@ -131,7 +131,7 @@ percent: 42% speed: 3.20 MB/s ETA: 00:05:12
 
 ## 🔨 Build
 
-The project ships prebuilt libcurl libraries for three platforms (`lib/`) — no need to install libcurl dev packages.
+The project ships prebuilt libcurl libraries for three platforms (`third_party/`) — no need to install libcurl dev packages.
 
 **Debug (default)**: links dynamic libraries, convenient for gdb
 

@@ -132,7 +132,7 @@ percent: 42% speed: 3.20 MB/s ETA: 00:05:12
 
 ## 🔨 构建 Build
 
-项目自带三平台 libcurl 库（`lib/`），无需安装 libcurl 开发包。
+项目自带三平台 libcurl 库（`third_party/`），无需安装 libcurl 开发包。
 
 **Debug（默认）**：链接动态库，便于 gdb 调试
 
