@@ -88,6 +88,19 @@ if (-not $SkipRelease) {
     $remote = git ls-remote --tags origin "refs/tags/$Version" 2>$null
     if ($remote) { throw "远程已存在 tag $Version,请换版本号或先删除旧 tag" }
     if (git tag -l "$Version") { throw "本地已存在 tag $Version" }
+
+    # 4.1 提取 GitHub token —— 必须在构建(修改 PATH)之前!
+    # 构建阶段会把 PATH 切到 MSYS2,此后 git credential 拿不到 Windows GCM 凭据
+    $tmpCred = Join-Path $env:TEMP ("ghcred_" + [guid]::NewGuid().ToString('N') + '.txt')
+    [IO.File]::WriteAllText($tmpCred, "protocol=https`nhost=github.com`n`n", [Text.Encoding]::ASCII)
+    try {
+        $cred = cmd /c "git credential fill < `"$tmpCred`"" 2>$null
+    } finally {
+        Remove-Item $tmpCred -ErrorAction SilentlyContinue
+    }
+    $tokenLine = ($cred | Where-Object { $_ -like 'password=*' } | Select-Object -First 1)
+    if (-not $tokenLine -or $tokenLine.Length -le 9) { throw '无法从 git 凭据获取 GitHub token(请先 git push 成功一次或设置 GITHUB_TOKEN)' }
+    $token = $tokenLine.Substring(9)
 }
 
 # ---------- 5) 构建三平台 ----------
@@ -145,11 +158,7 @@ if ($SkipRelease) {
 # ---------- 8) 发布到 GitHub ----------
 Write-Host "== 发布 $Version 到 GitHub Releases =="
 
-# 8.1 token(从 git 凭据提取,不硬编码)
-$cred = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
-$tokenLine = ($cred -split "`n" | Where-Object { $_ -like 'password=*' } | Select-Object -First 1)
-if (-not $tokenLine -or $tokenLine.Length -le 9) { throw '无法从 git 凭据获取 GitHub token(请先 git push 成功一次或设置 GITHUB_TOKEN)' }
-$token = $tokenLine.Substring(9)
+# 8.1 token 已在步骤 4.1 提前提取(必须在构建修改 PATH 之前),此处直接使用
 
 $headers = @{
     Authorization = "Bearer $token"
