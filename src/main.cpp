@@ -42,6 +42,7 @@ static void PrintUsage(const char* prog) {
   printf("  -t threads     下载线程数 1~%d（默认 %d）\n", MaxThread, MaxThread);
   printf("  --timeout N    下载无进展 N 秒后自动中断（默认 60，0 表示不限）\n");
   printf("  --no-timeout   强制下载不自动中断（等价 --timeout 0）\n");
+  printf("  --update-parser  在线更新内置视频解析组件到最新版（需网络，无需重新编译）\n");
   printf("  -h, --help     显示本帮助\n");
   printf("示例:\n");
   printf("  %s https://example.com/file.iso -o file.iso -t 8 --timeout 30\n", prog);
@@ -144,6 +145,14 @@ int main(int argc, char** argv) {
       timeout = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--no-timeout") == 0) {
       timeout = 0;  /* 强制下载，不自动中断 */
+    } else if (strcmp(argv[i], "--update-parser") == 0) {
+      string msg;
+      if (!EmbedUpdateParser(argv[0], msg)) {
+        printf("更新失败: %s\n", msg.c_str());
+        return 1;
+      }
+      printf("%s\n", msg.c_str());
+      return 0;
     } else if (strcmp(argv[i], "--cookies-from-browser") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
       cookies_from_browser = argv[++i];
     } else if (strcmp(argv[i], "--cookie") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {

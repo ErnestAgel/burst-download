@@ -44,6 +44,16 @@ bool EmbedParseVideoUrls(const std::string& url,
                          std::string& err);
 
 /**
+ * @brief 在线更新内置视频解析组件（yt_dlp 包）到 GitHub 最新版
+ * @param exe_path 可执行文件路径（argv[0]），用于定位同目录 python_runtime/
+ * @param msg 输出：执行结果描述（"已是最新" 或 新旧版本变化；失败为原因）
+ * @return 是否执行成功（"已是最新" 也视为成功）
+ * @note 需网络；仅替换 yt_dlp 包目录（原子替换，失败自动回滚保留旧版）；
+ *       纯 Python 包替换，无需重新编译/打包 curlbolt
+ */
+bool EmbedUpdateParser(const std::string& exe_path, std::string& msg);
+
+/**
  * @brief 释放嵌入的 CPython 与资源（可选调用，进程退出前）
  */
 void EmbedPythonShutdown();
