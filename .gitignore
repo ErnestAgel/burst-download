@@ -25,3 +25,10 @@ __pycache__/
 
 # 运行日志
 *.log
+
+# Windows 构建目录
+build-win/
+build-win-release/
+
+# *.pyd 是 Windows Python 扩展模块(非缓存),必须入库
+!*.pyd

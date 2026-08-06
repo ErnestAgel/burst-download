@@ -138,6 +138,9 @@ bool EmbedPythonInit(const std::string& python_home) {
                           Py_DecodeLocale((home + "/stdlib").c_str(), nullptr));
   PyWideStringList_Append(&config.module_search_paths,
                           Py_DecodeLocale(home.c_str(), nullptr));
+  /* Windows 嵌入的 Python 扩展模块（.pyd）目录；Linux runtime 无此目录，加路径无害 */
+  PyWideStringList_Append(&config.module_search_paths,
+                          Py_DecodeLocale((home + "/lib-dynload").c_str(), nullptr));
   PyStatus status = Py_InitializeFromConfig(&config);
   if (PyStatus_Exception(status)) {
     fprintf(stderr, "[embed_python] Py_Initialize 失败: %s\n",

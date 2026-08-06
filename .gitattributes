@@ -13,3 +13,4 @@
 *.obj   binary
 *.pyc   binary
 *.dat   binary
+*.pyd   binary

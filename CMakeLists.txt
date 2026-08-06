@@ -143,6 +143,10 @@ else()
       set(CURL_TARGETS CURL::libcurl)
     endif()
     target_link_libraries(curlbolt ${CURL_TARGETS})
+    # MinGW 下链接 FFmpeg 静态库/系统 API 所需库（bcrypt 随机数、ws2_32 套接字）
+    if(MINGW)
+      target_link_libraries(curlbolt bcrypt ws2_32)
+    endif()
     # 运行时 libcurl-4.dll 需与可执行文件同目录（mingw import lib 记录的 DLL 名为 libcurl-4.dll）
     if(EXISTS ${CURL_WIN_DIR}/libcurl-4.dll)
       add_custom_command(TARGET curlbolt POST_BUILD
@@ -165,4 +169,16 @@ else()
       BUILD_RPATH ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic
       INSTALL_RPATH ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic)
   endif()
+endif()
+
+# ==================== Windows：嵌入 Python 运行依赖 dll 随程序分发 ====================
+# 内嵌的 libpython（MSYS2/mingw 版）及扩展模块（.pyd）依赖 libpython3.14.dll、
+# libgcc_s_seh-1.dll、libssl/libcrypto 等，需与可执行文件同目录才能加载（Debug/Release 通用）
+if(WIN32)
+  file(GLOB PY_RUNTIME_DLLS
+       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/windows-x86_64/dll/*.dll)
+  foreach(_dll ${PY_RUNTIME_DLLS})
+    add_custom_command(TARGET curlbolt POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_dll} $<TARGET_FILE_DIR:curlbolt>)
+  endforeach()
 endif()
