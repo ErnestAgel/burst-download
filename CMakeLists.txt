@@ -49,10 +49,15 @@ if(UNIX)
   set(PY_DEPS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/static)
   set(_PY_LIBS ${PY_DEPS_DIR}/libssl.a ${PY_DEPS_DIR}/libcrypto.a ${PY_DEPS_DIR}/libz.a
                dl pthread m util)
-  # lzma/bz2 仅在系统存在静态库时链接（aarch64 交叉无对应库且 libpython 不引用时跳过）
+  # lzma/bz2 静态库随仓库分发（third_party/<platform>/static/），不依赖系统开发包；
+  # libpython3.11.a 的 _bz2module/_lzmamodule 需要 BZ2_*/lzma_* 符号，缺失将导致链接失败
   foreach(_pyx lzma bz2)
-    if(EXISTS "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/lib${_pyx}.a")
-      list(APPEND _PY_LIBS ${_pyx})
+    if(EXISTS ${PY_DEPS_DIR}/lib${_pyx}.a)
+      list(APPEND _PY_LIBS ${PY_DEPS_DIR}/lib${_pyx}.a)
+    else()
+      message(FATAL_ERROR
+        "缺少仓库内静态依赖: ${PY_DEPS_DIR}/lib${_pyx}.a\n"
+        "libpython3.11.a 需要 ${_pyx} 符号，请从 bz2/lzma 开发包补充该静态库到仓库后再构建")
     endif()
   endforeach()
   target_link_libraries(curlbolt ${_PY_LIBS})
@@ -151,6 +156,10 @@ else()
   else()
     set(CURL_TARGETS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic/libcurl.so)
     target_link_libraries(curlbolt pthread ${CURL_TARGETS})
+    # FFmpeg 静态库的 mov demuxer 需要 zlib（uncompress 等），Debug 下也链接仓库静态 zlib
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/static/libz.a)
+      target_link_libraries(curlbolt ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/static/libz.a)
+    endif()
     # 运行时 rpath：确保可执行文件加载项目 third_party/<platform>/dynamic/ 下的 libcurl.so.4，而非系统库
     set_target_properties(curlbolt PROPERTIES
       BUILD_RPATH ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic
