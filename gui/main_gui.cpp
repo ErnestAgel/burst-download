@@ -22,6 +22,7 @@
 #include "font_data.h"
 #include "crashguard.h"
 #include "i18n.h"
+#include "theme.h"
 #include "ui.h"
 #include "worker.h"
 
@@ -113,7 +114,9 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    GLFWwindow* window = glfwCreateWindow(860, 640, i18n::T("window.title"),
+    /* 无边框窗口：系统标题栏由 UI 自绘（最小化/最大化/关闭按钮在自绘标题栏上） */
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+    GLFWwindow* window = glfwCreateWindow(900, 640, i18n::T("window.title"),
                                           NULL, NULL);
     if (window == nullptr) {
         /* R14：OpenGL 3.3+ 不可用（虚拟机/旧驱动）→ 弹窗指引，不崩溃 */
@@ -130,6 +133,9 @@ int main(int argc, char** argv) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    /* One Dark 主题（用户指定配色） */
+    theme::ApplyOneDark();
 
     /* 嵌入字体（GB2312 全量 + ASCII，中英一套字体，§3.3/§7.3）
      * OversampleH/V 提高位图密度 → 中文渲染更清晰（代价：atlas 体积增大） */
@@ -162,6 +168,7 @@ int main(int argc, char** argv) {
 
     /* ---- 主循环 ---- */
     DownloadWorker worker;
+    ui::Init(window);
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 

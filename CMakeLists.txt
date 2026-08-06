@@ -228,6 +228,7 @@ if(BUILD_GUI)
     gui/worker.cpp
     gui/dialogs.cpp
     gui/crashguard.cpp
+    gui/theme.cpp
     src/Ccurl.cpp
     ${IMGUI_SRC})
   target_include_directories(curlbolt-gui PRIVATE

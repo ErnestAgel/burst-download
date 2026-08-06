@@ -14,6 +14,8 @@
 #include <cstring>
 #include <thread>
 
+#include <GLFW/glfw3.h>
+
 #include "dialogs.h"
 #include "i18n.h"
 #include "imgui.h"
@@ -28,6 +30,12 @@
 namespace ui {
 
 namespace {
+
+/* 自绘标题栏高度（无边框窗口，替代系统标题栏） */
+const float kTitleBarH = 36.0f;
+
+/* GLFW 窗口指针（ui::Init 注入，标题栏按钮/拖动/resize 用） */
+GLFWwindow* g_window = nullptr;
 
 /* ---- 表单状态（UI 主线程独占，工作线程不触碰） ---- */
 /* 本机可用线程上限：min(10, hardware_concurrency())（F4） */
@@ -203,23 +211,18 @@ void RenderForm(DownloadWorker& worker) {
     }
 #endif
 
-    /* 线程数：上限 = min(10, 核数)，超出自动钳位并提示（F4） */
+    /* 线程数：下拉框选择 1..kHardwareMax（F4，上限 = min(10, 核数)） */
     ImGui::Text("%s:", i18n::T("label.threads"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
-    int clamped = g_threads;
-    if (ImGui::InputInt("##threads", &clamped, 1, 4,
-                        running ? ImGuiInputTextFlags_ReadOnly
-                                : ImGuiInputTextFlags_None)) {
-        if (clamped < 1) clamped = 1;
-        if (clamped > kHardwareMax) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), i18n::T("warn.threads.clamped"),
-                     kHardwareMax);
-            worker.AddLog("[WARN] " + std::string(buf));
-            clamped = kHardwareMax;
-        }
-        g_threads = clamped;
+    char items[128] = {0};
+    int off = 0;
+    for (int i = 1; i <= kHardwareMax && off < (int)sizeof(items) - 2; i++) {
+        off += snprintf(items + off, sizeof(items) - off, "%d%c", i, '\0');
+    }
+    int idx = (g_threads >= 1 && g_threads <= kHardwareMax) ? g_threads - 1 : 0;
+    if (ImGui::Combo("##threads", &idx, items, kHardwareMax)) {
+        g_threads = idx + 1;
     }
     ImGui::SameLine();
     {
@@ -361,37 +364,150 @@ void RenderLog(const std::vector<std::string>& log) {
     ImGui::EndChild();
 }
 
-/* ---- 设置菜单（F14 语言切换） ---- */
-void RenderMenuBar() {
-    if (ImGui::BeginMainMenuBar()) {
-        if (ImGui::BeginMenu(i18n::T("menu.settings"))) {
-            ImGui::Text("%s:", i18n::T("menu.language"));
-            int cur = (i18n::GetLang() == i18n::Lang::Zh) ? 0 : 1;
-            /* Combo 选项以 \0 分隔的单个字符串 */
-            char lang_items[128];
-            snprintf(lang_items, sizeof(lang_items), "%s%c%s%c",
-                     i18n::T("lang.zh"), '\0', i18n::T("lang.en"), '\0');
-            if (ImGui::Combo("##lang", &cur, lang_items, 2)) {
-                i18n::SetLang(cur == 0 ? i18n::Lang::Zh : i18n::Lang::En);
-            }
-            ImGui::EndMenu();
-        }
-        ImGui::EndMainMenuBar();
+/* ---- 自绘标题栏（无边框窗口：标题 + 设置 + 最小化/最大化/关闭 + 拖动） ---- */
+void RenderTitleBar() {
+    const ImGuiIO& io = ImGui::GetIO();
+    const float btn_w = 46.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, kTitleBarH),
+                             ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 0));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImGui::GetColorU32(ImGuiCol_TitleBg));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.34f, 0.42f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.4f, 0.5f, 1));
+    ImGui::Begin("##titlebar", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoScrollWithMouse |
+                     ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    /* 标题 + 拖动区（标题栏空白处按住可拖动窗口） */
+    ImGui::SetCursorPosY((kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f);
+    ImGui::Text("%s", i18n::T("window.title"));
+    ImGui::SameLine();
+
+    /* 设置按钮（语言切换，替代原 MainMenuBar） */
+    const char* settings_label = u8"⚙";
+    ImGui::SameLine(io.DisplaySize.x - btn_w * 4 - 6);
+    if (ImGui::Button(settings_label, ImVec2(btn_w, kTitleBarH))) {
+        ImGui::OpenPopup("##settings_popup");
     }
+    if (ImGui::BeginPopup("##settings_popup")) {
+        ImGui::Text("%s:", i18n::T("menu.language"));
+        int cur = (i18n::GetLang() == i18n::Lang::Zh) ? 0 : 1;
+        char lang_items[128];
+        snprintf(lang_items, sizeof(lang_items), "%s%c%s%c",
+                 i18n::T("lang.zh"), '\0', i18n::T("lang.en"), '\0');
+        if (ImGui::Combo("##lang", &cur, lang_items, 2)) {
+            i18n::SetLang(cur == 0 ? i18n::Lang::Zh : i18n::Lang::En);
+        }
+        ImGui::EndPopup();
+    }
+
+    /* 最小化 */
+    ImGui::SameLine(io.DisplaySize.x - btn_w * 3);
+    if (ImGui::Button("_", ImVec2(btn_w, kTitleBarH)) && g_window != nullptr) {
+        glfwIconifyWindow(g_window);
+    }
+    /* 最大化 / 还原 */
+    bool maximized =
+        (g_window != nullptr) &&
+        (glfwGetWindowAttrib(g_window, GLFW_MAXIMIZED) == GLFW_TRUE);
+    ImGui::SameLine(io.DisplaySize.x - btn_w * 2);
+    if (ImGui::Button(maximized ? u8"❐" : u8"□",
+                      ImVec2(btn_w, kTitleBarH)) &&
+        g_window != nullptr) {
+        if (maximized) {
+            glfwRestoreWindow(g_window);
+        } else {
+            glfwMaximizeWindow(g_window);
+        }
+    }
+    /* 关闭（hover 红色） */
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.42f, 0.46f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.78f, 0.32f, 0.36f, 1));
+    ImGui::SameLine(io.DisplaySize.x - btn_w);
+    if (ImGui::Button("X", ImVec2(btn_w, kTitleBarH)) && g_window != nullptr) {
+        glfwSetWindowShouldClose(g_window, GLFW_TRUE);
+    }
+    ImGui::PopStyleColor(2);
+
+    /* 标题栏拖动（按住空白区拖动窗口；用按下时位置+鼠标位移，避免漂移） */
+    ImGui::SetCursorPos(ImVec2(0, 0));
+    ImGui::InvisibleButton("##titlebar_drag",
+                           ImVec2(io.DisplaySize.x - btn_w * 4 - 6,
+                                  kTitleBarH));
+    static bool dragging = false;
+    static int drag_x0 = 0, drag_y0 = 0;
+    static ImVec2 drag_mouse0;
+    if (ImGui::IsItemActive() && !dragging) {
+        dragging = true;
+        glfwGetWindowPos(g_window, &drag_x0, &drag_y0);
+        drag_mouse0 = io.MousePos;
+    } else if (!ImGui::IsItemActive() && dragging) {
+        dragging = false;
+    }
+    if (dragging && g_window != nullptr) {
+        glfwSetWindowPos(g_window,
+                         drag_x0 + (int)(io.MousePos.x - drag_mouse0.x),
+                         drag_y0 + (int)(io.MousePos.y - drag_mouse0.y));
+    }
+
+    ImGui::End();
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar();
+}
+
+/* ---- 右下角 resize 手柄（无边框窗口无系统手柄，自绘） ---- */
+void RenderResizeGrip() {
+    const ImGuiIO& io = ImGui::GetIO();
+    const float grip = 16.0f;
+    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - grip,
+                               io.DisplaySize.y - kTitleBarH - grip));
+    ImGui::InvisibleButton("##resize_grip", ImVec2(grip, grip));
+    static bool resizing = false;
+    static int rw0 = 0, rh0 = 0;
+    static ImVec2 rmouse0;
+    if (ImGui::IsItemActive() && !resizing && g_window != nullptr) {
+        resizing = true;
+        glfwGetWindowSize(g_window, &rw0, &rh0);
+        rmouse0 = io.MousePos;
+    } else if (!ImGui::IsItemActive() && resizing) {
+        resizing = false;
+    }
+    if (resizing && g_window != nullptr) {
+        glfwSetWindowSize(g_window,
+                          rw0 + (int)(io.MousePos.x - rmouse0.x),
+                          rh0 + (int)(io.MousePos.y - rmouse0.y));
+    }
+    /* 手柄样式：画一个右下角小三角 */
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetWindowPos();
+    ImVec2 c = ImVec2(p.x + io.DisplaySize.x - 2, p.y + io.DisplaySize.y - kTitleBarH - 2);
+    ImU32 col = ImGui::GetColorU32(ImGuiCol_SeparatorHovered);
+    dl->AddTriangleFilled(ImVec2(c.x - 8, c.y), c, ImVec2(c.x, c.y - 8), col);
 }
 
 }  // namespace
 
-bool Render(DownloadWorker& worker) {
-    RenderMenuBar();
+void Init(GLFWwindow* window) {
+    g_window = window;
+}
 
-    /* 主窗口：无自绘标题栏，铺满客户区（系统标题栏可见，避免两层标题栏混淆）
-     * 尺寸动态跟随窗口（DisplaySize），resize 后内容自动适配 */
+bool Render(DownloadWorker& worker) {
+    /* 自绘标题栏（无边框窗口） */
+    RenderTitleBar();
+
+    /* 主窗口：从标题栏下方铺满客户区 */
     const ImGuiIO& io = ImGui::GetIO();
-    float menu_h = ImGui::GetFrameHeight();  /* MainMenuBar 高度 */
-    ImGui::SetNextWindowPos(ImVec2(0.0f, menu_h), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(0.0f, kTitleBarH), ImGuiCond_Always);
     ImGui::SetNextWindowSize(
-        ImVec2(io.DisplaySize.x, io.DisplaySize.y - menu_h),
+        ImVec2(io.DisplaySize.x, io.DisplaySize.y - kTitleBarH),
         ImGuiCond_Always);
     ImGui::Begin("##main", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -421,6 +537,9 @@ bool Render(DownloadWorker& worker) {
     RenderProgress(snap);
     RenderLog(snap.log);
     ImGui::End();
+
+    /* 右下角 resize 手柄（无边框窗口） */
+    RenderResizeGrip();
 
     /* 文件已存在四选一（F11）处理 */
     if (g_pending.active && g_exists_open) {
