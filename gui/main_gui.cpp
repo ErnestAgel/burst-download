@@ -28,6 +28,8 @@
 #include "worker.h"
 
 #ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
 #include <windows.h>
 #endif
 
@@ -152,6 +154,15 @@ int main(int argc, char** argv) {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
+    /* 无边框窗口启动即强制聚焦：避免未激活时 Windows 将第一次点击
+     * 仅用于激活窗口（事件被系统消费 → "需要单击两次才有响应"） */
+    glfwFocusWindow(window);
+#ifdef _WIN32
+    if (HWND hwnd = glfwGetWin32Window(window)) {
+        SetForegroundWindow(hwnd);
+        BringWindowToTop(hwnd);
+    }
+#endif
 
     /* ---- ImGui ---- */
     IMGUI_CHECKVERSION();
