@@ -613,7 +613,7 @@ void RenderProgress(const DownloadSnapshot& snap) {
     {
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const float bar_w = ImGui::GetContentRegionAvail().x;
-        const float bar_h = 20.0f;
+        const float bar_h = 30.0f; /* 1.5 倍宽，容纳段内文字（用户需求） */
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         const float radius = bar_h * 0.5f; /* 胶囊圆角 = 圆柱端面 */
         /* 圆柱体：统一色 + 顶部高光(亮) + 底部阴影(暗)（1.93 渐变 API 无圆角，改用分层绘制） */
@@ -621,7 +621,7 @@ void RenderProgress(const DownloadSnapshot& snap) {
         const ImU32 gn_mid = IM_COL32(0x5E, 0xA8, 0x4E, 255); /* 绿色填充（不再用蓝色） */
         const ImU32 gn_hi  = IM_COL32(255, 255, 255, 40);    /* 填充高光 */
         const ImU32 gn_lo  = IM_COL32(0, 0, 0, 52);          /* 填充阴影 */
-        const ImU32 sep = IM_COL32(0x10, 0x10, 0x10, 170);   /* 段分隔线 */
+        const ImU32 sep = IM_COL32(0x0A, 0x0A, 0x0A, 230);   /* 电池格分隔线（明显） */
         const ImU32 border = IM_COL32(0x6A, 0x6A, 0x6A, 255);
         /* 底槽（胶囊 + 高光/阴影） */
         draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h),
@@ -651,15 +651,37 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 if (s > 1.0f) s = 1.0f;
                 if (e > 1.0f) e = 1.0f;
                 if (cur > e) cur = e;
-                /* 分片边界竖线（画在底槽上） */
+                /* 电池格分隔线：2px 深色竖带，一格一格边界明显 */
                 if (s > 0.001f && s < 0.999f) {
-                    draw->AddLine(ImVec2(pos.x + bar_w * s, pos.y + 1.0f),
-                                  ImVec2(pos.x + bar_w * s,
-                                         pos.y + bar_h - 1.0f),
-                                  sep, 1.0f);
+                    draw->AddRectFilled(
+                        ImVec2(pos.x + bar_w * s - 1.0f, pos.y + 1.0f),
+                        ImVec2(pos.x + bar_w * s + 1.0f,
+                               pos.y + bar_h - 1.0f),
+                        sep);
+                }
+                /* 分片完成度（段内文字用 + hover 提示用） */
+                double seg_done = (double)(t.downloaded - t.file_start);
+                double seg_total = (double)(t.total - t.file_start);
+                int seg_pct = (seg_total > 0)
+                                  ? (int)(seg_done / seg_total * 100.0)
+                                  : 0;
+                if (seg_pct < 0) seg_pct = 0;
+                if (seg_pct > 100) seg_pct = 100;
+                /* hover：显示该分片 进度 + 速度 */
+                {
+                    const ImVec2 m = ImGui::GetIO().MousePos;
+                    if (m.x >= pos.x + bar_w * s && m.x <= pos.x + bar_w * e &&
+                        m.y >= pos.y && m.y <= pos.y + bar_h) {
+                        char tip[160];
+                        snprintf(tip, sizeof(tip),
+                                 "%s #%d | %d%% | %.2f MB/s",
+                                 i18n::T("label.thread"), t.id, seg_pct,
+                                 t.speed / (1024.0 * 1024.0));
+                        ImGui::SetTooltip("%s", tip);
+                    }
                 }
                 if (t.downloaded <= t.file_start) {
-                    continue; /* 未开始分片：留暗色底槽 */
+                    continue; /* 未开始分片：留暗色底槽（电池未充电格） */
                 }
                 /* 圆角端：首段左圆、末段右圆、单段全圆（贴合圆柱边缘） */
                 ImDrawFlags flags = 0;
@@ -685,7 +707,16 @@ void RenderProgress(const DownloadSnapshot& snap) {
                     ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_lo,
                     radius,
                     (ImDrawFlags)(flags | ImDrawFlags_RoundCornersBottom));
-                /* 分片内已下载边界（深色细线，区别于分片起点线） */
+                /* 段内文字：分片完成度%（格宽足够时显示，电池格充电进度） */
+                if ((e - s) * bar_w > 44.0f) {
+                    char seg_txt[16];
+                    snprintf(seg_txt, sizeof(seg_txt), "%d%%", seg_pct);
+                    ImVec2 ts = ImGui::CalcTextSize(seg_txt);
+                    ImVec2 tp(pos.x + bar_w * (s + e) * 0.5f - ts.x * 0.5f,
+                              pos.y + (bar_h - ts.y) * 0.5f);
+                    draw->AddText(tp, IM_COL32(255, 255, 255, 235), seg_txt);
+                }
+                /* 分片内已下载边界（深色细线，区别于电池格分隔线） */
                 if (cur > s && cur < e - 0.001f) {
                     draw->AddLine(ImVec2(pos.x + bar_w * cur, pos.y + 2.0f),
                                   ImVec2(pos.x + bar_w * cur,

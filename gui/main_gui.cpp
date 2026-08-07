@@ -120,6 +120,22 @@ int main(int argc, char** argv) {
     /* 崩溃兜底（§8.2）：真崩溃也写 crash.log + 弹窗，不"裸退" */
     crashguard::Install();
 
+#ifdef _WIN32
+    /* Windows 高分屏：声明进程 DPI 感知，避免无边框窗口首次显示被系统
+     * DPI 缩放导致"启动时明显宽度 resize"（900x640 被放大/收缩跳动） */
+    {
+        HMODULE u32 = GetModuleHandleW(L"user32.dll");
+        if (u32 != nullptr) {
+            typedef BOOL(WINAPI* SetDpiAwareFn)(DPI_AWARENESS_CONTEXT);
+            SetDpiAwareFn fn = (SetDpiAwareFn)GetProcAddress(
+                u32, "SetProcessDpiAwarenessContext");
+            if (fn != nullptr) {
+                fn(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            }
+        }
+    }
+#endif
+
     /* 单实例检测（§8.4） */
     if (!AcquireSingleInstance()) {
         return 1;
@@ -154,6 +170,8 @@ int main(int argc, char** argv) {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
+    /* 最小窗口尺寸：防 resize 手柄把窗口缩到无法操作 */
+    glfwSetWindowSizeLimits(window, 640, 480, GLFW_DONT_CARE, GLFW_DONT_CARE);
     /* 无边框窗口启动即强制聚焦：避免未激活时 Windows 将第一次点击
      * 仅用于激活窗口（事件被系统消费 → "需要单击两次才有响应"） */
     glfwFocusWindow(window);
