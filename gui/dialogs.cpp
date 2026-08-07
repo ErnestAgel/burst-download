@@ -16,10 +16,17 @@ namespace dialogs {
 
 namespace {
 
-/** @brief 每帧按 open 状态打开 popup，再渲染模态体 */
+/** @brief 每帧按 open 状态打开 popup，再渲染模态体（居中于窗口中心） */
 bool BeginModal(const char* id, bool& open) {
     if (open) {
         ImGui::OpenPopup(id);
+    }
+    /* 居中：出现时定位在窗口中心（用户反馈弹窗出现在 UI 顶部） */
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    if (vp != nullptr) {
+        ImGui::SetNextWindowPos(
+            ImVec2(vp->Size.x * 0.5f, vp->Size.y * 0.5f),
+            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     }
     if (!ImGui::BeginPopupModal(id, &open,
                                 ImGuiWindowFlags_AlwaysAutoResize |

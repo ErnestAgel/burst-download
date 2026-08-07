@@ -110,26 +110,39 @@ bool UrlSchemeOk(const std::string& url) {
     return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
 }
 
-/** Base64 解码（迅雷链接解码用，不含第三方库） */
+/** Base64 解码（迅雷链接解码用，不含第三方库）
+ * 算法：每 4 个 base64 字符 → 3 字节（逐组移位，尾部不足 4 字符按 1~2 字节处理） */
 std::string Base64Decode(const std::string& in) {
     static const char tbl[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    int val = 0, bits = -6;
     std::string out;
+    int buf[4] = {0, 0, 0, 0};
+    int n = 0;
     for (char c : in) {
-        if (c == '=' || c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+        if (c == '=') {
+            break;  /* padding：结束 */
+        }
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
             continue;
         }
         const char* p = strchr(tbl, c);
         if (p == nullptr) {
             continue;
         }
-        val = (val << 6) + (int)(p - tbl);
-        bits += 6;
-        if (bits >= 0) {
-            out.push_back((char)((val >> bits) & 0xFF));
-            bits -= 8;
+        buf[n++] = (int)(p - tbl);
+        if (n == 4) {
+            out.push_back((char)((buf[0] << 2) | (buf[1] >> 4)));
+            out.push_back((char)(((buf[1] & 0xF) << 4) | (buf[2] >> 2)));
+            out.push_back((char)(((buf[2] & 0x3) << 6) | buf[3]));
+            n = 0;
         }
+    }
+    /* 尾部不足 4 字符（剩 2 字符 → 1 字节；剩 3 字符 → 2 字节） */
+    if (n == 2) {
+        out.push_back((char)((buf[0] << 2) | (buf[1] >> 4)));
+    } else if (n == 3) {
+        out.push_back((char)((buf[0] << 2) | (buf[1] >> 4)));
+        out.push_back((char)(((buf[1] & 0xF) << 4) | (buf[2] >> 2)));
     }
     return out;
 }
