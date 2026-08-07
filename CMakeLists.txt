@@ -233,6 +233,7 @@ if(BUILD_GUI)
     gui/dialogs.cpp
     gui/crashguard.cpp
     gui/theme.cpp
+    gui/dirbrowser.cpp
     src/Ccurl.cpp
     src/download_video.cpp
     src/video.cpp

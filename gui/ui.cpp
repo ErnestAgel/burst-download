@@ -34,6 +34,8 @@
 #include <shobjidl.h>  /* IFileDialog 目录选择 */
 #else
 #include <sys/stat.h>
+#include <filesystem>  /* Linux 目录浏览器初始目录 */
+#include "dirbrowser.h"
 #endif
 
 namespace ui {
@@ -80,6 +82,12 @@ bool g_error_open = false;
 bool g_done_open = false;
 std::string g_error_title, g_error_msg, g_error_guide;
 std::string g_done_path;
+
+#ifndef _WIN32
+/* Linux 内置目录浏览器状态（Windows 用原生 IFileDialog，见 RenderForm） */
+bool g_dirbrowse_open = false;
+std::string g_dirbrowse_dir;
+#endif
 
 /* 上次快照 stage（检测完成/取消/错误的边沿，避免重复弹窗） */
 int g_last_stage = STAGE_IDLE;
@@ -360,6 +368,21 @@ void RenderForm(DownloadWorker& worker) {
         }
         if (hrCo == S_OK) {
             CoUninitialize();
+        }
+    }
+#else
+    ImGui::SameLine();
+    if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0)) && !running) {
+        /* Linux 内置目录浏览器（零外部依赖，见 dirbrowser.h） */
+        g_dirbrowse_open = true;
+        g_dirbrowse_dir = (g_path[0] != '\0' && PathExists(g_path))
+                              ? g_path
+                              : std::filesystem::current_path().string();
+        std::error_code ec;
+        if (!std::filesystem::is_directory(g_dirbrowse_dir, ec) || ec) {
+            auto parent = std::filesystem::path(g_dirbrowse_dir).parent_path();
+            g_dirbrowse_dir =
+                parent.empty() ? std::string("/") : parent.string();
         }
     }
 #endif
@@ -1119,6 +1142,14 @@ bool Render(DownloadWorker& worker) {
 
     /* 完成弹窗（F13） */
     dialogs::ShowDone(g_done_path, g_done_open);
+
+#ifndef _WIN32
+    /* Linux 内置目录浏览器（Windows 走原生 IFileDialog，无此状态） */
+    if (g_dirbrowse_open &&
+        DirBrowserRender(g_dirbrowse_dir, g_dirbrowse_open)) {
+        snprintf(g_path, sizeof(g_path), "%s", g_dirbrowse_dir.c_str());
+    }
+#endif
 
     return true;
 }
