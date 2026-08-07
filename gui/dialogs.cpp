@@ -16,18 +16,18 @@ namespace dialogs {
 
 namespace {
 
-/** @brief 每帧按 open 状态打开 popup，再渲染模态体（居中于窗口中心） */
+/** @brief 每帧按 open 状态打开 popup，再渲染模态体（强制居中于窗口中心） */
 bool BeginModal(const char* id, bool& open) {
     if (open) {
         ImGui::OpenPopup(id);
     }
-    /* 居中：出现时定位在窗口中心（用户反馈弹窗出现在 UI 顶部） */
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    if (vp != nullptr) {
-        ImGui::SetNextWindowPos(
-            ImVec2(vp->Size.x * 0.5f, vp->Size.y * 0.5f),
-            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    }
+    /* 居中：每帧强制（Always）定位在窗口客户区中心。
+     * 注：此前用 ImGuiCond_Appearing 未生效——每帧 OpenPopup 导致条件判断
+     * 不可靠，弹窗仍出现在默认位置（UI 顶部附近） */
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(
+        ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+        ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (!ImGui::BeginPopupModal(id, &open,
                                 ImGuiWindowFlags_AlwaysAutoResize |
                                     ImGuiWindowFlags_NoSavedSettings)) {
