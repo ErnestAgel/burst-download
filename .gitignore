@@ -40,3 +40,7 @@ build-win-rel/
 
 # GUI Phase 0 临时构建目录
 build-gui-p0/
+
+# GUI 运行时生成（布局/设置持久化，不入库）
+imgui.ini
+config.ini
