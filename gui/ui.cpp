@@ -667,10 +667,11 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 if (t.downloaded <= t.file_start) {
                     continue; /* 未开始分片：留暗色底槽（电池未充电格） */
                 }
-                /* 圆角只给物理首尾分片（i==0 左圆、i==last 右圆、单分片全圆），
-                 * 中间分片一律直角（分片之间无弧形，用户需求）；与填充状态无关 */
+                /* 圆角只给物理首尾分片（首左圆/尾右圆/单片全圆），中间分片用
+                 * RoundCornersNone 明确直角 —— flags=0 在 ImGui 中是"四角全圆"！
+                 * （此前中间分片 flags=0 → 每片都是胶囊圆角，圆角间留出底槽间隙） */
                 const int nseg = (int)snap.threads.size();
-                ImDrawFlags flags = 0;
+                ImDrawFlags flags = ImDrawFlags_RoundCornersNone;
                 if (nseg == 1) {
                     flags = ImDrawFlags_RoundCornersAll;
                 } else if (i == 0) {
@@ -678,19 +679,10 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 } else if (i == nseg - 1) {
                     flags = ImDrawFlags_RoundCornersRight;
                 }
-                /* 绿色填充（圆柱体=方柱：中间分片直角，仅物理首尾圆角），
-                 * 高光/阴影 flags 与填充一致（不再强加圆角 → 中间分片保持直角） */
+                /* 绿色填充（纯色直角方柱；高光/阴影改为整体胶囊绘制，见下方） */
                 draw->AddRectFilled(
                     ImVec2(pos.x + bar_w * s, pos.y),
                     ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_mid,
-                    radius, flags);
-                draw->AddRectFilled(
-                    ImVec2(pos.x + bar_w * s, pos.y),
-                    ImVec2(pos.x + bar_w * cur, pos.y + bar_h * 0.35f),
-                    gn_hi, radius, flags);
-                draw->AddRectFilled(
-                    ImVec2(pos.x + bar_w * s, pos.y + bar_h * 0.72f),
-                    ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_lo,
                     radius, flags);
                 /* 段内文字：分片完成度%（格宽足够时显示，电池格充电进度） */
                 if ((e - s) * bar_w > 44.0f) {
@@ -717,21 +709,16 @@ void RenderProgress(const DownloadSnapshot& snap) {
                                             : ImDrawFlags_RoundCornersLeft;
             draw->AddRectFilled(pos, ImVec2(pos.x + bar_w * cur, pos.y + bar_h),
                                 gn_mid, radius, f2);
-            draw->AddRectFilled(pos,
-                                ImVec2(pos.x + bar_w * cur,
-                                       pos.y + bar_h * 0.35f),
-                                gn_hi, radius, f2);
-            draw->AddRectFilled(
-                ImVec2(pos.x, pos.y + bar_h * 0.72f),
-                ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_lo, radius,
-                f2);
         }
-        /* 圆柱高光（顶部细亮条，画在填充之上 → 填充覆盖高亮形状但保留高亮效果） */
+        /* 整体圆柱高光/阴影（胶囊形贯穿所有分片，贴合整体端面圆弧；
+         * 替代分片级独立高光 → 不再出现"每分片圆角高光长方体"） */
         draw->AddRectFilled(
-            pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.18f),
-            IM_COL32(255, 255, 255, 18), radius,
-            ImDrawFlags_RoundCornersTop | ImDrawFlags_RoundCornersLeft |
-                ImDrawFlags_RoundCornersRight);
+            pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.35f), gn_hi,
+            radius, ImDrawFlags_RoundCornersAll);
+        draw->AddRectFilled(
+            ImVec2(pos.x, pos.y + bar_h * 0.72f),
+            ImVec2(pos.x + bar_w, pos.y + bar_h), gn_lo, radius,
+            ImDrawFlags_RoundCornersAll);
         /* 电池格分隔线：5px 深色竖带（2-3 倍加宽，用户需求），最后画 →
          * 不被填充覆盖、格线始终清晰；无下载数据时格线也已显示（启动即加载好） */
         if (!snap.threads.empty() && snap.threads[0].file_total > 0) {
