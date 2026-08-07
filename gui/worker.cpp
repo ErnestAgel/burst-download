@@ -15,6 +15,7 @@
 
 #include "Ccurl.h"
 #include "download_video.h"
+#include "embed_python.h"
 #include "i18n.h"
 
 DownloadWorker::DownloadWorker() {
@@ -291,6 +292,23 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
     /* 取消检查点（解析前）：置位则不再启动传输 */
     if (m_cancel.load()) {
         SetStage(STAGE_CANCELED, "", "[INFO] 已取消（未开始传输）");
+        m_running.store(false);
+        return;
+    }
+
+    /* 确保嵌入的 Python 运行时已初始化（幂等；main_gui 启动时已尝试 exe 同目录路径，
+     * 此处兜底再试一次——开发构建可回退编译期宏 third_party/python/runtime）。
+     * 初始化失败：明确报错指引，不继续解析 */
+    if (!EmbedPythonInit()) {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_snapshot.error =
+                "Python 运行时初始化失败：缺少 python_runtime 资源（stdlib/yt_dlp）。\n"
+                "开发构建使用仓库 third_party/python/runtime；发布物需将 python_runtime "
+                "随 exe 同目录分发。";
+        }
+        SetStage(STAGE_ERROR, "",
+                 "[ERROR] 视频解析失败: Python 运行时未初始化");
         m_running.store(false);
         return;
     }

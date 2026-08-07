@@ -21,6 +21,7 @@
 
 #include "font_data.h"
 #include "crashguard.h"
+#include "embed_python.h"
 #include "i18n.h"
 #include "theme.h"
 #include "ui.h"
@@ -125,6 +126,11 @@ int main(int argc, char** argv) {
     /* 国际化：config.ini 持久化优先，否则跟随系统（§3.3） */
     i18n::Init(ExeDir(argc > 0 ? argv[0] : ""));
 
+    /* 初始化嵌入的 Python 运行时（视频解析用；幂等）。
+     * 优先 exe 同目录 python_runtime/（发布形态），否则回退环境变量/编译期宏；
+     * 初始化失败不阻塞 GUI（文件模式仍可用），视频任务时 worker 会再次尝试并明确报错 */
+    EmbedPythonInit(ExeDir(argc > 0 ? argv[0] : "") + "/python_runtime");
+
     /* ---- GLFW ---- */
     if (!glfwInit()) {
         ShowFatal("GLFW 初始化失败。");
@@ -214,6 +220,9 @@ int main(int argc, char** argv) {
             printf("[gui] worker join timeout, force continue cleanup\n");
         }
     }
+
+    /* 释放嵌入的 Python 解释器（若初始化过；幂等，须在工作线程 join 之后） */
+    EmbedPythonShutdown();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
