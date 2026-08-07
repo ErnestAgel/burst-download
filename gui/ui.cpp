@@ -617,9 +617,10 @@ void RenderProgress(const DownloadSnapshot& snap) {
     ImGui::ProgressBar((float)(snap.totalPercent / 100.0),
                        ImVec2(-1.0f, 0), buf);
 
-    /* 每线程进度表（F5）：按文件内位置显示区间条（用户需求）
-     * 行 = [分片 #i] [底槽=文件0~100%，填充=分片区间 file_start→downloaded] [起点%→终点% | 速率]
-     * 断点续传/多线程时各线程区间不重叠，与总进度对齐，不再从 0 起算 */
+    /* 每线程进度表（F5）：底槽=分片区间（浮动于文件刻度，体现文件内位置），
+     * 填充=分片内完成度（突显当前分片下载进度，用户需求）
+     * 行 = [分片 #i] [文件刻度: ▍分片条▍] [分片完成度% | 速率]
+     * 断点续传后总进度从暂停位置续走（各线程为新分片布局，正常现象） */
     if (!snap.threads.empty()) {
         ImGui::Text("%s", i18n::T("label.thread"));
         ImGui::BeginChild("##threads_list",
@@ -633,39 +634,55 @@ void RenderProgress(const DownloadSnapshot& snap) {
                      t.id);
             ImGui::Text("%s", label);
             ImGui::SameLine();
-            /* 区间文本（右侧固定）：起点%→终点% | 速率 */
+            /* 分片完成度（突显）：(downloaded-file_start)/(total-file_start) */
+            double seg_done = (double)(t.downloaded - t.file_start);
+            double seg_total = (double)(t.total - t.file_start);
+            int seg_pct = (seg_total > 0) ? (int)(seg_done / seg_total * 100.0)
+                                          : 0;
+            if (seg_pct < 0) seg_pct = 0;
+            if (seg_pct > 100) seg_pct = 100;
             char range_txt[96];
-            int ps = (t.file_total > 0)
-                         ? (int)(t.file_start * 100.0 / t.file_total)
-                         : 0;
-            snprintf(range_txt, sizeof(range_txt), "%d%%→%d%%  %.2f MB/s", ps,
-                     (int)t.percent, t.speed / (1024.0 * 1024.0));
+            snprintf(range_txt, sizeof(range_txt), "%d%%  %.2f MB/s", seg_pct,
+                     t.speed / (1024.0 * 1024.0));
             float right_w = ImGui::CalcTextSize(range_txt).x + 6.0f;
             float bar_w = ImGui::GetContentRegionAvail().x - right_w;
             if (bar_w < 40.0f) {
                 bar_w = 40.0f;
             }
-            /* 区间条：底槽 = 文件 0~100%，填充 = [file_start, downloaded] */
+            /* 文件刻度条：分片区间 [file_start, total] 浮动，填充 = 分片完成度 */
             {
                 ImDrawList* draw = ImGui::GetWindowDrawList();
                 const float h = ImGui::GetFrameHeight() * 0.55f;
                 const ImVec2 pos = ImGui::GetCursorScreenPos();
                 const float y0 =
                     pos.y + (ImGui::GetFrameHeight() - h) * 0.5f;
+                float s = (t.file_total > 0)
+                              ? (float)t.file_start / (float)t.file_total
+                              : 0.0f;
+                float e = (t.file_total > 0)
+                              ? (float)t.total / (float)t.file_total
+                              : 1.0f;
+                if (s < 0.0f) s = 0.0f;
+                if (s > 1.0f) s = 1.0f;
+                if (e < s) e = s;
+                /* 底槽 = 分片区间 */
                 draw->AddRectFilled(
-                    ImVec2(pos.x, y0), ImVec2(pos.x + bar_w, y0 + h),
+                    ImVec2(pos.x + bar_w * s, y0),
+                    ImVec2(pos.x + bar_w * e, y0 + h),
                     ImGui::GetColorU32(ImGuiCol_FrameBg), h * 0.5f);
-                if (t.file_total > 0 && t.downloaded > t.file_start) {
-                    float s = (float)t.file_start / (float)t.file_total;
-                    float e = (float)t.downloaded / (float)t.file_total;
+                /* 填充 = 分片内已下载（分片完成度） */
+                if (t.downloaded > t.file_start) {
+                    float ep = (t.file_total > 0)
+                                   ? (float)t.downloaded / (float)t.file_total
+                                   : s;
+                    if (ep > e) ep = e;
                     draw->AddRectFilled(
                         ImVec2(pos.x + bar_w * s, y0),
-                        ImVec2(pos.x + bar_w * e, y0 + h),
+                        ImVec2(pos.x + bar_w * ep, y0 + h),
                         ImGui::GetColorU32(ImGuiCol_CheckMark), h * 0.5f);
                 }
-                /* 分片起点竖线标记 */
-                if (t.file_total > 0 && t.file_start > 0) {
-                    float s = (float)t.file_start / (float)t.file_total;
+                /* 分片起点竖线标记（文件内位置） */
+                if (s > 0.001f) {
                     draw->AddLine(ImVec2(pos.x + bar_w * s, y0 - 2.0f),
                                   ImVec2(pos.x + bar_w * s, y0 + h + 2.0f),
                                   ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
