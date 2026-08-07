@@ -252,6 +252,9 @@ if(BUILD_GUI)
   if(MINGW)
     target_link_libraries(burst-gui PRIVATE
       opengl32 gdi32 user32 shell32 advapi32 winmm ole32)
+  else()
+    find_package(OpenGL REQUIRED)
+    target_link_libraries(burst-gui PRIVATE ${OPENGL_LIBRARIES})
   endif()
 
   # curl 链接（与 burst 同策略：Release 静态 / Debug 动态）

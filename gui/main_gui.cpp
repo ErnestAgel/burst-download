@@ -14,6 +14,10 @@
 #include <cstdlib>
 #include <string>
 
+#ifndef _WIN32
+#include <unistd.h> /* Linux: readlink 解析 /proc/self/exe（§5.4 路径解析） */
+#endif
+
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
