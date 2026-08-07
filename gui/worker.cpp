@@ -228,17 +228,12 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
         m_snapshot.stage = STAGE_DOWNLOADING;
         m_snapshot.totalPercent = totalPercent;
         m_snapshot.totalSpeed = totalSpeed;
-        /* 累计已下载字节（估算总字节 → ETA） */
-        long long done = 0;
         m_snapshot.threads.assign(tp.begin(), tp.end()); /* 复用已分配容量 */
-        for (const auto& t : tp) {
-            done += t.downloaded;
-        }
-        double remain = 0;
-        if (totalPercent > 0 && totalPercent < 100) {
-            double total = done / (totalPercent / 100.0);
-            remain = total - done;
-        }
+        /* 剩余字节 = 文件总大小 × (100 - 总进度)（threads 为文件内位置语义，不可累加） */
+        double file_total = tp.empty() ? 0.0 : (double)tp[0].file_total;
+        double remain = (file_total > 0 && totalPercent < 100)
+                            ? file_total * (100.0 - totalPercent) / 100.0
+                            : 0.0;
         m_snapshot.eta = FormatEta(remain, totalSpeed);
     };
 
@@ -276,9 +271,13 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
             m_snapshot.totalPercent = 100.0;
             m_snapshot.totalSpeed = 0;
             m_snapshot.eta = "--";
+            /* 完成：每线程 downloaded=分片终点（文件内位置），percent=其文件内终点百分比 */
             for (auto& t : m_snapshot.threads) {
                 t.downloaded = t.total;
-                t.percent = 100.0;
+                t.percent =
+                    (t.file_total > 0)
+                        ? (t.total / (double)t.file_total * 100.0)
+                        : 100.0;
                 t.speed = 0;
             }
         }
@@ -358,16 +357,12 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot.totalPercent = totalPercent;
         m_snapshot.totalSpeed = totalSpeed;
-        long long done = 0;
         m_snapshot.threads.assign(tp.begin(), tp.end());
-        for (const auto& t : tp) {
-            done += t.downloaded;
-        }
-        double remain = 0;
-        if (totalPercent > 0 && totalPercent < 100) {
-            double total = done / (totalPercent / 100.0);
-            remain = total - done;
-        }
+        /* 剩余字节 = 文件总大小 × (100 - 总进度)（threads 为文件内位置语义，不可累加） */
+        double file_total = tp.empty() ? 0.0 : (double)tp[0].file_total;
+        double remain = (file_total > 0 && totalPercent < 100)
+                            ? file_total * (100.0 - totalPercent) / 100.0
+                            : 0.0;
         m_snapshot.eta = FormatEta(remain, totalSpeed);
     };
     vd.onLog = [this](const std::string& msg) { AddLog(msg); };
@@ -382,7 +377,10 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
             m_snapshot.eta = "--";
             for (auto& t : m_snapshot.threads) {
                 t.downloaded = t.total;
-                t.percent = 100.0;
+                t.percent =
+                    (t.file_total > 0)
+                        ? (t.total / (double)t.file_total * 100.0)
+                        : 100.0;
                 t.speed = 0;
             }
         }

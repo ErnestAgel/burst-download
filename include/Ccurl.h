@@ -191,10 +191,11 @@ private:
     curl_off_t m_fileLen;           /**< 远程文件总大小（字节） */
     int64_t m_resume_len;           /**< 本地已存在字节数（断点续传起点） */
     int m_thread_num;               /**< 实际使用的下载线程数 */
-    bool m_range_supported;         /**< 服务器是否支持 HTTP Range */
+    bool m_range_supported = false; /**< 服务器是否支持 HTTP Range */
     int m_timeout;                  /**< 低速超时秒数（0=不自动中断） */
     string m_referer;               /**< 防盗链 Referer（可为空） */
     string m_cookie;                /**< 请求 Cookie（可为空） */
     std::atomic<bool> m_cancel_flag{false};  /**< 取消标志（Cancel() 置位，回调检查点读取） */
     std::string m_last_error;       /**< 最近一次失败的具体原因（LastError() 读取） */
+    bool m_range_known = false;     /**< Range 支持是否已由 HEAD/Accept-Ranges 确认（省一次探测请求） */
 };

@@ -17,14 +17,21 @@
 #include <vector>
 
 /**
- * @brief 单个分片线程的进度
+ * @brief 单个分片线程的进度（Phase 3 用户需求：按文件内位置显示）
+ *
+ * downloaded/total/percent 均为"文件内绝对位置"语义：
+ *   - downloaded = 分片文件内起点(file_start) + 本片已下载量（续传含基数）
+ *   - total       = 分片终点 + 1（文件内绝对位置）
+ *   - percent     = downloaded / file_total（与总进度对齐，不再从 0 起算）
  */
 struct ThreadProgress {
     int         id;          /**< 分片线程号（0 起） */
-    long long   downloaded;  /**< 本分片已下载字节数 */
-    long long   total;       /**< 本分片总字节数（end - start + 1） */
+    long long   file_start;  /**< 分片在文件内的起始偏移（含断点续传基数） */
+    long long   downloaded;  /**< 文件内已下载到的位置（file_start + 本片已下载量） */
+    long long   total;       /**< 分片终点 + 1（文件内绝对位置） */
+    long long   file_total;  /**< 整个文件大小（含续传基数，与总进度分母一致） */
     double      speed;       /**< 本线程速率（B/s，节流窗口内均值） */
-    double      percent;     /**< 本分片百分比（0~100，total<=0 时为 0） */
+    double      percent;     /**< 文件内位置百分比（downloaded/file_total，0~100） */
 };
 
 /**

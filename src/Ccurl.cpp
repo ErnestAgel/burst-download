@@ -175,6 +175,20 @@ size_t ContentRangeHeader(char* buffer, size_t size, size_t nitems,
 }
 
 /**
+ * @brief 响应头回调：捕获 "Accept-Ranges: bytes"（HEAD 探测时判断服务器是否支持 Range）
+ * @param userdata 指向 bool（命中置 true）
+ */
+size_t AcceptRangesHeader(char* buffer, size_t size, size_t nitems,
+                          void* userdata) {
+  const size_t n = size * nitems;
+  if (n > 0 && HeaderNameIs(buffer, "accept-ranges") &&
+      strstr(buffer, "bytes") != nullptr) {
+    *((bool*)userdata) = true;
+  }
+  return n;
+}
+
+/**
  * @brief libcurl 进度回调：汇总各线程下载量并打印整体百分比、速率与剩余时间
  * @param userdata 指向 st_EasyList 的用户数据
  * @param totalDownload 总下载字节数
@@ -234,10 +248,15 @@ size_t progressFunc(void* userdata,
         }
         ThreadProgress t;
         t.id = i;
-        t.downloaded = (long long)p->download_len;
-        t.total = p->part_total;
-        t.percent = (p->part_total > 0)
-                        ? (p->download_len / (double)p->part_total * 100.0)
+        /* 文件内绝对位置（用户需求：每线程进度按文件内位置显示）：
+         * downloaded = 分片起点 + 本片已下载量（续传含基数），
+         * percent = 位置 / 文件总大小（与总进度对齐，不再从 0 起算） */
+        t.file_start = (long long)p->part_start;
+        t.downloaded = (long long)p->part_start + (long long)p->download_len;
+        t.total = (long long)p->end + 1;
+        t.file_total = (long long)g_filelen;
+        t.percent = (g_filelen > 0)
+                        ? (t.downloaded / (double)g_filelen * 100.0)
                         : 0.0;
         /* 本线程速率：本分片在节流窗口内的增量 */
         time_t dt = (p->last_t > 0) ? (now - p->last_t) : 0;
@@ -307,11 +326,21 @@ bool Ccurl::Init(const string url, string filename, int thread_num, int timeout)
   g_last_total = 0;
   g_last_t = 0;
   LOG_INFO(">>>>>\n");
-  bool flag = this->Check_Range_Support();
-  LOG_INFO("HTTP Range support: %s\n", flag ? "yes" : "no (fallback to single stream)");
-  flag = this->File_Init(filename.c_str());
-
-  return flag;
+  /* 顺序优化（"继续"响应更快）：先 HEAD 探测文件大小（get_Download_FileSize，
+   * 内部捕获 Accept-Ranges 确认 Range 支持），仅当 HEAD 未确认时再走独立
+   * Range 探测（Check_Range_Support）→ 大多数服务器只发 1 次 HEAD 即完成初始化 */
+  if (!this->get_Download_FileSize()) {
+    return false;
+  }
+  if (!m_range_known) {
+    bool range_ok = this->Check_Range_Support();
+    LOG_INFO("HTTP Range support: %s\n",
+             range_ok ? "yes" : "no (fallback to single stream)");
+  } else {
+    LOG_INFO("HTTP Range support: %s (from HEAD Accept-Ranges)\n",
+             m_range_supported ? "yes" : "no");
+  }
+  return this->File_Init(filename.c_str());
 }
 
 void Ccurl::Cancel() {
@@ -509,7 +538,7 @@ bool Ccurl::Download_Task() {
 bool Ccurl::File_Init(const char* filename) {
   LOG_INFO(">>>>>\n");
 
-  this->get_Download_FileSize();
+  /* 文件大小已由 Init → get_Download_FileSize() 探测（含 Range 支持确认） */
   if (m_fileLen <= 0) {
     LOG_ERR("invalid file length: %lld\n", (long long)m_fileLen);
     m_last_error = "服务器未返回有效的文件大小（链接可能不是直接下载地址，或服务器不支持 HEAD）";
@@ -710,6 +739,10 @@ bool Ccurl::get_Download_FileSize() {
       "like Gecko) Chrome/115.0.0.0 Safari/537.36");
   curl_easy_setopt(m_easyHandle, CURLOPT_HEADER, 1);
   curl_easy_setopt(m_easyHandle, CURLOPT_NOBODY, 1);
+  /* 一次 HEAD 同时确认 Range 支持（Accept-Ranges: bytes）→ 省掉独立 Range 探测请求 */
+  bool accept_ranges = false;
+  curl_easy_setopt(m_easyHandle, CURLOPT_HEADERFUNCTION, AcceptRangesHeader);
+  curl_easy_setopt(m_easyHandle, CURLOPT_HEADERDATA, &accept_ranges);
   curl_easy_setopt(m_easyHandle, CURLOPT_CONNECTTIMEOUT, 10L);
   if (m_timeout > 0) {
     /* 探测请求同样受低速超时保护，避免服务器挂起时卡住 */
@@ -725,6 +758,11 @@ bool Ccurl::get_Download_FileSize() {
     if (res == CURLE_OK && m_fileLen > 0) {
       LOG_INFO("dowload File length success (HEAD): %lld\n",
                (long long)m_fileLen);
+      /* HEAD 已确认 Accept-Ranges: bytes → Range 支持确定，跳过独立探测 */
+      if (accept_ranges) {
+        m_range_supported = true;
+        m_range_known = true;
+      }
       curl_easy_cleanup(m_easyHandle);
       flag = true;
       g_filelen = (double)m_fileLen;
@@ -778,6 +816,9 @@ bool Ccurl::get_Download_FileSize() {
     if (m_fileLen > 0) {
       LOG_INFO("dowload File length success (Range GET): %lld\n",
                (long long)m_fileLen);
+      /* Range GET 返回 206 → 服务器支持 Range（同 Check_Range_Support 结论） */
+      m_range_supported = true;
+      m_range_known = true;
       flag = true;
       g_filelen = (double)m_fileLen;
       return true;

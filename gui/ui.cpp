@@ -617,25 +617,63 @@ void RenderProgress(const DownloadSnapshot& snap) {
     ImGui::ProgressBar((float)(snap.totalPercent / 100.0),
                        ImVec2(-1.0f, 0), buf);
 
-    /* 每线程进度表（F5） */
+    /* 每线程进度表（F5）：按文件内位置显示区间条（用户需求）
+     * 行 = [分片 #i] [底槽=文件0~100%，填充=分片区间 file_start→downloaded] [起点%→终点% | 速率]
+     * 断点续传/多线程时各线程区间不重叠，与总进度对齐，不再从 0 起算 */
     if (!snap.threads.empty()) {
         ImGui::Text("%s", i18n::T("label.thread"));
         ImGui::BeginChild("##threads_list",
-                          ImVec2(0, ImGui::GetTextLineHeightWithSpacing() *
+                          ImVec2(0, ImGui::GetFrameHeight() *
                                          snap.threads.size() +
                                          8.0f),
                           true);
         for (const auto& t : snap.threads) {
-            char label[256];
+            char label[64];
             snprintf(label, sizeof(label), "%s #%d", i18n::T("label.thread"),
                      t.id);
-            char overlay[128];
-            double mb_done = t.downloaded / (1024.0 * 1024.0);
-            double mb_total = t.total / (1024.0 * 1024.0);
-            snprintf(overlay, sizeof(overlay), "%.1f/%.1f MB | %.2f MB/s",
-                     mb_done, mb_total, t.speed / (1024.0 * 1024.0));
-            ImGui::ProgressBar((float)(t.percent / 100.0),
-                               ImVec2(-1.0f, 0), overlay);
+            ImGui::Text("%s", label);
+            ImGui::SameLine();
+            /* 区间文本（右侧固定）：起点%→终点% | 速率 */
+            char range_txt[96];
+            int ps = (t.file_total > 0)
+                         ? (int)(t.file_start * 100.0 / t.file_total)
+                         : 0;
+            snprintf(range_txt, sizeof(range_txt), "%d%%→%d%%  %.2f MB/s", ps,
+                     (int)t.percent, t.speed / (1024.0 * 1024.0));
+            float right_w = ImGui::CalcTextSize(range_txt).x + 6.0f;
+            float bar_w = ImGui::GetContentRegionAvail().x - right_w;
+            if (bar_w < 40.0f) {
+                bar_w = 40.0f;
+            }
+            /* 区间条：底槽 = 文件 0~100%，填充 = [file_start, downloaded] */
+            {
+                ImDrawList* draw = ImGui::GetWindowDrawList();
+                const float h = ImGui::GetFrameHeight() * 0.55f;
+                const ImVec2 pos = ImGui::GetCursorScreenPos();
+                const float y0 =
+                    pos.y + (ImGui::GetFrameHeight() - h) * 0.5f;
+                draw->AddRectFilled(
+                    ImVec2(pos.x, y0), ImVec2(pos.x + bar_w, y0 + h),
+                    ImGui::GetColorU32(ImGuiCol_FrameBg), h * 0.5f);
+                if (t.file_total > 0 && t.downloaded > t.file_start) {
+                    float s = (float)t.file_start / (float)t.file_total;
+                    float e = (float)t.downloaded / (float)t.file_total;
+                    draw->AddRectFilled(
+                        ImVec2(pos.x + bar_w * s, y0),
+                        ImVec2(pos.x + bar_w * e, y0 + h),
+                        ImGui::GetColorU32(ImGuiCol_CheckMark), h * 0.5f);
+                }
+                /* 分片起点竖线标记 */
+                if (t.file_total > 0 && t.file_start > 0) {
+                    float s = (float)t.file_start / (float)t.file_total;
+                    draw->AddLine(ImVec2(pos.x + bar_w * s, y0 - 2.0f),
+                                  ImVec2(pos.x + bar_w * s, y0 + h + 2.0f),
+                                  ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
+                }
+                ImGui::Dummy(ImVec2(bar_w, ImGui::GetFrameHeight()));
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s", range_txt);
         }
         ImGui::EndChild();
     }
