@@ -200,8 +200,14 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
     }
 
     std::unique_ptr<Ccurl> cc = std::make_unique<Ccurl>();
-    cc->onProgress = [this](const std::vector<ThreadProgress>& tp,
-                            double totalPercent, double totalSpeed) {
+    cc->onProgress = [this, cc_ptr = cc.get()](
+                         const std::vector<ThreadProgress>& tp,
+                         double totalPercent, double totalSpeed) {
+        /* 取消传导（Phase 1 遗漏接线，Phase 2 修复）：worker.Cancel() 只置标志，
+         * 必须在此转调 Ccurl::Cancel() 置 m_cancel_flag，写回调检查点才能中止传输 */
+        if (m_cancel.load()) {
+            cc_ptr->Cancel();
+        }
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot.stage = STAGE_DOWNLOADING;
         m_snapshot.totalPercent = totalPercent;
@@ -245,12 +251,10 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
     }
 
     bool ok = cc->Download_Task();
-    if (m_cancel.load() || cc->IsCanceled()) {
-        SetStage(STAGE_CANCELED, "canceled",
-                 "[INFO] 已取消，部分文件保留可续传");
-    } else if (ok) {
+    if (ok) {
         /* 下载完成：修正快照，总进度与各线程进度均置 100%
-         * （最后一次进度回调可能停在 <100%，且完成后不再有回调更新 UI） */
+         * （最后一次进度回调可能停在 <100%，且完成后不再有回调更新 UI）
+         * 完成优先判定：取消/完成竞态（Run 已返回后才点取消）不误报已取消 */
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_snapshot.totalPercent = 100.0;
@@ -263,6 +267,9 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
             }
         }
         SetStage(STAGE_DONE, path, "[INFO] 下载完成: " + path);
+    } else if (m_cancel.load() || cc->IsCanceled()) {
+        SetStage(STAGE_CANCELED, "canceled",
+                 "[INFO] 已取消，部分文件保留可续传");
     } else {
         m_snapshot.error = "下载失败（部分分片未完成），详见 download.log";
         SetStage(STAGE_ERROR, "error",
@@ -291,13 +298,30 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
     VideoDownloader vd;
     /* 阶段回调（F8）：解析中→下载视频轨→下载音频轨→合并中；
      * 进度回调不覆盖 stage，保持细分阶段显示 */
-    vd.onStage = [this](int stage) {
+    vd.onStage = [this, vd_ptr = &vd](int stage) {
+        /* 取消传导：worker.Cancel() → VideoDownloader::Cancel()
+         * （解析前/每流下载前/合并前检查点依赖 vd.m_cancel 生效） */
+        if (m_cancel.load()) {
+            vd_ptr->Cancel();
+        }
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot.stage = stage;
+        /* 流切换（视频轨→音频轨）：上一流进度 100% 需重置，避免总进度条倒跳 */
+        if (stage == STAGE_AUDIO_DL) {
+            m_snapshot.totalPercent = 0;
+            m_snapshot.totalSpeed = 0;
+            m_snapshot.eta = "--";
+            m_snapshot.threads.clear();
+        }
     };
     /* 单流下载进度回调：与文件模式相同的快照更新（每 ~200ms，锁内拷贝标量） */
-    vd.onProgress = [this](const std::vector<ThreadProgress>& tp,
-                           double totalPercent, double totalSpeed) {
+    vd.onProgress = [this, vd_ptr = &vd](
+                        const std::vector<ThreadProgress>& tp,
+                        double totalPercent, double totalSpeed) {
+        /* 下载中取消传导：置位后 Ccurl 写回调检查点中止当前流（<1s） */
+        if (m_cancel.load()) {
+            vd_ptr->Cancel();
+        }
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot.totalPercent = totalPercent;
         m_snapshot.totalSpeed = totalSpeed;
@@ -316,10 +340,8 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
     vd.onLog = [this](const std::string& msg) { AddLog(msg); };
 
     VideoResult result = vd.Run(url, basename, threads, timeout);
-    if (m_cancel.load() || result == VideoResult::Canceled) {
-        SetStage(STAGE_CANCELED, "", "[INFO] 已取消，部分文件保留可续传");
-    } else if (result == VideoResult::Ok) {
-        /* 完成：总进度与各线程进度均置 100%（视频模式结束后不再有回调更新 UI） */
+    if (result == VideoResult::Ok) {
+        /* 完成优先判定：取消/完成竞态（Run 已返回后才点取消）不误报已取消 */
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_snapshot.totalPercent = 100.0;
@@ -333,6 +355,8 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
         }
         SetStage(STAGE_DONE, vd.OutputPath(),
                  "[INFO] 视频下载完成: " + vd.OutputPath());
+    } else if (result == VideoResult::Canceled || m_cancel.load()) {
+        SetStage(STAGE_CANCELED, "", "[INFO] 已取消，部分文件保留可续传");
     } else {
         /* 解析/下载/合并失败：具体原因传至 F12 弹窗（锁保护，UI 每帧读取） */
         {
