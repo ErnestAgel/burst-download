@@ -152,6 +152,31 @@ cmake --build build
 
 ---
 
+## 🖥️ GUI
+
+A graphical front-end (`curlbolt-gui`) over the CLI, currently **Phase 1: File Download mode** (video mode planned).
+
+**Build** (`option(BUILD_GUI ON)` by default):
+
+```bash
+cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
+cmake --build build --target curlbolt-gui      # produces curlbolt-gui.exe on Windows
+```
+
+**Run**: launch `curlbolt-gui.exe` on Windows (runtime DLLs are copied next to the exe automatically at build time, including MinGW runtime and embedded Python DLLs).
+
+**Supported**:
+
+- 🎨 **Atom One Dark theme**, frameless window with Mac-style window buttons (minimize/maximize/close)
+- ⚡ Multi-threaded segmented download (1~`min(10, cores)` threads selectable, per-thread progress bars)
+- ⏸️ Cancel during download (resume supported); dialogs for done/cancel/error
+- 📁 Save to a directory only — filename is derived from the URL automatically; Browse opens a folder picker
+- ⚡ **Thunder links** (`thunder://`) decoded automatically
+- 🌐 Bilingual UI (switch in Settings menu, remembered via config.ini)
+- 💾 Fonts and third-party libs bundled and distributed with the repo; no extra installs
+
+---
+
 ## ⚠️ Notes
 
 - Requires server support for **HTTP Range** (static file servers usually support it; falls back to single-thread otherwise);

@@ -158,6 +158,31 @@ cmake --build build
 
 ---
 
+## 🖥️ 图形界面 GUI
+
+图形界面是 CLI 的图形封装（`curlbolt-gui`），当前为 **Phase 1：文件下载模式**（视频模式规划中）。
+
+**构建**（`option(BUILD_GUI ON)` 默认开启）：
+
+```bash
+cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
+cmake --build build --target curlbolt-gui      # Windows 产出 curlbolt-gui.exe
+```
+
+**运行**：Windows 直接运行 `curlbolt-gui.exe`（运行时 dll 由 CMake 构建时自动复制到 exe 同目录，含 MinGW 运行时与 Python 嵌入 dll）。
+
+**已支持**：
+
+- 🎨 **Atom One Dark 暗色主题**，无边框窗口 + Mac 风格窗口按钮（最小化/最大化/关闭）
+- ⚡ 多线程分片下载（1~`min(10, 核数)` 线程可选，每线程进度条实时显示）
+- ⏸️ 下载中可取消（断点续传），完成/取消/错误均有弹窗提示
+- 📁 保存路径填目录即可（文件名自动取自 URL）；浏览按钮为目录选择
+- ⚡ 支持 **迅雷专用链接**（`thunder://` 自动解码）
+- 🌐 中英双语界面（设置菜单切换，config.ini 记忆）
+- 💾 内嵌字体与第三方库，随仓库分发，无需额外安装
+
+---
+
 ## ⚠️ 注意事项 Notes
 
 - 需要服务器支持 **HTTP Range**（静态文件服务器通常都支持；不支持时自动退化单线程）；
