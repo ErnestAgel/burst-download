@@ -217,6 +217,19 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
         SetStage(STAGE_CANCELED, "canceled",
                  "[INFO] 已取消，部分文件保留可续传");
     } else if (ok) {
+        /* 下载完成：修正快照，总进度与各线程进度均置 100%
+         * （最后一次进度回调可能停在 <100%，且完成后不再有回调更新 UI） */
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_snapshot.totalPercent = 100.0;
+            m_snapshot.totalSpeed = 0;
+            m_snapshot.eta = "--";
+            for (auto& t : m_snapshot.threads) {
+                t.downloaded = t.total;
+                t.percent = 100.0;
+                t.speed = 0;
+            }
+        }
         SetStage(STAGE_DONE, path, "[INFO] 下载完成: " + path);
     } else {
         m_snapshot.error = "下载失败（部分分片未完成），详见 download.log";

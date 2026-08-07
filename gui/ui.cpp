@@ -31,6 +31,8 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>
+#else
+#include <sys/stat.h>
 #endif
 
 namespace ui {
@@ -142,6 +144,59 @@ std::string CurrentTimeStamp() {
         snprintf(buf, sizeof(buf), "%ld", (long)t);
     }
     return std::string(buf);
+}
+
+/** 从 URL 推断文件名：去查询串/片段/尾部斜杠，取最后路径段（如 …/node.tar.gz → node.tar.gz） */
+std::string UrlFileName(const std::string& url) {
+    std::string u = url;
+    size_t q = u.find_first_of("?#");
+    if (q != std::string::npos) {
+        u = u.substr(0, q);
+    }
+    while (!u.empty() && (u.back() == '/' || u.back() == '\\')) {
+        u.pop_back();
+    }
+    size_t slash = u.find_last_of("/\\");
+    return (slash != std::string::npos) ? u.substr(slash + 1) : u;
+}
+
+/** 路径是否应视为"目录"：已存在且是目录，或以分隔符结尾 */
+bool IsDirectoryPath(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    char last = path.back();
+    if (last == '/' || last == '\\') {
+        return true;
+    }
+#ifdef _WIN32
+    DWORD attr = GetFileAttributesW(Utf8ToWide(path).c_str());
+    if (attr != INVALID_FILE_ATTRIBUTES) {
+        return (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    }
+#else
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0) {
+        return S_ISDIR(st.st_mode);
+    }
+#endif
+    return false;
+}
+
+/** 拼接目录与文件名（补平台分隔符） */
+std::string JoinPath(const std::string& dir, const std::string& name) {
+    if (dir.empty()) {
+        return name;
+    }
+    char last = dir.back();
+    if (last == '/' || last == '\\') {
+        return dir + name;
+    }
+#ifdef _WIN32
+    return dir + "\\" + name;
+#else
+    return dir + "/" + name;
+#endif
 }
 
 /** 时间戳改名：file.zip -> file_20260807_123000.zip（F11 改名语义，与 CLI 一致） */
@@ -274,6 +329,15 @@ void OnStartClicked(DownloadWorker& worker) {
     if (path.empty()) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.path.empty"));
         return;
+    }
+
+    /* 保存路径若为目录：自动拼 URL 文件名+后缀（用户只需填目录，§4 增强） */
+    if (IsDirectoryPath(path)) {
+        std::string name = UrlFileName(url);
+        if (name.empty()) {
+            name = CurrentTimeStamp() + ".download";  /* URL 无文件名时用时间戳兜底 */
+        }
+        path = JoinPath(path, name);
     }
 
     /* 文件已存在（F11）：弹四选一，选择后启动 */
