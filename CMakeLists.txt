@@ -242,7 +242,7 @@ if(BUILD_GUI)
 
   if(MINGW)
     target_link_libraries(curlbolt-gui PRIVATE
-      opengl32 gdi32 user32 shell32 advapi32 winmm)
+      opengl32 gdi32 user32 shell32 advapi32 winmm ole32)
   endif()
 
   # curl 链接（与 curlbolt 同策略：Release 静态 / Debug 动态）

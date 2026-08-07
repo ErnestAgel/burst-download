@@ -98,6 +98,8 @@ const Entry kStrings[] = {
      "Check network connection and URL; retry later. See download.log for details."},
     {"err.url.invalid", "URL 无效：请输入以 http:// 或 https:// 开头的下载地址。",
      "Invalid URL: enter an address starting with http:// or https://."},
+    {"err.thunder.invalid", "迅雷链接解码失败：无法提取有效的 http/https 下载地址。",
+     "Thunder link decode failed: no valid http/https URL extracted."},
     {"err.video.phase2", "视频模式将在后续版本支持，当前请使用文件下载模式。",
      "Video mode is coming in a later version; use File Download mode for now."},
     {"err.path.empty", "保存路径为空：请填写或浏览选择保存位置。",

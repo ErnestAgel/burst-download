@@ -31,6 +31,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>
+#include <shobjidl.h>  /* IFileDialog 目录选择 */
 #else
 #include <sys/stat.h>
 #endif
@@ -107,6 +108,47 @@ std::wstring Utf8ToWide(const std::string& s) {
 /** URL scheme 预检（R11）：http/https */
 bool UrlSchemeOk(const std::string& url) {
     return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+}
+
+/** Base64 解码（迅雷链接解码用，不含第三方库） */
+std::string Base64Decode(const std::string& in) {
+    static const char tbl[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int val = 0, bits = -6;
+    std::string out;
+    for (char c : in) {
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+            continue;
+        }
+        const char* p = strchr(tbl, c);
+        if (p == nullptr) {
+            continue;
+        }
+        val = (val << 6) + (int)(p - tbl);
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back((char)((val >> bits) & 0xFF));
+            bits -= 8;
+        }
+    }
+    return out;
+}
+
+/**
+ * @brief 迅雷专用链接解码：thunder:// + Base64("AA" + 真实URL + "ZZ")
+ * @return 解码后的真实 URL；非 thunder:// 前缀则原样返回
+ */
+std::string ThunderDecode(const std::string& url) {
+    const char* prefix = "thunder://";
+    if (url.rfind(prefix, 0) != 0) {
+        return url;
+    }
+    std::string dec = Base64Decode(url.substr(strlen(prefix)));
+    /* 去掉头 2 字节 "AA" 与尾 2 字节 "ZZ" */
+    if (dec.size() >= 4) {
+        dec = dec.substr(2, dec.size() - 4);
+    }
+    return dec;
 }
 
 /** 目标路径是否存在（F11 触发条件） */
@@ -256,18 +298,34 @@ void RenderForm(DownloadWorker& worker) {
 #ifdef _WIN32
     ImGui::SameLine();
     if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0)) && !running) {
-        OPENFILENAMEW ofn{};
-        wchar_t buf[MAX_PATH * 2] = {0};
-        ofn.lStructSize = sizeof(ofn);
-        ofn.hwndOwner = NULL;
-        ofn.lpstrFilter = L"All Files (*.*)\0*.*\0";
-        ofn.lpstrFile = buf;
-        ofn.nMaxFile = MAX_PATH * 2;
-        ofn.lpstrTitle = L"curlbolt";
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
-        if (GetSaveFileNameW(&ofn)) {
-            std::string s = WideToUtf8(ofn.lpstrFile);
-            snprintf(g_path, sizeof(g_path), "%s", s.c_str());
+        /* 目录选择对话框（IFileDialog FOS_PICKFOLDERS）：返回目录路径，文件名由 URL 自动拼接 */
+        HRESULT hrCo = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        IFileDialog* pfd = nullptr;
+        HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, NULL,
+                                      CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&pfd));
+        if (SUCCEEDED(hr)) {
+            DWORD opts = 0;
+            pfd->GetOptions(&opts);
+            pfd->SetOptions(opts | FOS_PICKFOLDERS);
+            pfd->SetTitle(L"选择保存目录");
+            if (SUCCEEDED(pfd->Show(NULL))) {
+                IShellItem* psi = nullptr;
+                if (SUCCEEDED(pfd->GetResult(&psi))) {
+                    PWSTR psz = nullptr;
+                    if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH,
+                                                       &psz))) {
+                        std::string s = WideToUtf8(psz);
+                        snprintf(g_path, sizeof(g_path), "%s", s.c_str());
+                        CoTaskMemFree(psz);
+                    }
+                    psi->Release();
+                }
+            }
+            pfd->Release();
+        }
+        if (hrCo == S_OK) {
+            CoUninitialize();
         }
     }
 #endif
@@ -313,6 +371,19 @@ void RenderForm(DownloadWorker& worker) {
 void OnStartClicked(DownloadWorker& worker) {
     std::string url(g_url);
     std::string path(g_path);
+
+    /* 迅雷专用链接（thunder://）解码为真实 URL */
+    if (url.rfind("thunder://", 0) == 0) {
+        std::string decoded = ThunderDecode(url);
+        if (decoded.empty() || !UrlSchemeOk(decoded)) {
+            ShowErrorPopup(i18n::T("dialog.error.title"),
+                           i18n::T("err.thunder.invalid"));
+            return;
+        }
+        worker.AddLog("[INFO] 检测到迅雷链接，已解码为: " + decoded);
+        snprintf(g_url, sizeof(g_url), "%s", decoded.c_str());
+        url = decoded;
+    }
 
     /* URL 预检（R11） */
     if (url.empty() || !UrlSchemeOk(url)) {

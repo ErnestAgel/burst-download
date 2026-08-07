@@ -161,8 +161,8 @@ int main(int argc, char** argv) {
     {
         ImFontConfig cfg;
         cfg.FontDataOwnedByAtlas = false;
-        cfg.OversampleH = 2;
-        cfg.OversampleV = 2;
+        cfg.OversampleH = 3;
+        cfg.OversampleV = 3;
         ImFont* font = io.Fonts->AddFontFromMemoryTTF(
             (void*)third_party_fonts_NotoSansSC_subset_ttf,
             (int)third_party_fonts_NotoSansSC_subset_ttf_len, 18.0f, &cfg,
