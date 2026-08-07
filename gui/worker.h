@@ -43,10 +43,13 @@ public:
      * @param path 保存路径（UTF-8；Windows 中文路径由 Ccurl 宽字符入口处理）
      * @param threads 线程数（1~10，Ccurl 内部再钳位）
      * @param timeout 低速超时秒数（0=不限，默认 60）
+     * @param preserve_snapshot true=保留上一任务快照/日志（断点续传"继续"场景：
+     *        不清零进度，Ccurl 首个进度回调含 resume 基数自动校准；新任务传 false）
      * @return 是否成功启动（已在运行则返回 false）
      */
     bool StartFileDownload(const std::string& url, const std::string& path,
-                           int threads, int timeout = 60);
+                           int threads, int timeout = 60,
+                           bool preserve_snapshot = false);
 
     /**
      * @brief 启动一个视频下载任务（Phase 2：解析→下载视频轨/音频轨→自动合并）
@@ -54,11 +57,13 @@ public:
      * @param basename 输出基础名（不含扩展名；视频轨 .mp4 / 音频轨 .m4a / 合并产物 <base>_full.<ext>）
      * @param threads 每流线程数（1~10，Ccurl 内部再钳位）
      * @param timeout 低速超时秒数（0=不限，默认 60）
+     * @param preserve_snapshot true=保留上一任务快照/日志（"继续"断点续传场景）
      * @return 是否成功启动（已在运行则返回 false）
      * @note 阶段状态细分：解析中→下载视频轨→下载音频轨→合并中（F8）
      */
     bool StartVideoDownload(const std::string& url, const std::string& basename,
-                            int threads, int timeout = 60);
+                            int threads, int timeout = 60,
+                            bool preserve_snapshot = false);
 
     /**
      * @brief 请求取消（线程安全，UI 线程可调）；取消后部分文件保留可续传

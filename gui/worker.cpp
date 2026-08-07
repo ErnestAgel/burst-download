@@ -38,7 +38,7 @@ DownloadWorker::~DownloadWorker() {
 
 bool DownloadWorker::StartFileDownload(const std::string& url,
                                        const std::string& path, int threads,
-                                       int timeout) {
+                                       int timeout, bool preserve_snapshot) {
     if (m_running.load()) {
         return false;  /* 单任务串行：已有一个任务在跑 */
     }
@@ -51,8 +51,9 @@ bool DownloadWorker::StartFileDownload(const std::string& url,
     }
     m_cancel.store(false);
     m_joined.store(false);
-    /* 清空上一任务快照与日志 */
-    {
+    /* 新任务清空上一任务快照与日志；"继续"（断点续传）保留快照，
+     * 让 UI 从暂停时进度续走（Ccurl 首个进度回调含 resume 基数自动校准） */
+    if (!preserve_snapshot) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot = DownloadSnapshot();
         m_snapshot.stage = STAGE_IDLE;
@@ -69,7 +70,8 @@ bool DownloadWorker::StartFileDownload(const std::string& url,
 
 bool DownloadWorker::StartVideoDownload(const std::string& url,
                                         const std::string& basename,
-                                        int threads, int timeout) {
+                                        int threads, int timeout,
+                                        bool preserve_snapshot) {
     if (m_running.load()) {
         return false;  /* 单任务串行：已有一个任务在跑 */
     }
@@ -82,8 +84,8 @@ bool DownloadWorker::StartVideoDownload(const std::string& url,
     }
     m_cancel.store(false);
     m_joined.store(false);
-    /* 清空上一任务快照与日志 */
-    {
+    /* 同 StartFileDownload：继续（续传）保留快照 */
+    if (!preserve_snapshot) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot = DownloadSnapshot();
         m_snapshot.stage = STAGE_IDLE;

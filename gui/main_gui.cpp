@@ -232,8 +232,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    /* 释放嵌入的 Python 解释器（若初始化过；幂等，须在工作线程 join 之后） */
-    EmbedPythonShutdown();
+    /* 释放嵌入的 Python 解释器：**不调用** EmbedPythonShutdown ——
+     * Py_FinalizeEx 在 yt_dlp 加载大量扩展模块后可能长时间挂起（用户反馈
+     * "下载完成后关闭程序未响应"），且 CLI 同样不调用（进程退出时系统回收，
+     * Python 官方亦建议嵌入程序可跳过 finalize）。若需 Shutdown 应放于
+     * 所有 GLFW/ImGui 清理之后并容忍挂起风险。 */
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

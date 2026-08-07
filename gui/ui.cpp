@@ -67,9 +67,11 @@ bool g_last_video = false; /* 最近任务是否视频模式 */
 /* 前向声明（RenderForm 在 OnStartClicked/StartDownload 之前定义） */
 void OnStartClicked(DownloadWorker& worker);
 void StartDownload(DownloadWorker& worker, const std::string& url,
-                   const std::string& path, int threads);
+                   const std::string& path, int threads,
+                   bool preserve_snapshot = false);
 void StartVideoDownload(DownloadWorker& worker, const std::string& url,
-                        const std::string& basename, int threads);
+                        const std::string& basename, int threads,
+                        bool preserve_snapshot = false);
 void StopAndClear(DownloadWorker& worker);
 
 /* 弹窗状态 */
@@ -439,7 +441,8 @@ void OnStartClicked(DownloadWorker& worker) {
             return;
         }
         if (g_last_video) {
-            StartVideoDownload(worker, url, g_last_path, g_threads);
+            StartVideoDownload(worker, url, g_last_path, g_threads,
+                               true /* 继续：保留进度快照 */);
         } else {
             if (path.empty()) {
                 ShowErrorPopup(i18n::T("dialog.error.title"),
@@ -454,7 +457,8 @@ void OnStartClicked(DownloadWorker& worker) {
                 }
                 path = JoinPath(path, name);
             }
-            StartDownload(worker, url, path, g_threads);
+            StartDownload(worker, url, path, g_threads,
+                          true /* 继续：保留进度快照 */);
         }
         g_paused = false;
         return;
@@ -528,25 +532,35 @@ void OnStartClicked(DownloadWorker& worker) {
 }
 
 void StartDownload(DownloadWorker& worker, const std::string& url,
-                   const std::string& path, int threads) {
+                   const std::string& path, int threads,
+                   bool preserve_snapshot) {
     worker.AddLog(std::string("[INFO] URL: ") + url);
     worker.AddLog(std::string("[INFO] 保存到: ") + path);
+    if (preserve_snapshot) {
+        worker.AddLog("[INFO] 断点续传：从已下载进度继续");
+    }
     g_last_path = path;
     g_last_video = false;
     g_last_stage = STAGE_IDLE;
-    if (!worker.StartFileDownload(url, path, threads, 60)) {
+    if (!worker.StartFileDownload(url, path, threads, 60,
+                                  preserve_snapshot)) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
     }
 }
 
 void StartVideoDownload(DownloadWorker& worker, const std::string& url,
-                        const std::string& basename, int threads) {
+                        const std::string& basename, int threads,
+                        bool preserve_snapshot) {
     worker.AddLog(std::string("[INFO] 视频 URL: ") + url);
     worker.AddLog(std::string("[INFO] 输出基础名: ") + basename);
+    if (preserve_snapshot) {
+        worker.AddLog("[INFO] 断点续传：从已下载进度继续");
+    }
     g_last_path = basename;
     g_last_video = true;
     g_last_stage = STAGE_IDLE;
-    if (!worker.StartVideoDownload(url, basename, threads, 60)) {
+    if (!worker.StartVideoDownload(url, basename, threads, 60,
+                                   preserve_snapshot)) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
     }
 }
@@ -843,9 +857,11 @@ bool Render(DownloadWorker& worker) {
                      ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoSavedSettings);
 
-    /* 设置菜单栏：语言（中/英） */
+    /* 设置菜单栏：语言切换入口显示"目标语言"提示
+     * （中文界面 → "language"；英文界面 → "中文"，见 menu.lang_hint），
+     * 点开后是常规语言选择项 */
     if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu(i18n::T("menu.settings"))) {
+        if (ImGui::BeginMenu(i18n::T("menu.lang_hint"))) {
             bool zh = (i18n::GetLang() == i18n::Lang::Zh);
             bool en = !zh;
             if (ImGui::MenuItem(i18n::T("lang.zh"), nullptr, zh)) {

@@ -68,6 +68,9 @@ const Entry kStrings[] = {
     /* 设置 */
     {"menu.settings", "设置", "Settings"},
     {"menu.language", "语言", "Language"},
+    /* 菜单栏语言切换入口：显示"目标语言"提示（中文界面→language，英文界面→中文），
+     * 便于引导用户切换语言（用户需求） */
+    {"menu.lang_hint", "language", "中文"},
     {"lang.zh", "中文", "中文"},
     {"lang.en", "English", "English"},
     /* 阶段状态（F8） */
