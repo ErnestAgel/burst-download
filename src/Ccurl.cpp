@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <cstdio>
 #include <cstdarg>
+#include <cstdlib>
 #include <iostream>
 #include <algorithm>
 #include <chrono>
@@ -142,6 +143,35 @@ size_t DummyWrite(char* ptr, size_t size, size_t memb, void* userdata) {
   (void)ptr;
   (void)userdata;
   return size * memb;
+}
+
+/** @brief 头字段名大小写不敏感比较（"Content-Range" 匹配 "content-range:"） */
+static bool HeaderNameIs(const char* line, const char* name) {
+  size_t nl = strlen(name);
+  for (size_t i = 0; i < nl; i++) {
+    char a = line[i], b = name[i];
+    if (a >= 'A' && a <= 'Z') a += 32;
+    if (b >= 'A' && b <= 'Z') b += 32;
+    if (a != b) return false;
+  }
+  return line[nl] == ':';
+}
+
+/**
+ * @brief 响应头回调：捕获 "Content-Range: bytes 0-0/TOTAL" 中的总大小（Range 探测用）
+ * @param userdata 指向 curl_off_t 接收总大小
+ */
+size_t ContentRangeHeader(char* buffer, size_t size, size_t nitems,
+                          void* userdata) {
+  const size_t n = size * nitems;
+  if (n > 0 && HeaderNameIs(buffer, "content-range")) {
+    const char* slash = strrchr(buffer, '/');
+    if (slash != nullptr && slash[1] != '\0' && slash[1] != '*') {
+      *((curl_off_t*)userdata) =
+          (curl_off_t)strtoll(slash + 1, nullptr, 10);
+    }
+  }
+  return n;
 }
 
 /**
@@ -525,6 +555,18 @@ bool Ccurl::File_Init(const char* filename) {
   if (remain < m_thread_num) {
     m_thread_num = (int)remain;
   }
+  /* 最小分片 1MB：避免小文件/高线程数时每线程分到几 KB 碎块（连接开销反而拖慢）。
+   * 例：26KB 文件 → 1 线程；50MB → 最多 50 线程（仍受请求线程数与 MaxThread 约束） */
+  {
+    const int64_t kMinPartSize = 1 << 20; /* 1MB */
+    int max_threads_by_size = (int)(remain / kMinPartSize);
+    if (max_threads_by_size < 1) {
+      max_threads_by_size = 1;
+    }
+    if (m_thread_num > max_threads_by_size) {
+      m_thread_num = max_threads_by_size;
+    }
+  }
 
 #ifdef _WIN32
   DWORD dwCreation = (open_flags & O_TRUNC) ? CREATE_ALWAYS : OPEN_ALWAYS;
@@ -675,23 +717,79 @@ bool Ccurl::get_Download_FileSize() {
     curl_easy_setopt(m_easyHandle, CURLOPT_LOW_SPEED_TIME, m_timeout);
   }
 
+  /* 尝试 1：HEAD 探测（多数服务器支持；B站/YouTube 音频流可能 HEAD 被拒或无 Content-Length） */
   CURLcode res = curl_easy_perform(m_easyHandle);
   if (CHECK_CURL(res)) {
     res = curl_easy_getinfo(m_easyHandle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
                             &m_fileLen);
-    LOG_INFO("dowload File length success: %lld\n", (long long)m_fileLen);
-    flag = true;
-    g_filelen = (double)m_fileLen;
+    if (res == CURLE_OK && m_fileLen > 0) {
+      LOG_INFO("dowload File length success (HEAD): %lld\n",
+               (long long)m_fileLen);
+      curl_easy_cleanup(m_easyHandle);
+      flag = true;
+      g_filelen = (double)m_fileLen;
+      return true;
+    }
+    LOG_INFO("HEAD ok but no valid content-length (%lld), try Range GET\n",
+             (long long)m_fileLen);
   } else {
-    LOG_ERR("file_size failed\n");
-    AppendLog("[ERROR] probe file size failed: url=%s, curl error: %s",
+    AppendLog("[WARN] HEAD probe failed, fallback to Range GET: url=%s, curl error: %s",
               m_url.c_str(), curl_easy_strerror(res));
+  }
+  curl_easy_cleanup(m_easyHandle);
+  m_easyHandle = nullptr;
+  m_fileLen = -1;
+
+  /* 尝试 2：Range GET bytes=0-0（回退；从响应头 Content-Range 的 "bytes 0-0/TOTAL" 取总大小）
+   * 仅用 HEAD 的服务器不支持时（部分 DASH 音频流/防盗链站点），GET 仍可返回 206 */
+  CURL* probe = curl_easy_init();
+  if (probe != nullptr) {
+    curl_easy_setopt(probe, CURLOPT_URL, m_url.c_str());
+    curl_easy_setopt(probe, CURLOPT_FOLLOWLOCATION, 1L);
+    if (!m_referer.empty()) {
+      curl_easy_setopt(probe, CURLOPT_REFERER, m_referer.c_str());
+    }
+    if (!m_cookie.empty()) {
+      curl_easy_setopt(probe, CURLOPT_COOKIE, m_cookie.c_str());
+    }
+    curl_easy_setopt(
+        probe, CURLOPT_USERAGENT,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
+        "like Gecko) Chrome/115.0.0.0 Safari/537.36");
+    curl_easy_setopt(probe, CURLOPT_RANGE, "0-0"); /* 只请求第一个字节 */
+    curl_easy_setopt(probe, CURLOPT_WRITEFUNCTION, DummyWrite);
+    /* 从响应头 Content-Range 取总大小（形如 "bytes 0-0/12345"） */
+    curl_off_t probe_total = -1;
+    curl_easy_setopt(probe, CURLOPT_HEADERFUNCTION, ContentRangeHeader);
+    curl_easy_setopt(probe, CURLOPT_HEADERDATA, &probe_total);
+    curl_easy_setopt(probe, CURLOPT_CONNECTTIMEOUT, 10L);
+    if (m_timeout > 0) {
+      curl_easy_setopt(probe, CURLOPT_LOW_SPEED_LIMIT, 1L);
+      curl_easy_setopt(probe, CURLOPT_LOW_SPEED_TIME, m_timeout);
+    }
+    CURLcode res2 = curl_easy_perform(probe);
+    long http_code = 0;
+    curl_easy_getinfo(probe, CURLINFO_RESPONSE_CODE, &http_code);
+    if (CHECK_CURL(res2) && (http_code == 206 || http_code == 200) &&
+        probe_total > 0) {
+      m_fileLen = probe_total;
+    }
+    curl_easy_cleanup(probe);
+    if (m_fileLen > 0) {
+      LOG_INFO("dowload File length success (Range GET): %lld\n",
+               (long long)m_fileLen);
+      flag = true;
+      g_filelen = (double)m_fileLen;
+      return true;
+    }
+    LOG_ERR("file_size failed (HEAD + Range GET)\n");
+    AppendLog("[ERROR] probe file size failed (HEAD + Range GET): url=%s",
+              m_url.c_str());
     m_fileLen = -1;
     g_filelen = -1;
     flag = false;
   }
 
-  curl_easy_cleanup(m_easyHandle);
   return flag;
 }
 

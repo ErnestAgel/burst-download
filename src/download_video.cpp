@@ -99,7 +99,24 @@ VideoResult VideoDownloader::Run(const std::string& video_url,
         if (!cookie.empty()) {
             cc->SetCookie(cookie); /* 下载流时携带 Cookie（高清流需登录态） */
         }
-        cc->onProgress = onProgress; /* GUI 注入进度回调；CLI 为空走默认 1% 门控打印 */
+        /* 包装进度回调：先检查本编排器取消标志 → 置位则 Cancel 当前流
+         * （Ccurl 写回调检查点秒级中止），再转发给调用方回调。
+         * 此前直接透传导致 GUI 取消只置 vd.m_cancel、当前流不中断（问题 2） */
+        {
+            Ccurl* cc_ptr = cc.get();
+            auto user_cb = onProgress;
+            cc->onProgress =
+                [this, cc_ptr, user_cb](const std::vector<ThreadProgress>& tp,
+                                        double totalPercent,
+                                        double totalSpeed) {
+                    if (m_cancel.load()) {
+                        cc_ptr->Cancel();
+                    }
+                    if (user_cb) {
+                        user_cb(tp, totalPercent, totalSpeed);
+                    }
+                };
+        }
 
         if (!cc->Init(streams[i], out, threads, timeout)) {
             m_last_error = cc->LastError().empty()
