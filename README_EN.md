@@ -154,28 +154,34 @@ cmake --build build
 
 ## 🖥️ GUI
 
-A graphical front-end (`burst-gui`) over the CLI, currently **Phase 2: File Download + Video Download modes**.
+A graphical front-end (`burst-gui`) over the CLI, currently **Phase 2: File Download + Video Download modes**, supported on **Windows x86_64 / Linux x86_64**.
 
 **Build** (`option(BUILD_GUI ON)` by default):
 
 ```bash
+# Windows (MSYS2/mingw64)
 cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target burst-gui      # produces burst-gui.exe on Windows
+cmake --build build --target burst-gui      # produces burst-gui.exe
+
+# Linux (needs X11 dev packages: libgl1-mesa-dev libx11-dev libxrandr-dev
+#   libxinerama-dev libxcursor-dev libxi-dev)
+cmake -B build -DCMAKE_BUILD_TYPE=Release .
+cmake --build build --target burst-gui      # produces burst-gui
 ```
 
-**Run**: launch `burst-gui.exe` on Windows (runtime DLLs are copied next to the exe automatically at build time, including MinGW runtime and embedded Python DLLs).
+**Run**: launch `burst-gui.exe` on Windows (runtime DLLs are copied next to the exe automatically at build time, including MinGW runtime and embedded Python DLLs); run `./burst-gui` on Linux (depends on the desktop's `libGL`/`libX11`).
 
 **Supported**:
 
-- 🎨 **Atom One Dark theme**, frameless window with Mac-style window buttons (minimize/maximize/close)
+- 🎨 **Atom One Dark theme**; Windows: frameless window with Mac-style buttons (minimize/maximize/close); Linux: native title bar
 - ⚡ Multi-threaded segmented download (1~`min(10, cores)` threads selectable)
 - 🎬 **Video download** (Bilibili / YouTube etc.): parse → download video/audio tracks (parallel chunks) → auto-merge, with 4-stage status shown live (Parsing / Downloading video track / Downloading audio track / Merging)
 - ⏸️ **Pause / Resume / Stop** state machine: first "Cancel" click pauses (cache kept, **segmented resume** via `.curlbolt.part` metadata — only unfinished parts re-download); red "Stop" deletes cache and resets UI
 - 📊 **3D cylinder progress bar** (battery-cell chunks): completed cells green, active cell growing, 5px separators, per-cell percentage, hover shows per-thread speed; overall % + speed bottom-right
-- 📁 Save to a directory only — filename is derived from the URL automatically; Browse opens a folder picker
+- 📁 Save to a directory only — filename is derived from the URL automatically; "Browse…": native folder dialog on Windows / built-in directory browser on Linux (zero deps)
 - ⚡ **Thunder links** (`thunder://`) decoded automatically
 - 🌐 Bilingual UI (menu bar shows target-language hint: `language` in Chinese UI, `中文` in English UI)
-- 🪟 Frameless full-edge resize (left/right/bottom + corners, min 640×480); DPI-aware
+- 🪟 Windows: frameless full-edge resize (left/right/bottom + corners, min 640×480), DPI-aware; Linux: native title bar (drag & resize)
 - 💾 Fonts and third-party libs bundled and distributed with the repo; no extra installs
 
 ---

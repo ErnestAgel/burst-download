@@ -160,28 +160,34 @@ cmake --build build
 
 ## 🖥️ 图形界面 GUI
 
-图形界面是 CLI 的图形封装（`burst-gui`），当前为 **Phase 2：文件下载 + 视频下载模式**。
+图形界面是 CLI 的图形封装（`burst-gui`），当前为 **Phase 2：文件下载 + 视频下载模式**，支持 **Windows x86_64 / Linux x86_64**。
 
 **构建**（`option(BUILD_GUI ON)` 默认开启）：
 
 ```bash
+# Windows（MSYS2/mingw64）
 cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target burst-gui      # Windows 产出 burst-gui.exe
+cmake --build build --target burst-gui      # 产出 burst-gui.exe
+
+# Linux（需 X11 开发包：libgl1-mesa-dev libx11-dev libxrandr-dev
+#   libxinerama-dev libxcursor-dev libxi-dev）
+cmake -B build -DCMAKE_BUILD_TYPE=Release .
+cmake --build build --target burst-gui      # 产出 burst-gui
 ```
 
-**运行**：Windows 直接运行 `burst-gui.exe`（运行时 dll 由 CMake 构建时自动复制到 exe 同目录，含 MinGW 运行时与 Python 嵌入 dll）。
+**运行**：Windows 直接运行 `burst-gui.exe`（运行时 dll 由 CMake 构建时自动复制到 exe 同目录，含 MinGW 运行时与 Python 嵌入 dll）；Linux 运行 `./burst-gui`（依赖桌面环境自带的 `libGL`/`libX11`）。
 
 **已支持**：
 
-- 🎨 **Atom One Dark 暗色主题**，无边框窗口 + Mac 风格窗口按钮（最小化/最大化/关闭）
+- 🎨 **Atom One Dark 暗色主题**；Windows：无边框窗口 + Mac 风格按钮（最小化/最大化/关闭）；Linux：系统标题栏
 - ⚡ 多线程分片下载（1~`min(10, 核数)` 线程可选）
 - 🎬 **视频下载**（B站/YouTube 等）：解析 → 下载视频轨/音频轨（分片并行）→ 自动合并，四阶段状态实时显示（解析中/下载视频轨/下载音频轨/合并中）
 - ⏸️ **暂停 / 继续 / 停止**状态机：下载中第一次点"取消"= 暂停（保留缓存，可**断点续传**——`.curlbolt.part` 分片级元数据，仅续传未完成分片）；"停止"（红色）删除缓存并清空 UI
 - 📊 **3D 圆柱体总进度条**（电池格分片效果）：完成格绿色、当前格增长、格线 5px、格内显示分片完成度%，hover 显示分片速度；右下角显示总体百分比 + 总速度
-- 📁 保存路径填目录即可（文件名自动取自 URL）；浏览按钮为目录选择
+- 📁 保存路径填目录即可（文件名自动取自 URL）；"浏览…"按钮：Windows 原生目录对话框 / Linux 内置目录浏览器（零依赖）
 - ⚡ 支持 **迅雷专用链接**（`thunder://` 自动解码）
 - 🌐 中英双语界面（菜单栏显示目标语言提示：中文界面 → `language`，英文界面 → `中文`）
-- 🪟 无边框窗口全边缘 resize（左右下边 + 四角）+ 最小 640×480；DPI 感知
+- 🪟 Windows：无边框窗口全边缘 resize（左右下边 + 四角）+ 最小 640×480 + DPI 感知；Linux：系统标题栏（可拖动/缩放）
 - 💾 内嵌字体与第三方库，随仓库分发，无需额外安装
 
 ---
