@@ -2,7 +2,7 @@
 
 [🇬🇧 English](README_EN.md) · [🇨🇳 中文](README.md)
 
-# ⚡ curlbolt
+# ⚡ Burst Download
 
 **Multi-threaded chunked downloader with video download support**
 
@@ -12,9 +12,9 @@
 ![Windows](https://img.shields.io/badge/Windows-x86_64-blue?style=for-the-badge&logo=windows&logoColor=white)
 ![CMake](https://img.shields.io/badge/build-CMake-yellow?style=for-the-badge&logo=cmake&logoColor=white)
 
-[![Stars](https://img.shields.io/github/stars/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/stargazers)
-[![Forks](https://img.shields.io/github/forks/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/network)
-[![Last commit](https://img.shields.io/github/last-commit/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/commits/main)
+[![Stars](https://img.shields.io/github/stars/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/stargazers)
+[![Forks](https://img.shields.io/github/forks/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/network)
+[![Last commit](https://img.shields.io/github/last-commit/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/commits/main)
 
 > 🎬 **Video download**: one command to download videos from Bilibili / YouTube and other popular sites
 > ⚡ **Multi-threading**: HTTP Range chunking with 1–10 threads to saturate bandwidth
@@ -39,11 +39,11 @@
 
 ---
 
-## 💡 Why curlbolt?
+## 💡 Why Burst Download?
 
 **Compared with traditional download tools (curl / wget):**
 
-| | curl / wget | curlbolt |
+| | curl / wget | burst |
 |---|---|---|
 | Connections | single-threaded, single connection | 1–10 concurrent connections |
 | Bandwidth | limited by TCP slow start / congestion window; often can't saturate high-bandwidth, high-latency links | parallel connections approach the bandwidth ceiling |
@@ -83,13 +83,13 @@ One command for any supported site:
 
 ```bash
 # Download a Bilibili video (auto-resolve + multi-threaded download)
-./curlbolt --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
+./burst --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
 
 # Bilibili 720p+ (requires being logged in to Bilibili in the browser)
-./curlbolt --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookies-from-browser chrome
+./burst --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookies-from-browser chrome
 
 # YouTube and other popular video sites
-./curlbolt --video "https://www.youtube.com/watch?v=xxxxx" -o clip
+./burst --video "https://www.youtube.com/watch?v=xxxxx" -o clip
 ```
 
 - Works with Bilibili, YouTube and other popular sites — just paste the video page URL
@@ -101,22 +101,22 @@ One command for any supported site:
 ## 🚀 Quick Start
 
 ```bash
-./curlbolt <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
-./curlbolt --video <video-url> [-o basename] [-t threads] [--timeout sec]
+./burst <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
+./burst --video <video-url> [-o basename] [-t threads] [--timeout sec]
 ```
 
 ```bash
 # Download a file (8 threads, 30s no-progress timeout)
-./curlbolt https://example.com/file.iso -o file.iso -t 8 --timeout 30
+./burst https://example.com/file.iso -o file.iso -t 8 --timeout 30
 
 # Download a video
-./curlbolt --video "https://www.bilibili.com/video/BVxxxx" -o movie
+./burst --video "https://www.bilibili.com/video/BVxxxx" -o movie
 
 # Force download without auto-interruption
-./curlbolt https://example.com/file.iso -o file.iso --no-timeout
+./burst https://example.com/file.iso -o file.iso --no-timeout
 
 # Show help
-./curlbolt -h
+./burst -h
 ```
 
 Live **progress / speed / ETA** output:
@@ -154,16 +154,16 @@ cmake --build build
 
 ## 🖥️ GUI
 
-A graphical front-end (`curlbolt-gui`) over the CLI, currently **Phase 2: File Download + Video Download modes**.
+A graphical front-end (`burst-gui`) over the CLI, currently **Phase 2: File Download + Video Download modes**.
 
 **Build** (`option(BUILD_GUI ON)` by default):
 
 ```bash
 cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target curlbolt-gui      # produces curlbolt-gui.exe on Windows
+cmake --build build --target burst-gui      # produces burst-gui.exe on Windows
 ```
 
-**Run**: launch `curlbolt-gui.exe` on Windows (runtime DLLs are copied next to the exe automatically at build time, including MinGW runtime and embedded Python DLLs).
+**Run**: launch `burst-gui.exe` on Windows (runtime DLLs are copied next to the exe automatically at build time, including MinGW runtime and embedded Python DLLs).
 
 **Supported**:
 

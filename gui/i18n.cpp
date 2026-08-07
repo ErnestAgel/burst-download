@@ -100,7 +100,7 @@ const Entry kStrings[] = {
     {"msg.canceled", "已取消，部分文件保留可续传",
      "Canceled. Partial files kept for resume."},
     {"msg.error.log", "详见 download.log", "See download.log for details"},
-    {"window.title", "curlbolt 下载器", "curlbolt Downloader"},
+    {"window.title", "Burst Download", "Burst Download"},
     /* 错误弹窗分类指引（§8.3） */
     {"err.guide.init", "检查保存路径与目录权限；确认 URL 可访问后重试。",
      "Check the save path and folder permissions; verify the URL is reachable and retry."},

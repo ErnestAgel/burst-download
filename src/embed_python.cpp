@@ -130,7 +130,7 @@ bool EmbedPythonInit(const std::string& python_home) {
 
   PyConfig config;
   PyConfig_InitPythonConfig(&config);
-  PyConfig_SetBytesString(&config, &config.program_name, "curlbolt");
+  PyConfig_SetBytesString(&config, &config.program_name, "burst");
   /* 显式告知运行时根，避免 Python 打印 "Could not find platform independent libraries" 噪音 */
   PyConfig_SetBytesString(&config, &config.home, home.c_str());
   config.module_search_paths_set = 1;
@@ -270,7 +270,7 @@ bool EmbedUpdateParser(const std::string& exe_path, std::string& msg) {
     "try:\n"
     "    ctx = ssl.create_default_context(cafile=certifi.where())\n"
     "    api = 'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest'\n"
-    "    req = urllib.request.Request(api, headers={'User-Agent': 'curlbolt/1.0', 'Accept': 'application/vnd.github+json'})\n"
+    "    req = urllib.request.Request(api, headers={'User-Agent': 'burst/1.0', 'Accept': 'application/vnd.github+json'})\n"
     "    with urllib.request.urlopen(req, timeout=30, context=ctx) as r:\n"
     "        rel = json.load(r)\n"
     "    tag = rel.get('tag_name', '')\n"
@@ -292,7 +292,7 @@ bool EmbedUpdateParser(const std::string& exe_path, std::string& msg) {
     "        tgz = os.path.join(HOME, '.parser_update_%d.tar.gz' % pid)\n"
     "        exdir = os.path.join(HOME, '.parser_extract_%d' % pid)\n"
     "        try:\n"
-    "            req2 = urllib.request.Request(url, headers={'User-Agent': 'curlbolt/1.0'})\n"
+    "            req2 = urllib.request.Request(url, headers={'User-Agent': 'burst/1.0'})\n"
     "            with urllib.request.urlopen(req2, timeout=120, context=ctx) as r2, open(tgz, 'wb') as f:\n"
     "                shutil.copyfileobj(r2, f, 65536)\n"
     "            if os.path.getsize(tgz) == 0:\n"

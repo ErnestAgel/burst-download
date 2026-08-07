@@ -2,7 +2,7 @@
 
 [🇨🇳 中文](README.md) · [🇬🇧 English](README_EN.md)
 
-# ⚡ curlbolt
+# ⚡ Burst Download
 
 **多线程分片下载器 · 支持视频下载**  
 **Multi-threaded chunked downloader with video download support**
@@ -13,9 +13,9 @@
 ![Windows](https://img.shields.io/badge/Windows-x86_64-blue?style=for-the-badge&logo=windows&logoColor=white)
 ![CMake](https://img.shields.io/badge/build-CMake-yellow?style=for-the-badge&logo=cmake&logoColor=white)
 
-[![Stars](https://img.shields.io/github/stars/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/stargazers)
-[![Forks](https://img.shields.io/github/forks/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/network)
-[![Last commit](https://img.shields.io/github/last-commit/ErnestAgel/curlbolt?style=flat-square)](https://github.com/ErnestAgel/curlbolt/commits/main)
+[![Stars](https://img.shields.io/github/stars/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/stargazers)
+[![Forks](https://img.shields.io/github/forks/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/network)
+[![Last commit](https://img.shields.io/github/last-commit/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/commits/main)
 
 > 🎬 **视频下载**：一条命令下载 B站 / YouTube 等主流网站的视频，多线程分片下载
 > ⚡ **多线程加速**：HTTP Range 分片，1~10 线程并发，榨干带宽
@@ -41,11 +41,11 @@
 
 ---
 
-## 💡 为什么用 curlbolt？Why curlbolt?
+## 💡 为什么用 Burst Download？Why Burst Download?
 
 **对比传统下载工具（curl / wget）：**
 
-| | curl / wget | curlbolt |
+| | curl / wget | burst |
 |---|---|---|
 | 连接数 | 单线程、单连接 | 1~10 个并发连接 |
 | 带宽利用 | 单连接受 TCP 慢启动/拥塞窗口限制，高带宽高延迟网络常吃不饱 | 多连接并行，逼近带宽上限 |
@@ -85,13 +85,13 @@
 
 ```bash
 # 下载 B站视频（自动解析 + 多线程分片下载）
-./curlbolt --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
+./burst --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
 
 # B站高清 720p+（需要浏览器已登录 B站）
-./curlbolt --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookies-from-browser chrome
+./burst --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookies-from-browser chrome
 
 # YouTube 等主流视频网站
-./curlbolt --video "https://www.youtube.com/watch?v=xxxxx" -o clip
+./burst --video "https://www.youtube.com/watch?v=xxxxx" -o clip
 ```
 
 - 支持 B站、YouTube 等主流视频网站，视频网页地址直接可用
@@ -103,26 +103,26 @@
 ## 🚀 快速开始 Quick Start
 
 ```bash
-./curlbolt <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
-./curlbolt --video <video-url> [-o basename] [-t threads] [--timeout sec]
-./curlbolt --update-parser
+./burst <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
+./burst --video <video-url> [-o basename] [-t threads] [--timeout sec]
+./burst --update-parser
 ```
 
 ```bash
 # 下载文件（8 线程，30 秒无进展超时）
-./curlbolt https://example.com/file.iso -o file.iso -t 8 --timeout 30
+./burst https://example.com/file.iso -o file.iso -t 8 --timeout 30
 
 # 下载视频
-./curlbolt --video "https://www.bilibili.com/video/BVxxxx" -o movie
+./burst --video "https://www.bilibili.com/video/BVxxxx" -o movie
 
 # 强制下载不自动中断
-./curlbolt https://example.com/file.iso -o file.iso --no-timeout
+./burst https://example.com/file.iso -o file.iso --no-timeout
 
 # 在线更新视频解析组件（网站改版导致解析失效时自愈，无需重新编译）
-./curlbolt --update-parser
+./burst --update-parser
 
 # 查看帮助
-./curlbolt -h
+./burst -h
 ```
 
 终端实时输出**进度 / 速率 / 剩余时间**：
@@ -160,16 +160,16 @@ cmake --build build
 
 ## 🖥️ 图形界面 GUI
 
-图形界面是 CLI 的图形封装（`curlbolt-gui`），当前为 **Phase 2：文件下载 + 视频下载模式**。
+图形界面是 CLI 的图形封装（`burst-gui`），当前为 **Phase 2：文件下载 + 视频下载模式**。
 
 **构建**（`option(BUILD_GUI ON)` 默认开启）：
 
 ```bash
 cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target curlbolt-gui      # Windows 产出 curlbolt-gui.exe
+cmake --build build --target burst-gui      # Windows 产出 burst-gui.exe
 ```
 
-**运行**：Windows 直接运行 `curlbolt-gui.exe`（运行时 dll 由 CMake 构建时自动复制到 exe 同目录，含 MinGW 运行时与 Python 嵌入 dll）。
+**运行**：Windows 直接运行 `burst-gui.exe`（运行时 dll 由 CMake 构建时自动复制到 exe 同目录，含 MinGW 运行时与 Python 嵌入 dll）。
 
 **已支持**：
 

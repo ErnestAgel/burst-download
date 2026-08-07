@@ -62,7 +62,7 @@ void ShowAlert() {
 #ifdef _WIN32
     MessageBoxA(NULL,
                 "发生意外错误，已记录 crash.log，请重新启动程序。",
-                "curlbolt-gui", MB_OK | MB_ICONERROR);
+                "burst-gui", MB_OK | MB_ICONERROR);
 #else
     /* 无终端/无弹窗，crash.log 即指引 */
 #endif

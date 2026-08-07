@@ -49,7 +49,7 @@ bool EmbedParseVideoUrls(const std::string& url,
  * @param msg 输出：执行结果描述（"已是最新" 或 新旧版本变化；失败为原因）
  * @return 是否执行成功（"已是最新" 也视为成功）
  * @note 需网络；仅替换 yt_dlp 包目录（原子替换，失败自动回滚保留旧版）；
- *       纯 Python 包替换，无需重新编译/打包 curlbolt
+ *       纯 Python 包替换，无需重新编译/打包 burst
  */
 bool EmbedUpdateParser(const std::string& exe_path, std::string& msg);
 

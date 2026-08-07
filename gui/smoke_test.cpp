@@ -1,4 +1,4 @@
-// curlbolt-gui Phase 0.4 冒烟测试:
+// burst-gui Phase 0.4 冒烟测试:
 // 最小 GLFW + ImGui + OpenGL3 空窗口, 嵌入 Noto Sans SC 子集字体, 验证:
 //   1. GLFW 窗口创建与 OpenGL 3.3 上下文
 //   2. ImGui 上下文 + 字体从内存加载(零外部文件)
@@ -40,7 +40,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     GLFWwindow* window =
-        glfwCreateWindow(800, 600, "curlbolt-gui smoke (Phase 0.4)", NULL, NULL);
+        glfwCreateWindow(800, 600, "burst-gui smoke (Phase 0.4)", NULL, NULL);
     if (!window) {
         WriteResult("step=fail_create_window\n");
         glfwTerminate();

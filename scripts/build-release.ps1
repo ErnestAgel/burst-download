@@ -63,7 +63,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot        # scripts/ 上一级 = 仓�
 if (-not $OutDir) { $OutDir = Join-Path (Split-Path -Parent $RepoRoot) 'release-assets' }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-# WSL 内仓库路径:F:\curlbot\curlbolt -> /mnt/f/curlbot/curlbolt
+# WSL 内仓库路径:F:\curlbot\burst -> /mnt/f/curlbot/burst
 $WslRepo = '/mnt/' + $RepoRoot.Substring(0, 1).ToLower() + ($RepoRoot.Substring(2) -replace '\\', '/')
 
 # ---------- 3) 工具链检查 ----------
@@ -108,13 +108,13 @@ if (-not $SkipRelease) {
 Write-Host "== [1/3] Linux x86_64 Release (WSL) =="
 wsl.exe -e bash -lc "cd $WslRepo && cmake -B build-rel-x64 -DCMAKE_BUILD_TYPE=Release . >/dev/null 2>&1 && cmake --build build-rel-x64 -j`$(nproc) 2>&1 | tail -2"
 Assert-LastOk 'Linux x86_64 构建'
-if (-not (Test-Path (Join-Path $RepoRoot 'build-rel-x64\curlbolt'))) { throw 'Linux x86_64 产物缺失' }
+if (-not (Test-Path (Join-Path $RepoRoot 'build-rel-x64\burst'))) { throw 'Linux x86_64 产物缺失' }
 
 # 5.2 Linux aarch64(WSL 交叉编译)
 Write-Host "== [2/3] Linux aarch64 Release (WSL 交叉) =="
 wsl.exe -e bash -lc "cd $WslRepo && cmake -B build-rel-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ . >/dev/null 2>&1 && cmake --build build-rel-arm64 -j`$(nproc) 2>&1 | tail -2"
 Assert-LastOk 'Linux aarch64 构建'
-if (-not (Test-Path (Join-Path $RepoRoot 'build-rel-arm64\curlbolt'))) { throw 'Linux aarch64 产物缺失' }
+if (-not (Test-Path (Join-Path $RepoRoot 'build-rel-arm64\burst'))) { throw 'Linux aarch64 产物缺失' }
 
 # 5.3 Windows x86_64(MSYS2/mingw64)
 Write-Host "== [3/3] Windows x86_64 Release (MSYS2) =="
@@ -123,32 +123,32 @@ cmake -B (Join-Path $RepoRoot 'build-win-rel') -G "MinGW Makefiles" -DCMAKE_BUIL
 Assert-LastOk 'Windows cmake 配置'
 cmake --build (Join-Path $RepoRoot 'build-win-rel') -j 8
 Assert-LastOk 'Windows 构建'
-$WinExe = Join-Path $RepoRoot 'build-win-rel\curlbolt.exe'
+$WinExe = Join-Path $RepoRoot 'build-win-rel\burst.exe'
 if (-not (Test-Path $WinExe)) { throw 'Windows 产物缺失' }
 
 # ---------- 6) 打包 ----------
 Write-Host "== 打包产物到 $OutDir =="
-Copy-Item (Join-Path $RepoRoot 'build-rel-x64\curlbolt')  (Join-Path $OutDir 'curlbolt-linux-x86_64')  -Force
-Copy-Item (Join-Path $RepoRoot 'build-rel-arm64\curlbolt') (Join-Path $OutDir 'curlbolt-linux-aarch64') -Force
+Copy-Item (Join-Path $RepoRoot 'build-rel-x64\burst')  (Join-Path $OutDir 'burst-linux-x86_64')  -Force
+Copy-Item (Join-Path $RepoRoot 'build-rel-arm64\burst') (Join-Path $OutDir 'burst-linux-aarch64') -Force
 
 # Windows:exe + Python 运行 dll 打 zip
 $WinBuildDir = Join-Path $RepoRoot 'build-win-rel'
-$ZipPath = Join-Path $OutDir 'curlbolt-windows-x86_64.zip'
+$ZipPath = Join-Path $OutDir 'burst-windows-x86_64.zip'
 Remove-Item $ZipPath -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $WinBuildDir 'curlbolt.exe'),
+Compress-Archive -Path (Join-Path $WinBuildDir 'burst.exe'),
     (Join-Path $WinBuildDir '*.dll') -DestinationPath $ZipPath -Force
 if (-not (Test-Path $ZipPath)) { throw 'Windows zip 打包失败' }
 
 # ---------- 7) 校验 ----------
 Write-Host "== 校验产物 =="
 $ok = 0
-if ((wsl.exe -e bash -lc "cd $WslRepo && ./build-rel-x64/curlbolt -h 2>&1 | head -1" ) -match 'Usage') { $ok++; Write-Host "  [OK] linux-x86_64" } else { Write-Host "  [!!] linux-x86_64 运行异常" }
-if ((wsl.exe -e bash -lc "file $WslRepo/build-rel-arm64/curlbolt 2>/dev/null | grep -o aarch64" ) -match 'aarch64') { $ok++; Write-Host "  [OK] linux-aarch64(架构)" } else { Write-Host "  [!!] linux-aarch64 架构异常" }
+if ((wsl.exe -e bash -lc "cd $WslRepo && ./build-rel-x64/burst -h 2>&1 | head -1" ) -match 'Usage') { $ok++; Write-Host "  [OK] linux-x86_64" } else { Write-Host "  [!!] linux-x86_64 运行异常" }
+if ((wsl.exe -e bash -lc "file $WslRepo/build-rel-arm64/burst 2>/dev/null | grep -o aarch64" ) -match 'aarch64') { $ok++; Write-Host "  [OK] linux-aarch64(架构)" } else { Write-Host "  [!!] linux-aarch64 架构异常" }
 if ((& $WinExe -h 2>&1 | Select-Object -First 1) -match 'Usage') { $ok++; Write-Host "  [OK] windows-x86_64" } else { Write-Host "  [!!] windows-x86_64 运行异常" }
 if ($ok -lt 3) { throw "产物校验未全部通过($ok/3)" }
 
 Write-Host "== 产物清单 =="
-Get-ChildItem $OutDir -Filter 'curlbolt-*' | Select-Object Name, Length | Format-Table -AutoSize
+Get-ChildItem $OutDir -Filter 'burst-*' | Select-Object Name, Length | Format-Table -AutoSize
 
 if ($SkipRelease) {
     Write-Host "`n[SkipRelease] 构建与打包完成,跳过 GitHub 发布。产物在: $OutDir"
@@ -171,31 +171,31 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
 } else {
     $prevTag = (git tag --sort=-version:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1)
     $log = if ($prevTag) { (git log "$prevTag..HEAD" --oneline | Out-String).Trim() } else { (git log --oneline -10 | Out-String).Trim() }
-    $releaseNotes = "## curlbolt $Version`n`n### 变更记录`n$log`n`n### 平台产物`n- curlbolt-linux-x86_64 : 静态单文件`n- curlbolt-linux-aarch64 : 静态单文件(交叉编译)`n- curlbolt-windows-x86_64.zip : exe + Python 运行 dll(解压即用)"
+    $releaseNotes = "## burst $Version`n`n### 变更记录`n$log`n`n### 平台产物`n- burst-linux-x86_64 : 静态单文件`n- burst-linux-aarch64 : 静态单文件(交叉编译)`n- burst-windows-x86_64.zip : exe + Python 运行 dll(解压即用)"
 }
 
 # 8.3 创建 Release
 $body = @{
     tag_name         = $Version
     target_commitish = 'main'
-    name             = "curlbolt $Version"
+    name             = "burst $Version"
     body             = $releaseNotes
     draft            = $false
     prerelease       = $false
 } | ConvertTo-Json -Depth 3
 
-$release = Invoke-RestMethod -Method Post -Uri 'https://api.github.com/repos/ErnestAgel/curlbolt/releases' `
+$release = Invoke-RestMethod -Method Post -Uri 'https://api.github.com/repos/ErnestAgel/burst-download/releases' `
     -Headers $headers -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body))
 Write-Host "  Release 已创建: $($release.html_url)"
 
 # 8.4 上传三平台资产
 $assets = @(
-    @{ Name = 'curlbolt-linux-x86_64';    Path = Join-Path $OutDir 'curlbolt-linux-x86_64' },
-    @{ Name = 'curlbolt-linux-aarch64';   Path = Join-Path $OutDir 'curlbolt-linux-aarch64' },
-    @{ Name = 'curlbolt-windows-x86_64.zip'; Path = $ZipPath }
+    @{ Name = 'burst-linux-x86_64';    Path = Join-Path $OutDir 'burst-linux-x86_64' },
+    @{ Name = 'burst-linux-aarch64';   Path = Join-Path $OutDir 'burst-linux-aarch64' },
+    @{ Name = 'burst-windows-x86_64.zip'; Path = $ZipPath }
 )
 foreach ($a in $assets) {
-    $uri = "https://uploads.github.com/repos/ErnestAgel/curlbolt/releases/$($release.id)/assets?name=$($a.Name)"
+    $uri = "https://uploads.github.com/repos/ErnestAgel/burst-download/releases/$($release.id)/assets?name=$($a.Name)"
     $up = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers `
         -ContentType 'application/octet-stream' -InFile $a.Path
     Write-Host "  [上传] $($up.name) ($($up.size) 字节)"

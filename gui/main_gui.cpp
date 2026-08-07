@@ -1,6 +1,6 @@
 /**
  * @file main_gui.cpp
- * @brief curlbolt-gui 入口：GLFW 窗口 + ImGui 初始化 + 主循环 + 安全退出流程（§8.4）
+ * @brief burst-gui 入口：GLFW 窗口 + ImGui 初始化 + 主循环 + 安全退出流程（§8.4）
  *
  * 退出铁律：置 cancel → join（≤5s）→ ImGui/GLFW 清理 → return；
  * 禁止 detach 或 RUNNING 中 exit（§8.4）。
@@ -38,9 +38,9 @@ namespace {
 /** @brief 致命错误提示（Windows 弹窗 / Linux stderr） */
 void ShowFatal(const char* msg) {
 #ifdef _WIN32
-    MessageBoxA(NULL, msg, "curlbolt-gui", MB_OK | MB_ICONERROR);
+    MessageBoxA(NULL, msg, "burst-gui", MB_OK | MB_ICONERROR);
 #else
-    fprintf(stderr, "curlbolt-gui: %s\n", msg);
+    fprintf(stderr, "burst-gui: %s\n", msg);
 #endif
 }
 
@@ -79,13 +79,13 @@ std::string ExeDir(const char* argv0) {
 /** @brief 单实例互斥（§8.4）：已有一个实例则提示并尝试激活旧窗口，防双开同时写同一文件 */
 bool AcquireSingleInstance() {
 #ifdef _WIN32
-    HANDLE h = CreateMutexW(NULL, TRUE, L"Global\\curlbolt-gui");
+    HANDLE h = CreateMutexW(NULL, TRUE, L"Global\\burst-gui");
     if (h == NULL) {
         return true;  /* 创建失败不阻塞（无权限等），按单实例处理 */
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         /* 已有实例：激活其窗口（若可见），并给出清晰提示 */
-        HWND existing = FindWindowW(NULL, L"curlbolt-gui");
+        HWND existing = FindWindowW(NULL, L"Burst Download");
         if (existing == NULL) {
             /* 窗口标题可能是 i18n 文本（中/英），按进程名枚举兜底 */
             existing = NULL;
@@ -100,11 +100,11 @@ bool AcquireSingleInstance() {
             SetForegroundWindow(existing);
         }
         MessageBoxW(NULL,
-                    L"curlbolt-gui 已在运行。\n"
+                    L"burst-gui 已在运行。\n"
                     L"若刚启动即提示此信息，说明已有实例在后台运行：\n"
-                    L"  1. 请在任务栏找到并关闭旧的 curlbolt-gui 窗口，或\n"
-                    L"  2. 在任务管理器中结束 curlbolt-gui.exe 进程后重试。",
-                    L"curlbolt-gui", MB_OK | MB_ICONINFORMATION);
+                    L"  1. 请在任务栏找到并关闭旧的 burst-gui 窗口，或\n"
+                    L"  2. 在任务管理器中结束 burst-gui.exe 进程后重试。",
+                    L"burst-gui", MB_OK | MB_ICONINFORMATION);
         return false;
     }
     return true;
