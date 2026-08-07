@@ -486,6 +486,9 @@ bool Ccurl::Download_Task() {
     return false;
   }
   for (int i = 0; i < m_thread_num; i++) {
+    if (m_Easy_List[i]->success) {
+      continue;  /* 分片级续传：该分片上次已写满，跳过不重下 */
+    }
 #ifdef _WIN32
     m_Easy_List[i]->thid = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&Downloading,
                                         (LPVOID)m_Easy_List[i], 0, NULL);
@@ -522,15 +525,90 @@ bool Ccurl::Download_Task() {
   /* 取消检查点：任务结束后区分"取消"与"失败"，GUI 依据 IsCanceled() 显示"已取消" */
   if (m_cancel_flag.load()) {
     AppendLog("[INFO] download canceled: url=%s", m_url.c_str());
+    SavePartMeta();  /* 取消（暂停）也写回分片进度，供下次续传 */
     return false;
   }
   if (all_ok) {
     AppendLog("[INFO] download complete: url=%s", m_url.c_str());
+    ClearPartMeta();
   } else {
     AppendLog("[ERROR] download task failed: some parts not completed (url=%s)",
               m_url.c_str());
+    SavePartMeta();
   }
   return all_ok;
+}
+
+/* ---- 分片级断点续传元数据（<目标文件>.curlbolt.part） ---- */
+
+std::string Ccurl::MetaPath() const {
+  return m_filename + ".curlbolt.part";
+}
+
+bool Ccurl::LoadPartMeta() {
+  m_part_written.clear();
+  const std::string path = MetaPath();
+#ifdef _WIN32
+  FILE* f = _wfopen(Utf8ToWide(path).c_str(), L"rb");
+#else
+  FILE* f = fopen(path.c_str(), "rb");
+#endif
+  if (f == nullptr) {
+    return false;
+  }
+  long long filelen = -1;
+  char line[128];
+  while (fgets(line, sizeof(line), f) != nullptr) {
+    if (strncmp(line, "filelen=", 8) == 0) {
+      filelen = atoll(line + 8);
+    } else {
+      char* comma = strchr(line, ',');
+      if (comma != nullptr) {
+        long long written = atoll(comma + 1);
+        m_part_written.push_back(written < 0 ? 0 : written);
+      }
+    }
+  }
+  fclose(f);
+  /* filelen 必须与当前任务一致（目标文件已变 → 元数据作废） */
+  const bool ok = (filelen == (long long)m_fileLen) && !m_part_written.empty();
+  if (!ok) {
+    m_part_written.clear();
+  }
+  return ok;
+}
+
+void Ccurl::SavePartMeta() {
+  const std::string path = MetaPath();
+#ifdef _WIN32
+  FILE* f = _wfopen(Utf8ToWide(path).c_str(), L"wb");
+#else
+  FILE* f = fopen(path.c_str(), "wb");
+#endif
+  if (f == nullptr) {
+    return;
+  }
+  fprintf(f, "filelen=%lld\n", (long long)m_fileLen);
+  for (int i = 0; i < m_thread_num; i++) {
+    if (m_Easy_List[i] != nullptr) {
+      /* 已写字节 = 写回调推进到的位置 - 分片起点（含续传起点） */
+      long long written =
+          (long long)(m_Easy_List[i]->offset - m_Easy_List[i]->part_start);
+      if (written < 0) written = 0;
+      fprintf(f, "%lld,%lld\n", (long long)m_Easy_List[i]->part_start,
+              written);
+    }
+  }
+  fclose(f);
+}
+
+void Ccurl::ClearPartMeta() {
+  const std::string path = MetaPath();
+#ifdef _WIN32
+  _wremove(Utf8ToWide(path).c_str());
+#else
+  remove(path.c_str());
+#endif
 }
 
 
@@ -545,56 +623,71 @@ bool Ccurl::File_Init(const char* filename) {
     return false;
   }
 
-  /* 断点续传：检测本地已存在文件大小 */
+  /* 分片级断点续传：可信来源 = .curlbolt.part 元数据。
+   * mmap 预分配使文件大小恒等于 m_fileLen，stat 判断会误判"已完整"
+   * （暂停后继续"瞬间完成"无流量的 bug 根因）；无元数据 → 保守全量重下 */
   m_resume_len = 0;
+  m_part_written.clear();
+  bool have_part_meta = false;
 #ifdef _WIN32
   std::wstring wfile = Utf8ToWide(filename);  /* UTF-8 → UTF-16，支持中文路径（§5.4） */
   struct _stat64 st;
-  if (_wstat64(wfile.c_str(), &st) == 0 && (st.st_mode & _S_IFREG)) {
-    m_resume_len = (int64_t)st.st_size;
+  if (_wstat64(wfile.c_str(), &st) == 0 && (st.st_mode & _S_IFREG) &&
+      st.st_size > 0) {
+    have_part_meta = LoadPartMeta();
   }
 #else
   struct stat st;
-  if (stat(filename, &st) == 0 && S_ISREG(st.st_mode)) {
-    m_resume_len = st.st_size;
+  if (stat(filename, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+    have_part_meta = LoadPartMeta();
   }
 #endif
-  if (m_resume_len >= m_fileLen) {
-    LOG_INFO("file already complete (%lld bytes), skip download\n",
-             (long long)m_resume_len);
-    return true;  /* 文件已就绪，无需下载 */
-  }
-  if (m_resume_len > 0) {
-    LOG_INFO("resume from existing %lld bytes\n", (long long)m_resume_len);
+  if (have_part_meta) {
+    LOG_INFO("resume meta found, %d parts\n", (int)m_part_written.size());
+  } else if (st.st_size > 0) {
+    LOG_INFO("existing file without resume meta (%lld bytes), redownload\n",
+             (long long)st.st_size);
   }
 
-  /* 服务器不支持 Range 时退化为单线程整段下载；断点数据无法续接，丢弃重来 */
+  /* 服务器不支持 Range：退化单线程整段，无法分片续传，丢弃元数据重来 */
   int open_flags = O_RDWR | O_CREAT;
   if (!m_range_supported) {
     m_thread_num = 1;
-    if (m_resume_len > 0) {
-      LOG_INFO("server does not support Range, discard existing %lld bytes and restart\n",
-               (long long)m_resume_len);
-      m_resume_len = 0;
+    if (have_part_meta) {
+      LOG_INFO("server does not support Range, discard resume meta and restart\n");
+      m_part_written.clear();
+      have_part_meta = false;
+      ClearPartMeta();
       open_flags |= O_TRUNC;
     }
   }
-  /* 剩余字节数小于线程数时，线程数不超过剩余字节数 */
-  int64_t remain = m_fileLen - m_resume_len;
-  if (remain < m_thread_num) {
-    m_thread_num = (int)remain;
-  }
-  /* 最小分片 1MB：避免小文件/高线程数时每线程分到几 KB 碎块（连接开销反而拖慢）。
-   * 例：26KB 文件 → 1 线程；50MB → 最多 50 线程（仍受请求线程数与 MaxThread 约束） */
+
+  /* 线程数：基于整个文件（最小分片 1MB；分片划分与 resume 无关，位置固定） */
   {
     const int64_t kMinPartSize = 1 << 20; /* 1MB */
-    int max_threads_by_size = (int)(remain / kMinPartSize);
+    int max_threads_by_size = (int)(m_fileLen / kMinPartSize);
     if (max_threads_by_size < 1) {
       max_threads_by_size = 1;
     }
     if (m_thread_num > max_threads_by_size) {
       m_thread_num = max_threads_by_size;
     }
+  }
+  /* 元数据分片数必须与当前划分一致（线程数/划分变化 → 作废重来） */
+  if (have_part_meta && (int)m_part_written.size() != m_thread_num) {
+    LOG_INFO("resume meta part count mismatch (%d vs %d), discard\n",
+             (int)m_part_written.size(), m_thread_num);
+    m_part_written.clear();
+    have_part_meta = false;
+    ClearPartMeta();
+  }
+  /* 续传基数（总进度计算用）：各分片已写字节之和 */
+  if (have_part_meta) {
+    for (int64_t w : m_part_written) {
+      m_resume_len += w;
+    }
+    LOG_INFO("resume from part meta: %lld bytes done, %d parts\n",
+             (long long)m_resume_len, m_thread_num);
   }
 
 #ifdef _WIN32
@@ -669,27 +762,40 @@ bool Ccurl::File_Init(const char* filename) {
   }
 #endif
   /**
-   * 分片示意：剩余区间 [m_resume_len, m_fileLen-1] 按线程数均分，最后一个线程负责余数：
+   * 分片示意：整个文件 [0, m_fileLen-1] 按线程数均分（划分与 resume 无关，位置固定），
+   * 续传时每分片从元数据记录的已写位置继续：
    *  --------------------------------------------------------
    * |              |              |               |         |
    * |  1st part    |  2st part    |   3rd part    | ....... |
    * ---------------------------------------------------------
    */
-  int64_t part_Size = remain / m_thread_num;
+  int64_t part_Size = m_fileLen / m_thread_num;
   for (int i = 0; i < m_thread_num; i++) {
     m_Easy_List[i] = (st_EasyList*)malloc(sizeof(st_EasyList));
-    m_Easy_List[i]->part_start = m_resume_len + i * part_Size;   /* 初始偏移（算分片总长） */
-    m_Easy_List[i]->offset = m_Easy_List[i]->part_start;
+    m_Easy_List[i]->part_start = i * part_Size;   /* 文件内分片起点（算分片总长） */
     if (i < m_thread_num - 1) {
-      m_Easy_List[i]->end = m_resume_len + (i + 1) * part_Size - 1;
+      m_Easy_List[i]->end = (i + 1) * part_Size - 1;
     } else {
       m_Easy_List[i]->end = m_fileLen - 1;  /* 最后一个线程负责余数部分 */
     }
+    /* 分片级续传：已满 → 标记成功跳过；否则从 part_start + written 继续 */
+    const int64_t part_len =
+        m_Easy_List[i]->end - m_Easy_List[i]->part_start + 1;
+    int64_t written =
+        (have_part_meta && i < (int)m_part_written.size())
+            ? m_part_written[i]
+            : 0;
+    if (written >= part_len) {
+      m_Easy_List[i]->success = true;
+      m_Easy_List[i]->offset = m_Easy_List[i]->end + 1;
+    } else {
+      m_Easy_List[i]->success = false;
+      m_Easy_List[i]->offset = m_Easy_List[i]->part_start + written;
+    }
     m_Easy_List[i]->file_ptr = m_pTrunck;
     m_Easy_List[i]->url = m_url.c_str();
-    m_Easy_List[i]->download_len = 0;
+    m_Easy_List[i]->download_len = written;  /* 进度回调基数：续传时含已写部分 */
     m_Easy_List[i]->use_range = m_range_supported;
-    m_Easy_List[i]->success = false;
     m_Easy_List[i]->thread_created = false;
     m_Easy_List[i]->timeout = m_timeout;
     m_Easy_List[i]->referer = m_referer.c_str();

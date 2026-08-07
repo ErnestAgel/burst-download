@@ -576,9 +576,11 @@ void RemoveDownloadArtifacts(const std::string& base, bool video) {
         for (const char* e : exts) {
             RemoveFile(base + e);
             RemoveFile(base + "_full" + e);
+            RemoveFile(base + e + ".curlbolt.part");
         }
     } else {
         RemoveFile(base);
+        RemoveFile(base + ".curlbolt.part");
     }
 }
 
@@ -604,98 +606,82 @@ void StopAndClear(DownloadWorker& worker) {
 void RenderProgress(const DownloadSnapshot& snap) {
     ImGui::Separator();
     ImGui::Text("%s", i18n::T("label.total"));
-    /* 总进度条 */
-    char buf[128];
-    if (snap.totalSpeed > 0) {
-        snprintf(buf, sizeof(buf), "%.1f%%  |  %.2f MB/s  |  ETA %s",
-                 snap.totalPercent, snap.totalSpeed / (1024.0 * 1024.0),
-                 snap.eta.c_str());
-    } else {
-        snprintf(buf, sizeof(buf), "%.1f%%  |  ETA %s", snap.totalPercent,
-                 snap.eta.c_str());
-    }
-    ImGui::ProgressBar((float)(snap.totalPercent / 100.0),
-                       ImVec2(-1.0f, 0), buf);
-
-    /* 每线程进度表（F5）：底槽=分片区间（浮动于文件刻度，体现文件内位置），
-     * 填充=分片内完成度（突显当前分片下载进度，用户需求）
-     * 行 = [分片 #i] [文件刻度: ▍分片条▍] [分片完成度% | 速率]
-     * 断点续传后总进度从暂停位置续走（各线程为新分片布局，正常现象） */
-    if (!snap.threads.empty()) {
-        ImGui::Text("%s", i18n::T("label.thread"));
-        ImGui::BeginChild("##threads_list",
-                          ImVec2(0, ImGui::GetFrameHeight() *
-                                         snap.threads.size() +
-                                         8.0f),
-                          true);
-        for (const auto& t : snap.threads) {
-            char label[64];
-            snprintf(label, sizeof(label), "%s #%d", i18n::T("label.thread"),
-                     t.id);
-            ImGui::Text("%s", label);
-            ImGui::SameLine();
-            /* 分片完成度（突显）：(downloaded-file_start)/(total-file_start) */
-            double seg_done = (double)(t.downloaded - t.file_start);
-            double seg_total = (double)(t.total - t.file_start);
-            int seg_pct = (seg_total > 0) ? (int)(seg_done / seg_total * 100.0)
-                                          : 0;
-            if (seg_pct < 0) seg_pct = 0;
-            if (seg_pct > 100) seg_pct = 100;
-            char range_txt[96];
-            snprintf(range_txt, sizeof(range_txt), "%d%%  %.2f MB/s", seg_pct,
-                     t.speed / (1024.0 * 1024.0));
-            float right_w = ImGui::CalcTextSize(range_txt).x + 6.0f;
-            float bar_w = ImGui::GetContentRegionAvail().x - right_w;
-            if (bar_w < 40.0f) {
-                bar_w = 40.0f;
-            }
-            /* 文件刻度条：分片区间 [file_start, total] 浮动，填充 = 分片完成度 */
-            {
-                ImDrawList* draw = ImGui::GetWindowDrawList();
-                const float h = ImGui::GetFrameHeight() * 0.55f;
-                const ImVec2 pos = ImGui::GetCursorScreenPos();
-                const float y0 =
-                    pos.y + (ImGui::GetFrameHeight() - h) * 0.5f;
-                float s = (t.file_total > 0)
-                              ? (float)t.file_start / (float)t.file_total
-                              : 0.0f;
-                float e = (t.file_total > 0)
-                              ? (float)t.total / (float)t.file_total
-                              : 1.0f;
-                if (s < 0.0f) s = 0.0f;
+    /* 总进度条（F6）：分段绘制分片效果 —— 每段=一个线程分片，
+     * 已完成段绿色、进行中段主题色、未开始留底；段间竖线分隔 */
+    {
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const float bar_w = ImGui::GetContentRegionAvail().x;
+        const float bar_h = 20.0f;
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const float radius = 6.0f;
+        const ImU32 bg = ImGui::GetColorU32(ImGuiCol_FrameBg);
+        const ImU32 accent = ImGui::GetColorU32(ImGuiCol_CheckMark);
+        const ImU32 green = IM_COL32(0x52, 0xA1, 0x63, 255); /* One Dark 绿 */
+        const ImU32 border = ImGui::GetColorU32(ImGuiCol_Border);
+        /* 底槽 */
+        draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h), bg,
+                            radius);
+        if (!snap.threads.empty() && snap.threads[0].file_total > 0) {
+            const double ft = (double)snap.threads[0].file_total;
+            for (const auto& t : snap.threads) {
+                float s = (float)((double)t.file_start / ft);
+                float e = (float)((double)t.total / ft);
+                float cur = (float)((double)t.downloaded / ft);
                 if (s > 1.0f) s = 1.0f;
-                if (e < s) e = s;
-                /* 底槽 = 分片区间 */
-                draw->AddRectFilled(
-                    ImVec2(pos.x + bar_w * s, y0),
-                    ImVec2(pos.x + bar_w * e, y0 + h),
-                    ImGui::GetColorU32(ImGuiCol_FrameBg), h * 0.5f);
-                /* 填充 = 分片内已下载（分片完成度） */
-                if (t.downloaded > t.file_start) {
-                    float ep = (t.file_total > 0)
-                                   ? (float)t.downloaded / (float)t.file_total
-                                   : s;
-                    if (ep > e) ep = e;
-                    draw->AddRectFilled(
-                        ImVec2(pos.x + bar_w * s, y0),
-                        ImVec2(pos.x + bar_w * ep, y0 + h),
-                        ImGui::GetColorU32(ImGuiCol_CheckMark), h * 0.5f);
+                if (e > 1.0f) e = 1.0f;
+                if (cur > e) cur = e;
+                bool done = (t.downloaded >= t.total);
+                if (done) {
+                    /* 已完成分片：绿色段 */
+                    draw->AddRectFilled(ImVec2(pos.x + bar_w * s, pos.y),
+                                        ImVec2(pos.x + bar_w * e,
+                                               pos.y + bar_h),
+                                        green);
+                } else if (cur > s) {
+                    /* 进行中分片：主题色填充到当前下载位置 */
+                    draw->AddRectFilled(ImVec2(pos.x + bar_w * s, pos.y),
+                                        ImVec2(pos.x + bar_w * cur,
+                                               pos.y + bar_h),
+                                        accent);
                 }
-                /* 分片起点竖线标记（文件内位置） */
-                if (s > 0.001f) {
-                    draw->AddLine(ImVec2(pos.x + bar_w * s, y0 - 2.0f),
-                                  ImVec2(pos.x + bar_w * s, y0 + h + 2.0f),
-                                  ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
+                /* 分片边界竖线 */
+                if (s > 0.001f && s < 0.999f) {
+                    draw->AddLine(ImVec2(pos.x + bar_w * s, pos.y + 2.0f),
+                                  ImVec2(pos.x + bar_w * s,
+                                         pos.y + bar_h - 2.0f),
+                                  border, 1.0f);
                 }
-                ImGui::Dummy(ImVec2(bar_w, ImGui::GetFrameHeight()));
             }
-            ImGui::SameLine();
-            ImGui::Text("%s", range_txt);
+        } else if (snap.totalPercent > 0.0) {
+            /* 无分片数据（解析/合并阶段）：按总进度简单填充 */
+            draw->AddRectFilled(
+                pos,
+                ImVec2(pos.x + bar_w * (float)(snap.totalPercent / 100.0),
+                       pos.y + bar_h),
+                accent);
         }
-        ImGui::EndChild();
+        /* 外框 */
+        draw->AddRect(pos, ImVec2(pos.x + bar_w, pos.y + bar_h), border,
+                      radius);
+        ImGui::Dummy(ImVec2(bar_w, bar_h));
     }
 
-    /* 阶段状态文本（F8；视频模式细分：解析中/下载视频轨/下载音频轨/合并中） */
+    /* 总进度条右下方：总体百分比 + 总体下载速度（用户需求） */
+    {
+        char info[128];
+        if (snap.totalSpeed > 0) {
+            snprintf(info, sizeof(info), "%.1f%%  |  %.2f MB/s",
+                     snap.totalPercent,
+                     snap.totalSpeed / (1024.0 * 1024.0));
+        } else {
+            snprintf(info, sizeof(info), "%.1f%%", snap.totalPercent);
+        }
+        float txt_w = ImGui::CalcTextSize(info).x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                             ImGui::GetContentRegionAvail().x - txt_w);
+        ImGui::Text("%s", info);
+    }
+
     const char* stage_txt = i18n::T("stage.idle");
     switch (snap.stage) {
         case STAGE_DOWNLOADING: stage_txt = i18n::T("stage.downloading"); break;

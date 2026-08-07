@@ -198,4 +198,12 @@ private:
     std::atomic<bool> m_cancel_flag{false};  /**< 取消标志（Cancel() 置位，回调检查点读取） */
     std::string m_last_error;       /**< 最近一次失败的具体原因（LastError() 读取） */
     bool m_range_known = false;     /**< Range 支持是否已由 HEAD/Accept-Ranges 确认（省一次探测请求） */
+
+    /* ---- 分片级断点续传元数据（.curlbolt.part，修复 mmap 预分配导致
+     *      stat 文件大小恒等于 m_fileLen、resume 误判"已完整"的问题） ---- */
+    std::vector<int64_t> m_part_written; /**< 每分片实际已写入字节数（顺序对应分片序） */
+    bool LoadPartMeta();                 /**< 读元数据（校验 filelen 匹配）→ m_part_written */
+    void SavePartMeta();                 /**< 写当前各分片已写字节 */
+    void ClearPartMeta();                /**< 删除元数据文件 */
+    std::string MetaPath() const;        /**< <目标文件>.curlbolt.part */
 };

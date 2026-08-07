@@ -286,7 +286,7 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
         SetStage(STAGE_CANCELED, "canceled",
                  "[INFO] 已取消，部分文件保留可续传");
     } else {
-        m_snapshot.error = "下载失败（部分分片未完成），详见 download.log";
+        m_snapshot.error = "下载失败（部分线程未完成），详见 download.log";
         SetStage(STAGE_ERROR, "error",
                  "[ERROR] 下载失败: " + url);
     }

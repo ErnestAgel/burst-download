@@ -155,12 +155,15 @@ VideoResult VideoDownloader::Run(const std::string& video_url,
         if (MergeMp4(vfile, afile, merged, merr)) {
             Log("[INFO] 已自动合并音视频轨 -> " + merged);
             m_output_path = merged;
-            /* 合并成功：删除音视频中间文件，仅保留合并产物
+            /* 合并成功：删除音视频中间文件与分片续传元数据，仅保留合并产物
              * （std::filesystem::remove 跨平台，Windows 中文路径无乱码） */
             std::error_code rm_ec;
             bool v_ok = std::filesystem::remove(vfile, rm_ec);
             rm_ec.clear();
             bool a_ok = std::filesystem::remove(afile, rm_ec);
+            std::filesystem::remove(vfile + ".curlbolt.part", rm_ec);
+            rm_ec.clear();
+            std::filesystem::remove(afile + ".curlbolt.part", rm_ec);
             if (v_ok && a_ok) {
                 Log("[INFO] 已清理中间文件: " + vfile + ", " + afile);
             } else {

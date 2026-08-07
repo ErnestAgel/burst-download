@@ -62,7 +62,7 @@ const Entry kStrings[] = {
     {"label.total", "总进度", "Total"},
     {"label.speed", "速度", "Speed"},
     {"label.eta", "剩余时间", "ETA"},
-    {"label.thread", "分片", "Part"},
+    {"label.thread", "线程", "Thread"},
     {"label.size", "已下载", "Downloaded"},
     {"label.log", "日志", "Log"},
     /* 设置 */
