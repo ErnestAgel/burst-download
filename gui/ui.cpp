@@ -606,61 +606,117 @@ void StopAndClear(DownloadWorker& worker) {
 void RenderProgress(const DownloadSnapshot& snap) {
     ImGui::Separator();
     ImGui::Text("%s", i18n::T("label.total"));
-    /* 总进度条（F6）：分段绘制分片效果 —— 每段=一个线程分片，
-     * 已完成段绿色、进行中段主题色、未开始留底；段间竖线分隔 */
+    /* 总进度条（F6）：3D 圆柱体风格 —— 底槽/填充均为胶囊形（radius=高/2）+ 垂直渐变
+     * （AddRectFilledMultiColor 顶部亮→底部暗，模拟圆柱曲面），分片效果：
+     * 全部填充为绿色（用户需求，不再用蓝色），段间深色分隔线，未下载区留暗色底槽。
+     * 填充圆角与底槽边缘完全贴合（首段左圆、末段右圆、单段全圆）。 */
     {
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const float bar_w = ImGui::GetContentRegionAvail().x;
         const float bar_h = 20.0f;
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        const float radius = 6.0f;
-        const ImU32 bg = ImGui::GetColorU32(ImGuiCol_FrameBg);
-        const ImU32 accent = ImGui::GetColorU32(ImGuiCol_CheckMark);
-        const ImU32 green = IM_COL32(0x52, 0xA1, 0x63, 255); /* One Dark 绿 */
-        const ImU32 border = ImGui::GetColorU32(ImGuiCol_Border);
-        /* 底槽 */
-        draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h), bg,
-                            radius);
+        const float radius = bar_h * 0.5f; /* 胶囊圆角 = 圆柱端面 */
+        /* 圆柱体：统一色 + 顶部高光(亮) + 底部阴影(暗)（1.93 渐变 API 无圆角，改用分层绘制） */
+        const ImU32 bg_mid = IM_COL32(0x3A, 0x3A, 0x3A, 255);
+        const ImU32 gn_mid = IM_COL32(0x5E, 0xA8, 0x4E, 255); /* 绿色填充（不再用蓝色） */
+        const ImU32 gn_hi  = IM_COL32(255, 255, 255, 40);    /* 填充高光 */
+        const ImU32 gn_lo  = IM_COL32(0, 0, 0, 52);          /* 填充阴影 */
+        const ImU32 sep = IM_COL32(0x10, 0x10, 0x10, 170);   /* 段分隔线 */
+        const ImU32 border = IM_COL32(0x6A, 0x6A, 0x6A, 255);
+        /* 底槽（胶囊 + 高光/阴影） */
+        draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h),
+                            bg_mid, radius);
+        draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.32f),
+                            IM_COL32(255, 255, 255, 16), radius,
+                            ImDrawFlags_RoundCornersAll);
+        draw->AddRectFilled(ImVec2(pos.x, pos.y + bar_h * 0.8f),
+                            ImVec2(pos.x + bar_w, pos.y + bar_h),
+                            IM_COL32(0, 0, 0, 40), radius,
+                            ImDrawFlags_RoundCornersAll);
         if (!snap.threads.empty() && snap.threads[0].file_total > 0) {
             const double ft = (double)snap.threads[0].file_total;
-            for (const auto& t : snap.threads) {
+            /* 找出填充段的首/末索引（决定圆角端） */
+            int first_fill = -1, last_fill = -1;
+            for (int i = 0; i < (int)snap.threads.size(); i++) {
+                if (snap.threads[i].downloaded > snap.threads[i].file_start) {
+                    if (first_fill < 0) first_fill = i;
+                    last_fill = i;
+                }
+            }
+            for (int i = 0; i < (int)snap.threads.size(); i++) {
+                const auto& t = snap.threads[i];
                 float s = (float)((double)t.file_start / ft);
                 float e = (float)((double)t.total / ft);
                 float cur = (float)((double)t.downloaded / ft);
                 if (s > 1.0f) s = 1.0f;
                 if (e > 1.0f) e = 1.0f;
                 if (cur > e) cur = e;
-                bool done = (t.downloaded >= t.total);
-                if (done) {
-                    /* 已完成分片：绿色段 */
-                    draw->AddRectFilled(ImVec2(pos.x + bar_w * s, pos.y),
-                                        ImVec2(pos.x + bar_w * e,
-                                               pos.y + bar_h),
-                                        green);
-                } else if (cur > s) {
-                    /* 进行中分片：主题色填充到当前下载位置 */
-                    draw->AddRectFilled(ImVec2(pos.x + bar_w * s, pos.y),
-                                        ImVec2(pos.x + bar_w * cur,
-                                               pos.y + bar_h),
-                                        accent);
-                }
-                /* 分片边界竖线 */
+                /* 分片边界竖线（画在底槽上） */
                 if (s > 0.001f && s < 0.999f) {
-                    draw->AddLine(ImVec2(pos.x + bar_w * s, pos.y + 2.0f),
+                    draw->AddLine(ImVec2(pos.x + bar_w * s, pos.y + 1.0f),
                                   ImVec2(pos.x + bar_w * s,
+                                         pos.y + bar_h - 1.0f),
+                                  sep, 1.0f);
+                }
+                if (t.downloaded <= t.file_start) {
+                    continue; /* 未开始分片：留暗色底槽 */
+                }
+                /* 圆角端：首段左圆、末段右圆、单段全圆（贴合圆柱边缘） */
+                ImDrawFlags flags = 0;
+                if (i == first_fill && i == last_fill) {
+                    flags = ImDrawFlags_RoundCornersAll;
+                } else if (i == first_fill) {
+                    flags = ImDrawFlags_RoundCornersLeft;
+                } else if (i == last_fill) {
+                    flags = ImDrawFlags_RoundCornersRight;
+                }
+                /* 绿色填充（圆柱：统一色 + 高光 + 阴影），圆角端贴合圆柱边缘 */
+                draw->AddRectFilled(
+                    ImVec2(pos.x + bar_w * s, pos.y),
+                    ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_mid,
+                    radius, flags);
+                draw->AddRectFilled(
+                    ImVec2(pos.x + bar_w * s, pos.y),
+                    ImVec2(pos.x + bar_w * cur, pos.y + bar_h * 0.35f),
+                    gn_hi, radius,
+                    (ImDrawFlags)(flags | ImDrawFlags_RoundCornersTop));
+                draw->AddRectFilled(
+                    ImVec2(pos.x + bar_w * s, pos.y + bar_h * 0.72f),
+                    ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_lo,
+                    radius,
+                    (ImDrawFlags)(flags | ImDrawFlags_RoundCornersBottom));
+                /* 分片内已下载边界（深色细线，区别于分片起点线） */
+                if (cur > s && cur < e - 0.001f) {
+                    draw->AddLine(ImVec2(pos.x + bar_w * cur, pos.y + 2.0f),
+                                  ImVec2(pos.x + bar_w * cur,
                                          pos.y + bar_h - 2.0f),
-                                  border, 1.0f);
+                                  IM_COL32(0, 0, 0, 90), 1.0f);
                 }
             }
         } else if (snap.totalPercent > 0.0) {
-            /* 无分片数据（解析/合并阶段）：按总进度简单填充 */
+            /* 无分片数据（解析/合并阶段）：按总进度绿色渐变填充（左圆右直角） */
+            float cur = (float)(snap.totalPercent / 100.0);
+            if (cur > 1.0f) cur = 1.0f;
+            ImDrawFlags f2 = cur >= 0.999f ? ImDrawFlags_RoundCornersAll
+                                            : ImDrawFlags_RoundCornersLeft;
+            draw->AddRectFilled(pos, ImVec2(pos.x + bar_w * cur, pos.y + bar_h),
+                                gn_mid, radius, f2);
+            draw->AddRectFilled(pos,
+                                ImVec2(pos.x + bar_w * cur,
+                                       pos.y + bar_h * 0.35f),
+                                gn_hi, radius,
+                                (ImDrawFlags)(f2 | ImDrawFlags_RoundCornersTop));
             draw->AddRectFilled(
-                pos,
-                ImVec2(pos.x + bar_w * (float)(snap.totalPercent / 100.0),
-                       pos.y + bar_h),
-                accent);
+                ImVec2(pos.x, pos.y + bar_h * 0.72f),
+                ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_lo, radius,
+                (ImDrawFlags)(f2 | ImDrawFlags_RoundCornersBottom));
         }
-        /* 外框 */
+        /* 圆柱高光（顶部细亮条）与边框 */
+        draw->AddRectFilled(
+            pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.18f),
+            IM_COL32(255, 255, 255, 18), radius,
+            ImDrawFlags_RoundCornersTop | ImDrawFlags_RoundCornersLeft |
+                ImDrawFlags_RoundCornersRight);
         draw->AddRect(pos, ImVec2(pos.x + bar_w, pos.y + bar_h), border,
                       radius);
         ImGui::Dummy(ImVec2(bar_w, bar_h));
