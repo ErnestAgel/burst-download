@@ -1,6 +1,14 @@
 /**
  * @file toggle.cpp
- * @brief 双向拨动开关实现（§3.2）
+ * @brief 模式切换 Switch 开关实现（§3.2/F1，iOS 风格拨杆）
+ *
+ * 布局：[文件下载] (●———) [视频下载]
+ *   - 滑块在左 + 底槽灰 = 文件模式（OFF）；滑块在右 + 底槽主题色 = 视频模式（ON）
+ *   - 点击整条任意处切换；滑块位置按 anim(0~1) 平滑滑动
+ *   - 两端标签：激活侧亮色、非激活侧暗色
+ *
+ * 实现：整条 InvisibleButton（标准 ButtonBehavior 状态机）处理点击/激活，
+ * ImDrawList 按绝对坐标绘制；仅用 imgui.h 公开 API（不依赖 imgui_internal）。
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -9,98 +17,82 @@
 
 #include "toggle.h"
 
-#include "imgui_internal.h"  /* ImGuiWindow/GImGui/ImRect/ButtonBehavior 等内部 API */
+#include <algorithm>
+#include <cmath>
 
 bool ToggleMode(const char* left, const char* right, bool& videoMode,
                 float width) {
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
-    if (window->SkipItems) {
-        return false;
-    }
-    ImGuiContext& g = *GImGui;
-    const ImGuiStyle& style = g.Style;
+    (void)width; /* 自适应内容宽度（旧 width 参数保留兼容） */
 
-    /* 尺寸：高度按文本行高 + 内边距 */
-    const float height = ImGui::GetFrameHeight() + 4.0f;
-    const ImVec2 size(width, height);
-    const ImRect bb(window->DC.CursorPos,
-                    ImVec2(window->DC.CursorPos.x + size.x,
-                           window->DC.CursorPos.y + size.y));
-    ImGui::ItemSize(size, style.FramePadding.y);
-    if (!ImGui::ItemAdd(bb, 0)) {
-        return false;
-    }
+    /* 开关尺寸（iOS 风格） */
+    const float switch_w = 46.0f; /* 底槽宽 */
+    const float switch_h = 24.0f; /* 底槽高 */
+    const float gap = 10.0f;      /* 文字与开关间距 */
 
-    /* 命中区域（InvisibleButton 等价物） */
-    bool hovered, held;
-    bool pressed = ImGui::ButtonBehavior(bb, ImGui::GetID(left), &hovered,
-                                         &held, ImGuiButtonFlags_None);
+    const ImVec2 ls = ImGui::CalcTextSize(left);
+    const ImVec2 rs = ImGui::CalcTextSize(right);
+    const float total_w = ls.x + gap + switch_w + gap + rs.x;
+    const float total_h = std::max(std::max(ls.y, rs.y), switch_h);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
 
-    /* 点击切换模式 */
-    bool changed = false;
-    if (pressed) {
+    /* 点击：整条 InvisibleButton（ID 固定 "##toggle_switch"，语言切换不影响） */
+    ImGui::SetCursorScreenPos(pos);
+    const bool clicked = ImGui::InvisibleButton(
+        "##toggle_switch", ImVec2(total_w, total_h));
+    const bool hovered = ImGui::IsItemHovered(); /* 立即读取，防后续覆盖 LastItem */
+    if (clicked) {
         videoMode = !videoMode;
-        changed = true;
     }
 
-    /* 滑块动画：0.0=左侧(文件)，1.0=右侧(视频) */
+    /* 滑块动画：anim 0=左(文件) 1=右(视频)，~180ms 平滑滑动 */
     ImGuiID anim_id = ImGui::GetID("##toggle_anim");
     float& anim = *(float*)ImGui::GetStateStorage()->GetFloatRef(
         anim_id, videoMode ? 1.0f : 0.0f);
     const float target = videoMode ? 1.0f : 0.0f;
     if (anim != target) {
-        float speed = 1.0f / ImMax(1.0f, 1.0f / 60.0f) * 0.18f; /* ~180ms 滑动 */
-        anim += (target - anim) * ImMin(1.0f, g.IO.DeltaTime * speed);
-        if (ImFabs(target - anim) < 0.005f) {
+        anim += (target - anim) *
+                std::min(1.0f, ImGui::GetIO().DeltaTime * 12.0f);
+        if (std::fabs(target - anim) < 0.005f) {
             anim = target;
         }
     }
 
-    /* 绘制 */
-    ImDrawList* draw = window->DrawList;
-    const ImU32 bg = ImGui::GetColorU32(ImGuiCol_FrameBg);
-    const ImU32 bg_hover = ImGui::GetColorU32(ImGuiCol_FrameBgHovered);
-    const ImU32 accent = ImGui::GetColorU32(ImGuiCol_ButtonActive);
-    const ImU32 text = ImGui::GetColorU32(ImGuiCol_Text);
-    const float radius = height * 0.5f;
+    /* 各元素位置（整条垂直居中） */
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float cy = pos.y + total_h * 0.5f;
+    const ImVec2 lpos(pos.x, cy - ls.y * 0.5f);
+    const ImVec2 sw_min(pos.x + ls.x + gap, cy - switch_h * 0.5f);
+    const ImVec2 sw_max(sw_min.x + switch_w, sw_min.y + switch_h);
+    const ImVec2 rpos(sw_max.x + gap, cy - rs.y * 0.5f);
 
-    /* 底槽（圆角矩形） */
-    draw->AddRectFilled(bb.Min, bb.Max, hovered ? bg_hover : bg, radius);
-
-    /* 激活侧高亮：左侧文件(anim<0.5) 或 右侧视频(anim>=0.5) */
-    const float mid_x = bb.Min.x + width * 0.5f;
-    if (anim < 0.5f) {
-        draw->AddRectFilled(bb.Min, ImVec2(mid_x, bb.Max.y), accent, radius,
-                            ImDrawFlags_None);
-        /* 右侧被覆盖部分无需圆角补齐：用直角矩形盖住衔接处 */
-        draw->AddRectFilled(ImVec2(mid_x - radius, bb.Min.y),
-                            ImVec2(mid_x, bb.Max.y), accent);
-    } else {
-        draw->AddRectFilled(ImVec2(mid_x, bb.Min.y), bb.Max, accent, radius,
-                            ImDrawFlags_None);
-        draw->AddRectFilled(ImVec2(mid_x, bb.Min.y),
-                            ImVec2(mid_x + radius, bb.Max.y), accent);
+    /* 底槽：OFF 灰 / ON 主题强调色（CheckMark 在 One Dark 下为强调蓝） */
+    const ImU32 on_col = ImGui::GetColorU32(ImGuiCol_CheckMark);
+    const ImU32 off_col = ImGui::GetColorU32(ImGuiCol_FrameBg);
+    const ImU32 track_col = (anim >= 0.5f) ? on_col : off_col;
+    const float radius = switch_h * 0.5f;
+    draw->AddRectFilled(sw_min, sw_max, track_col, radius);
+    /* hover 提示：底槽描边 */
+    if (hovered) {
+        draw->AddRect(sw_min, sw_max, ImGui::GetColorU32(ImGuiCol_Border),
+                      radius, 0, 1.0f);
     }
 
-    /* 标签文本（滑块高亮已表达激活状态，不做激活侧变色） */
-    ImVec2 ls = ImGui::CalcTextSize(left);
-    ImVec2 rs = ImGui::CalcTextSize(right);
-    ImVec2 lpos(bb.Min.x + (width * 0.5f - ls.x) * 0.5f,
-                bb.Min.y + (height - ls.y) * 0.5f);
-    ImVec2 rpos(bb.Min.x + width * 0.5f + (width * 0.5f - rs.x) * 0.5f,
-                bb.Min.y + (height - rs.y) * 0.5f);
-    draw->AddText(lpos, text, left);
-    draw->AddText(rpos, text, right);
+    /* 圆形滑块（白色拨杆），按 anim 从左滑到右 */
+    const float knob_d = switch_h - 6.0f;
+    const float kx0 = sw_min.x + 3.0f + knob_d * 0.5f;
+    const float kx1 = sw_max.x - 3.0f - knob_d * 0.5f;
+    const float kx = kx0 + (kx1 - kx0) * anim;
+    draw->AddCircleFilled(ImVec2(kx, cy), knob_d * 0.5f,
+                          IM_COL32(255, 255, 255, 255));
+    /* 滑块边缘（立体感） */
+    draw->AddCircle(ImVec2(kx, cy), knob_d * 0.5f,
+                    ImGui::GetColorU32(ImGuiCol_Border), 0, 1.0f);
 
-    /* 滑动圆钮（按 anim 位置，圆钮覆盖在激活侧） */
-    const float knob_d = height - 8.0f;
-    const float x0 = bb.Min.x + 4.0f;
-    const float x1 = bb.Max.x - 4.0f - knob_d;
-    const float kx = x0 + (x1 - x0) * anim;
-    const float ky = bb.Min.y + (height - knob_d) * 0.5f;
-    draw->AddCircleFilled(ImVec2(kx + knob_d * 0.5f, ky + knob_d * 0.5f),
-                          knob_d * 0.5f,
-                          ImGui::GetColorU32(ImGuiCol_SeparatorHovered));
+    /* 标签文字：激活侧亮、非激活侧暗（视频模式 → 右侧亮） */
+    const ImU32 text_on = ImGui::GetColorU32(ImGuiCol_Text);
+    const ImU32 text_off = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    draw->AddText(lpos, videoMode ? text_off : text_on, left);
+    draw->AddText(rpos, videoMode ? text_on : text_off, right);
 
-    return changed;
+    return clicked;
 }
