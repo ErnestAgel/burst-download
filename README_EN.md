@@ -154,6 +154,8 @@ cmake --build build
 
 ## 🖥️ GUI
 
+![Burst Download GUI (Windows)](docs/GUI.png)
+
 A graphical front-end (`burst-gui`) over the CLI, currently **Phase 2: File Download + Video Download modes**, supported on **Windows x86_64 / Linux x86_64**.
 
 **Build** (`option(BUILD_GUI ON)` by default):

@@ -160,6 +160,8 @@ cmake --build build
 
 ## 🖥️ 图形界面 GUI
 
+![Burst Download GUI（Windows）](docs/GUI.png)
+
 图形界面是 CLI 的图形封装（`burst-gui`），当前为 **Phase 2：文件下载 + 视频下载模式**，支持 **Windows x86_64 / Linux x86_64**。
 
 **构建**（`option(BUILD_GUI ON)` 默认开启）：
