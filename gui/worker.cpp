@@ -159,6 +159,19 @@ void DownloadWorker::AddLog(const std::string& msg) {
     }
 }
 
+void DownloadWorker::Reset() {
+    /* 停止任务后调用：清空快照与日志回初始空闲态（调用方须确保工作线程已结束） */
+    if (m_thread.joinable()) {
+        m_thread.join();
+    }
+    m_cancel.store(false);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_snapshot = DownloadSnapshot();
+    m_snapshot.stage = STAGE_IDLE;
+    m_snapshot.eta = "--";
+    m_log.clear();
+}
+
 void DownloadWorker::SetStage(int stage, const std::string& status,
                               const std::string& logmsg) {
     std::lock_guard<std::mutex> lock(m_mutex);

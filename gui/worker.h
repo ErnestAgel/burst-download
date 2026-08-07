@@ -90,6 +90,11 @@ public:
      */
     void AddLog(const std::string& msg);
 
+    /**
+     * @brief 重置快照与日志到初始空闲态（停止任务后刷新 UI 用；须线程已结束）
+     */
+    void Reset();
+
 private:
     /** @brief 工作线程入口：执行下载任务编排 */
     void WorkerFunc(const std::string& url, const std::string& path,

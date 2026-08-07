@@ -56,12 +56,21 @@ char g_path[2048] = {0};
 int g_threads = kHardwareMax;   /* 默认 = 本机上限 */
 bool g_video_mode = false;
 
+/* 下载控制状态机（F9/F10）：IDLE → RUNNING → PAUSED → IDLE
+ *  - 下载中第一次点"取消" = 暂停意图（中止传输，保留缓存文件，可断点续传）
+ *  - 暂停后按钮1 = "继续"（续传），按钮2 = "停止"（红色，删除缓存并刷新 UI）
+ *  - g_paused=true 表示处于暂停态；g_last_path/g_last_video 供停止时删除缓存用 */
+bool g_paused = false;
+std::string g_last_path;   /* 最近任务目标路径/基础名（停止时删除缓存） */
+bool g_last_video = false; /* 最近任务是否视频模式 */
+
 /* 前向声明（RenderForm 在 OnStartClicked/StartDownload 之前定义） */
 void OnStartClicked(DownloadWorker& worker);
 void StartDownload(DownloadWorker& worker, const std::string& url,
                    const std::string& path, int threads);
 void StartVideoDownload(DownloadWorker& worker, const std::string& url,
                         const std::string& basename, int threads);
+void StopAndClear(DownloadWorker& worker);
 
 /* 弹窗状态 */
 bool g_exists_open = false;
@@ -373,27 +382,83 @@ void RenderForm(DownloadWorker& worker) {
         ImGui::TextDisabled("%s", buf);
     }
 
-    /* 下载 / 取消按钮（F9/F10） */
+    /* 下载 / 取消按钮（F9/F10）+ 暂停/继续/停止状态机：
+     *   IDLE:    [开始下载]         [取消(禁用)]
+     *   RUNNING: [下载中…(禁用)]    [取消 = 暂停意图]
+     *   PAUSED:  [继续(断点续传)]   [停止(红色, 删除缓存, 刷新初始)] */
     ImGui::Separator();
     float avail = ImGui::GetContentRegionAvail().x;
-    ImGui::BeginDisabled(running || g_pending.active);
-    if (ImGui::Button(i18n::T("button.download"),
-                      ImVec2(avail * 0.5f - 4.0f, 0))) {
-        OnStartClicked(worker);
+    if (g_paused) {
+        /* 暂停态：继续 / 停止 */
+        if (ImGui::Button(i18n::T("button.resume"),
+                          ImVec2(avail * 0.5f - 4.0f, 0))) {
+            OnStartClicked(worker); /* 继续分支（g_paused=true 时走续传） */
+        }
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0xC0, 0x3A, 0x3A, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              IM_COL32(0xD9, 0x4A, 0x4A, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              IM_COL32(0xA0, 0x2E, 0x2E, 255));
+        if (ImGui::Button(i18n::T("button.stop"),
+                          ImVec2(avail * 0.5f - 4.0f, 0))) {
+            StopAndClear(worker);
+        }
+        ImGui::PopStyleColor(3);
+    } else {
+        ImGui::BeginDisabled(running || g_pending.active);
+        if (ImGui::Button(running ? i18n::T("button.downloading")
+                                  : i18n::T("button.download"),
+                          ImVec2(avail * 0.5f - 4.0f, 0))) {
+            OnStartClicked(worker);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!running);
+        if (ImGui::Button(i18n::T("button.cancel"),
+                          ImVec2(avail * 0.5f - 4.0f, 0))) {
+            worker.Cancel();  /* 第一次取消 = 暂停意图（保留缓存，可续传） */
+            g_paused = true;  /* 乐观置位：按钮即切换为 继续/停止 */
+            worker.AddLog("[INFO] 已请求暂停：可点击『继续』断点续传，"
+                          "或『停止』删除缓存");
+        }
+        ImGui::EndDisabled();
     }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!running);
-    if (ImGui::Button(i18n::T("button.cancel"),
-                      ImVec2(avail * 0.5f - 4.0f, 0))) {
-        worker.Cancel();
-    }
-    ImGui::EndDisabled();
 }
 
 void OnStartClicked(DownloadWorker& worker) {
     std::string url(g_url);
     std::string path(g_path);
+
+    /* 暂停态点击 → 继续（断点续传）：跳过已存在检测与视频重命名，
+     * 视频模式必须沿用原 basename（g_last_path）才能续传原文件 */
+    if (g_paused) {
+        if (url.empty() || !UrlSchemeOk(url)) {
+            ShowErrorPopup(i18n::T("dialog.error.title"),
+                           i18n::T("err.url.invalid"));
+            return;
+        }
+        if (g_last_video) {
+            StartVideoDownload(worker, url, g_last_path, g_threads);
+        } else {
+            if (path.empty()) {
+                ShowErrorPopup(i18n::T("dialog.error.title"),
+                               i18n::T("err.path.empty"));
+                return;
+            }
+            /* 目录 → 拼文件名（URL 未变则同名，命中本地残留 → 断点续传） */
+            if (IsDirectoryPath(path)) {
+                std::string name = UrlFileName(url);
+                if (name.empty()) {
+                    name = CurrentTimeStamp() + ".download";
+                }
+                path = JoinPath(path, name);
+            }
+            StartDownload(worker, url, path, g_threads);
+        }
+        g_paused = false;
+        return;
+    }
 
     /* 迅雷专用链接（thunder://）解码为真实 URL */
     if (url.rfind("thunder://", 0) == 0) {
@@ -466,6 +531,8 @@ void StartDownload(DownloadWorker& worker, const std::string& url,
                    const std::string& path, int threads) {
     worker.AddLog(std::string("[INFO] URL: ") + url);
     worker.AddLog(std::string("[INFO] 保存到: ") + path);
+    g_last_path = path;
+    g_last_video = false;
     g_last_stage = STAGE_IDLE;
     if (!worker.StartFileDownload(url, path, threads, 60)) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
@@ -476,10 +543,47 @@ void StartVideoDownload(DownloadWorker& worker, const std::string& url,
                         const std::string& basename, int threads) {
     worker.AddLog(std::string("[INFO] 视频 URL: ") + url);
     worker.AddLog(std::string("[INFO] 输出基础名: ") + basename);
+    g_last_path = basename;
+    g_last_video = true;
     g_last_stage = STAGE_IDLE;
     if (!worker.StartVideoDownload(url, basename, threads, 60)) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
     }
+}
+
+/** 删除下载缓存文件（停止任务用）：
+ * 文件模式 = 目标文件；视频模式 = basename 的音视频轨与合并产物 */
+void RemoveDownloadArtifacts(const std::string& base, bool video) {
+    if (base.empty()) {
+        return;
+    }
+    if (video) {
+        const char* exts[] = {".mp4", ".m4a", ".mkv", ".webm"};
+        for (const char* e : exts) {
+            RemoveFile(base + e);
+            RemoveFile(base + "_full" + e);
+        }
+    } else {
+        RemoveFile(base);
+    }
+}
+
+/** 停止任务（红色按钮）：删除缓存文件、清理线程缓存、刷新 UI 至初始状态 */
+void StopAndClear(DownloadWorker& worker) {
+    worker.AddLog("[INFO] 已停止任务，删除缓存文件: " + g_last_path);
+    RemoveDownloadArtifacts(g_last_path, g_last_video);
+    /* 清理线程缓存与快照/日志（worker 已 idle） */
+    worker.Reset();
+    /* 刷新 UI 至初始状态：清空表单、进度、暂停态 */
+    g_paused = false;
+    g_last_path.clear();
+    g_last_video = false;
+    g_started = false;
+    g_last_stage = STAGE_IDLE;
+    g_url[0] = '\0';
+    g_path[0] = '\0';
+    g_threads = kHardwareMax;
+    worker.AddLog("[INFO] 已清空任务，可重新开始下载");
 }
 
 /* ---- 进度区渲染（F5/F6/F8） ---- */
@@ -531,7 +635,11 @@ void RenderProgress(const DownloadSnapshot& snap) {
         case STAGE_AUDIO_DL:    stage_txt = i18n::T("stage.audio"); break;
         case STAGE_MERGING:     stage_txt = i18n::T("stage.merging"); break;
         case STAGE_DONE:        stage_txt = i18n::T("stage.done"); break;
-        case STAGE_CANCELED:    stage_txt = i18n::T("stage.canceled"); break;
+        case STAGE_CANCELED:
+            /* 暂停态（第一次取消）显示"已暂停"，否则"已取消" */
+            stage_txt = g_paused ? i18n::T("stage.paused")
+                                 : i18n::T("stage.canceled");
+            break;
         case STAGE_ERROR:       stage_txt = i18n::T("stage.error"); break;
         default: break;
     }
@@ -757,15 +865,22 @@ bool Render(DownloadWorker& worker) {
     DownloadSnapshot snap;
     int stage = worker.GetSnapshot(snap);
 
-    /* 阶段边沿 → 弹窗（完成 F13 / 错误 F12 / 取消提示） */
+    /* 阶段边沿 → 弹窗（完成 F13 / 错误 F12）与暂停态确认
+     * CANCELED = 用户暂停（缓存保留，可继续/停止）；DONE/ERROR 退出暂停态 */
     if (g_started && stage != g_last_stage) {
         g_last_stage = stage;
         if (stage == STAGE_DONE) {
             g_done_path = snap.status;  /* 完成路径在日志里，此处仅提示 */
             g_done_open = true;
+            g_paused = false;
         } else if (stage == STAGE_ERROR) {
             ShowErrorPopup(i18n::T("dialog.error.title"), snap.error,
                            ErrorGuide(snap.error));
+            g_paused = false;
+        } else if (stage == STAGE_CANCELED) {
+            g_paused = true;
+            worker.AddLog("[INFO] 已暂停（缓存保留）：点击『继续』断点续传，"
+                          "或『停止』删除缓存");
         }
     }
     g_started = worker.IsRunning() || g_started;

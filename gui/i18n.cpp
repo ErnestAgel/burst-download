@@ -52,6 +52,8 @@ const Entry kStrings[] = {
      "Thread count exceeds machine limit, adjusted to %d"},
     {"button.download", "开始下载", "Start Download"},
     {"button.downloading", "下载中…", "Downloading..."},
+    {"button.resume", "继续", "Resume"},
+    {"button.stop", "停止", "Stop"},
     {"button.cancel", "取消", "Cancel"},
     {"button.minimize", "最小化", "Minimize"},
     {"button.maximize", "最大化", "Maximize"},
@@ -77,6 +79,7 @@ const Entry kStrings[] = {
     {"stage.merging", "合并中", "Merging"},
     {"stage.done", "完成", "Done"},
     {"stage.canceled", "已取消", "Canceled"},
+    {"stage.paused", "已暂停", "Paused"},
     {"stage.error", "错误", "Error"},
     /* 弹窗（F11/F12/F13） */
     {"dialog.error.title", "下载失败", "Download Failed"},
