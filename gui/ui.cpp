@@ -678,7 +678,8 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 } else if (i == nseg - 1) {
                     flags = ImDrawFlags_RoundCornersRight;
                 }
-                /* 绿色填充（圆柱：统一色 + 高光 + 阴影），圆角端贴合圆柱边缘 */
+                /* 绿色填充（圆柱体=方柱：中间分片直角，仅物理首尾圆角），
+                 * 高光/阴影 flags 与填充一致（不再强加圆角 → 中间分片保持直角） */
                 draw->AddRectFilled(
                     ImVec2(pos.x + bar_w * s, pos.y),
                     ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_mid,
@@ -686,13 +687,11 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 draw->AddRectFilled(
                     ImVec2(pos.x + bar_w * s, pos.y),
                     ImVec2(pos.x + bar_w * cur, pos.y + bar_h * 0.35f),
-                    gn_hi, radius,
-                    (ImDrawFlags)(flags | ImDrawFlags_RoundCornersTop));
+                    gn_hi, radius, flags);
                 draw->AddRectFilled(
                     ImVec2(pos.x + bar_w * s, pos.y + bar_h * 0.72f),
                     ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_lo,
-                    radius,
-                    (ImDrawFlags)(flags | ImDrawFlags_RoundCornersBottom));
+                    radius, flags);
                 /* 段内文字：分片完成度%（格宽足够时显示，电池格充电进度） */
                 if ((e - s) * bar_w > 44.0f) {
                     char seg_txt[16];
@@ -721,12 +720,11 @@ void RenderProgress(const DownloadSnapshot& snap) {
             draw->AddRectFilled(pos,
                                 ImVec2(pos.x + bar_w * cur,
                                        pos.y + bar_h * 0.35f),
-                                gn_hi, radius,
-                                (ImDrawFlags)(f2 | ImDrawFlags_RoundCornersTop));
+                                gn_hi, radius, f2);
             draw->AddRectFilled(
                 ImVec2(pos.x, pos.y + bar_h * 0.72f),
                 ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_lo, radius,
-                (ImDrawFlags)(f2 | ImDrawFlags_RoundCornersBottom));
+                f2);
         }
         /* 圆柱高光（顶部细亮条，画在填充之上 → 填充覆盖高亮形状但保留高亮效果） */
         draw->AddRectFilled(
