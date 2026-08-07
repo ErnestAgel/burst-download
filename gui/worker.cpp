@@ -260,6 +260,11 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
         m_running.store(false);
         return;
     }
+    /* 立即推送一次 0 进度快照：UI 在首个 XFERINFO 回调前就绘制电池格分隔线 */
+    {
+        auto parts = cc->SnapshotParts();
+        cc->onProgress(parts, 0.0, 0.0);
+    }
 
     bool ok = cc->Download_Task();
     if (ok) {

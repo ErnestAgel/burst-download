@@ -545,6 +545,25 @@ std::string Ccurl::MetaPath() const {
   return m_filename + ".curlbolt.part";
 }
 
+std::vector<ThreadProgress> Ccurl::SnapshotParts() const {
+  std::vector<ThreadProgress> out;
+  for (int i = 0; i < m_thread_num && m_Easy_List[i] != nullptr; i++) {
+    ThreadProgress t;
+    t.id = i;
+    t.file_start = (long long)m_Easy_List[i]->part_start;
+    t.downloaded =
+        (long long)m_Easy_List[i]->part_start +
+        (long long)m_Easy_List[i]->download_len; /* 续传时含已写部分 */
+    t.total = (long long)m_Easy_List[i]->end + 1;
+    t.file_total = (long long)m_fileLen;
+    t.percent =
+        (m_fileLen > 0) ? (t.downloaded / (double)m_fileLen * 100.0) : 0.0;
+    t.speed = 0;
+    out.push_back(t);
+  }
+  return out;
+}
+
 bool Ccurl::LoadPartMeta() {
   m_part_written.clear();
   const std::string path = MetaPath();

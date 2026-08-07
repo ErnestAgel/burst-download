@@ -125,6 +125,11 @@ VideoResult VideoDownloader::Run(const std::string& video_url,
             Log("[ERROR] 初始化失败: " + out + " - " + m_last_error);
             return VideoResult::Error;
         }
+        /* 立即推送 0 进度快照：UI 在首个回调前绘制电池格分隔线（本流） */
+        if (onProgress) {
+            auto parts = cc->SnapshotParts();
+            onProgress(parts, 0.0, 0.0);
+        }
         if (!cc->Download_Task()) {
             if (m_cancel.load() || cc->IsCanceled()) {
                 Log("[INFO] 已取消");

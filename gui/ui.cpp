@@ -635,14 +635,6 @@ void RenderProgress(const DownloadSnapshot& snap) {
                             ImDrawFlags_RoundCornersAll);
         if (!snap.threads.empty() && snap.threads[0].file_total > 0) {
             const double ft = (double)snap.threads[0].file_total;
-            /* 找出填充段的首/末索引（决定圆角端） */
-            int first_fill = -1, last_fill = -1;
-            for (int i = 0; i < (int)snap.threads.size(); i++) {
-                if (snap.threads[i].downloaded > snap.threads[i].file_start) {
-                    if (first_fill < 0) first_fill = i;
-                    last_fill = i;
-                }
-            }
             for (int i = 0; i < (int)snap.threads.size(); i++) {
                 const auto& t = snap.threads[i];
                 float s = (float)((double)t.file_start / ft);
@@ -651,14 +643,6 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 if (s > 1.0f) s = 1.0f;
                 if (e > 1.0f) e = 1.0f;
                 if (cur > e) cur = e;
-                /* 电池格分隔线：2px 深色竖带，一格一格边界明显 */
-                if (s > 0.001f && s < 0.999f) {
-                    draw->AddRectFilled(
-                        ImVec2(pos.x + bar_w * s - 1.0f, pos.y + 1.0f),
-                        ImVec2(pos.x + bar_w * s + 1.0f,
-                               pos.y + bar_h - 1.0f),
-                        sep);
-                }
                 /* 分片完成度（段内文字用 + hover 提示用） */
                 double seg_done = (double)(t.downloaded - t.file_start);
                 double seg_total = (double)(t.total - t.file_start);
@@ -683,13 +667,15 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 if (t.downloaded <= t.file_start) {
                     continue; /* 未开始分片：留暗色底槽（电池未充电格） */
                 }
-                /* 圆角端：首段左圆、末段右圆、单段全圆（贴合圆柱边缘） */
+                /* 圆角只给物理首尾分片（i==0 左圆、i==last 右圆、单分片全圆），
+                 * 中间分片一律直角（分片之间无弧形，用户需求）；与填充状态无关 */
+                const int nseg = (int)snap.threads.size();
                 ImDrawFlags flags = 0;
-                if (i == first_fill && i == last_fill) {
+                if (nseg == 1) {
                     flags = ImDrawFlags_RoundCornersAll;
-                } else if (i == first_fill) {
+                } else if (i == 0) {
                     flags = ImDrawFlags_RoundCornersLeft;
-                } else if (i == last_fill) {
+                } else if (i == nseg - 1) {
                     flags = ImDrawFlags_RoundCornersRight;
                 }
                 /* 绿色填充（圆柱：统一色 + 高光 + 阴影），圆角端贴合圆柱边缘 */
@@ -742,12 +728,27 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_lo, radius,
                 (ImDrawFlags)(f2 | ImDrawFlags_RoundCornersBottom));
         }
-        /* 圆柱高光（顶部细亮条）与边框 */
+        /* 圆柱高光（顶部细亮条，画在填充之上 → 填充覆盖高亮形状但保留高亮效果） */
         draw->AddRectFilled(
             pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.18f),
             IM_COL32(255, 255, 255, 18), radius,
             ImDrawFlags_RoundCornersTop | ImDrawFlags_RoundCornersLeft |
                 ImDrawFlags_RoundCornersRight);
+        /* 电池格分隔线：5px 深色竖带（2-3 倍加宽，用户需求），最后画 →
+         * 不被填充覆盖、格线始终清晰；无下载数据时格线也已显示（启动即加载好） */
+        if (!snap.threads.empty() && snap.threads[0].file_total > 0) {
+            const double ft = (double)snap.threads[0].file_total;
+            for (const auto& t : snap.threads) {
+                float s = (float)((double)t.file_start / ft);
+                if (s > 0.002f && s < 0.998f) {
+                    draw->AddRectFilled(
+                        ImVec2(pos.x + bar_w * s - 2.5f, pos.y + 1.0f),
+                        ImVec2(pos.x + bar_w * s + 2.5f,
+                               pos.y + bar_h - 1.0f),
+                        sep);
+                }
+            }
+        }
         draw->AddRect(pos, ImVec2(pos.x + bar_w, pos.y + bar_h), border,
                       radius);
         ImGui::Dummy(ImVec2(bar_w, bar_h));
@@ -792,12 +793,13 @@ void RenderProgress(const DownloadSnapshot& snap) {
 void RenderLog(const std::vector<std::string>& log) {
     ImGui::Separator();
     ImGui::Text("%s", i18n::T("label.log"));
-    ImGui::BeginChild("##log", ImVec2(0, 160), true);
+    ImGui::BeginChild("##log", ImVec2(0, 160), true,
+                      ImGuiWindowFlags_HorizontalScrollbar);
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f) {
         g_log_autoscroll = true;
     }
     for (const auto& line : log) {
-        ImGui::TextWrapped("%s", line.c_str());
+        ImGui::TextUnformatted(line.c_str()); /* 不换行：内容超宽时显示水平滚动条 */
     }
     if (g_log_autoscroll && ImGui::GetScrollMaxY() > 0) {
         ImGui::SetScrollY(ImGui::GetScrollMaxY());
@@ -924,42 +926,99 @@ void RenderTitleBar() {
     ImGui::PopStyleVar();
 }
 
-/* ---- 右下角 resize 手柄（无边框窗口无系统手柄，自绘；hover 高亮 + 缩放光标） ---- */
+/* ---- 窗口边缘/四角 resize（无边框窗口无系统手柄，自绘：左右下边 + 左下/右下角） ----
+ * 标题栏顶部 6px 留给"拖动移动"，不参与 resize（避免与标题栏 InvisibleButton 冲突） */
 void RenderResizeGrip() {
     const ImGuiIO& io = ImGui::GetIO();
-    const float grip = 24.0f;
-    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - grip,
-                               io.DisplaySize.y - kTitleBarH - grip));
-    ImGui::InvisibleButton("##resize_grip", ImVec2(grip, grip));
-    bool hovered = ImGui::IsItemHovered();
-    bool active = ImGui::IsItemActive();
+    const float E = 6.0f;  /* 边缘带宽 */
+    const float C = 18.0f; /* 四角区域 */
+    const float W = io.DisplaySize.x;
+    const float H = io.DisplaySize.y;
+
+    enum Dir { None, L, R, B, BL, BR };
+    const ImVec2 m = io.MousePos;
+    Dir dir = None;
+    const bool near_l = m.x <= E;
+    const bool near_r = m.x >= W - E;
+    const bool near_b = m.y >= H - E && m.y <= H;
+    if (m.x <= C && m.y >= H - C) {
+        dir = BL;
+    } else if (m.x >= W - C && m.y >= H - C) {
+        dir = BR;
+    } else if (near_l) {
+        dir = L;
+    } else if (near_r) {
+        dir = R;
+    } else if (near_b) {
+        dir = B;
+    }
+
 #ifdef _WIN32
-    if (hovered) {
-        SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_SIZENWSE));
+    /* hover 缩放光标（未按下时） */
+    if (dir != None && !io.MouseDown[0]) {
+        /* 系统光标 ID（IDC_* 展开为 LPSTR，LoadCursorW 需 MAKEINTRESOURCEW 数值） */
+        LPCWSTR cur = MAKEINTRESOURCEW(32512); /* IDC_ARROW */
+        switch (dir) {
+            case L:
+            case R: cur = MAKEINTRESOURCEW(32644); break; /* IDC_SIZEWE */
+            case B: cur = MAKEINTRESOURCEW(32645); break; /* IDC_SIZENS */
+            case BL:
+            case BR: cur = MAKEINTRESOURCEW(32642); break; /* IDC_SIZENWSE */
+            default: break;
+        }
+        SetCursor(LoadCursorW(NULL, cur));
     }
 #endif
-    static bool resizing = false;
-    static int rw0 = 0, rh0 = 0;
-    static ImVec2 rmouse0;
-    if (active && !resizing && g_window != nullptr) {
-        resizing = true;
-        glfwGetWindowSize(g_window, &rw0, &rh0);
-        rmouse0 = io.MousePos;
-    } else if (!active && resizing) {
-        resizing = false;
+
+    /* 拖动状态 */
+    static Dir s_dir = None;
+    static int w0 = 0, h0 = 0, x0 = 0, y0 = 0;
+    static ImVec2 m0;
+    if (dir != None && ImGui::IsMouseClicked(0)) {
+        if (g_window != nullptr) {
+            glfwGetWindowPos(g_window, &x0, &y0);
+            glfwGetWindowSize(g_window, &w0, &h0);
+        }
+        s_dir = dir;
+        m0 = io.MousePos;
+    } else if (!io.MouseDown[0]) {
+        s_dir = None;
     }
-    if (resizing && g_window != nullptr) {
-        glfwSetWindowSize(g_window,
-                          rw0 + (int)(io.MousePos.x - rmouse0.x),
-                          rh0 + (int)(io.MousePos.y - rmouse0.y));
+    if (s_dir != None && io.MouseDown[0] && g_window != nullptr) {
+        const int dx = (int)(io.MousePos.x - m0.x);
+        const int dy = (int)(io.MousePos.y - m0.y);
+        int nw = w0, nh = h0, nx = x0, ny = y0;
+        switch (s_dir) {
+            case R:
+            case BR: nw = w0 + dx; break;
+            case L:
+            case BL: nw = w0 - dx; nx = x0 + dx; break;
+            case B: break;
+            default: break;
+        }
+        if (s_dir != L && s_dir != R) {
+            nh = h0 + dy; /* B/BL/BR 下边 */
+        }
+        /* 最小尺寸（glfwSetWindowSizeLimits 已兜底，这里防左/上角越界） */
+        if (nw < 640) {
+            if (s_dir == L || s_dir == BL) nx = x0 + (w0 - 640);
+            nw = 640;
+        }
+        if (nh < 480) {
+            nh = 480;
+        }
+        glfwSetWindowSize(g_window, nw, nh);
+        if (s_dir == L || s_dir == BL) {
+            glfwSetWindowPos(g_window, nx, ny);
+        }
     }
-    /* 手柄样式：右下角三角（hover 高亮） */
+
+    /* 右下角三角标记（resize 视觉提示，hover 高亮） */
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetWindowPos();
-    ImVec2 c = ImVec2(p.x + io.DisplaySize.x - 2,
-                      p.y + io.DisplaySize.y - kTitleBarH - 2);
-    ImU32 col = ImGui::GetColorU32(hovered ? ImGuiCol_SeparatorActive
-                                           : ImGuiCol_SeparatorHovered);
+    ImVec2 c = ImVec2(p.x + W - 2, p.y + H - kTitleBarH - 2);
+    ImU32 col = ImGui::GetColorU32(dir == BR ? ImGuiCol_SeparatorActive
+                                             : ImGuiCol_SeparatorHovered);
     dl->AddTriangleFilled(ImVec2(c.x - 12, c.y), c, ImVec2(c.x, c.y - 12), col);
 }
 

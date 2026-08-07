@@ -124,6 +124,13 @@ public:
     void Cancel();
 
     /**
+     * @brief 下载初始化完成后、开始传输前：返回各分片信息（0 进度占位）
+     * @return 每分片 ThreadProgress（downloaded=分片起点，未开始下载）
+     * @note UI 据此在首个进度回调前就绘制"电池格"分隔线
+     */
+    std::vector<ThreadProgress> SnapshotParts() const;
+
+    /**
      * @brief 查询是否已请求取消
      * @return 已取消返回 true
      */
