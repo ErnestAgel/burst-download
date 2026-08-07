@@ -38,6 +38,10 @@ const Entry kStrings[] = {
     {"placeholder.url.file", "输入文件下载地址…", "Enter file download URL..."},
     {"placeholder.url.video", "输入视频页面链接（B站/YouTube）…",
      "Enter video page URL (Bilibili/YouTube)..."},
+    {"placeholder.path.file", "保存目录或完整文件路径…",
+     "Save folder or full file path..."},
+    {"placeholder.path.video", "选择视频保存目录…",
+     "Choose a folder to save the video..."},
     /* 表单 */
     {"label.url", "下载地址", "URL"},
     {"label.path", "保存路径", "Save to"},
@@ -100,13 +104,20 @@ const Entry kStrings[] = {
      "Invalid URL: enter an address starting with http:// or https://."},
     {"err.thunder.invalid", "迅雷链接解码失败：无法提取有效的 http/https 下载地址。",
      "Thunder link decode failed: no valid http/https URL extracted."},
-    {"err.video.phase2", "视频模式将在后续版本支持，当前请使用文件下载模式。",
-     "Video mode is coming in a later version; use File Download mode for now."},
     {"err.path.empty", "保存路径为空：请填写或浏览选择保存位置。",
      "Save path is empty: enter or browse a destination."},
     {"err.busy", "已有任务在运行，请等待其完成或取消后再试。",
      "A task is already running; wait for it to finish or cancel it first."},
     {"label.status", "状态", "Status"},
+    /* 视频模式错误指引（§8.3 错误分类：解析失败/合并失败） */
+    {"err.guide.parse", "解析失败：请确认视频页面 URL 有效且可访问；"
+     "网站改版时可稍后重试，或用 --update-parser 更新解析组件。",
+     "Parsing failed: verify the video page URL is valid and reachable; "
+     "if the site changed, retry later or run --update-parser."},
+    {"err.guide.merge", "音视频轨已下载成功，但自动合并失败。两轨文件已保留，"
+     "可用外部工具手动合并（ffmpeg -i <视频轨> -i <音频轨> -c copy <输出>）。",
+     "Tracks downloaded, but auto-merge failed. Both track files are kept; "
+     "merge manually with an external tool (ffmpeg -i <video> -i <audio> -c copy <out>)."},
 };
 
 Lang g_lang = Lang::En;

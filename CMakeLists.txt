@@ -172,16 +172,20 @@ else()
 endif()
 
 # ==================== Windows：嵌入 Python 运行依赖 dll 随程序分发 ====================
-# 内嵌的 libpython（MSYS2/mingw 版）及扩展模块（.pyd）依赖 libpython3.14.dll、
-# libgcc_s_seh-1.dll、libssl/libcrypto 等，需与可执行文件同目录才能加载（Debug/Release 通用）
-if(WIN32)
-  file(GLOB PY_RUNTIME_DLLS
-       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/windows-x86_64/dll/*.dll)
-  foreach(_dll ${PY_RUNTIME_DLLS})
-    add_custom_command(TARGET curlbolt POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_dll} $<TARGET_FILE_DIR:curlbolt>)
-  endforeach()
-endif()
+# 内嵌 libpython（MinGW import lib）运行时依赖 python311.dll 及 libffi-8.dll、
+# libssl-3.dll/libcrypto-3.dll/vcruntime 等，需与可执行文件同目录才能加载（Debug/Release 通用）。
+# 通用函数：给任意 Windows 目标追加 Python 运行依赖 dll 复制（CLI 与 GUI 共用）
+function(curlbolt_copy_python_runtime_dlls TARGET)
+  if(WIN32)
+    file(GLOB PY_RUNTIME_DLLS
+         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/windows-x86_64/dll/*.dll)
+    foreach(_dll ${PY_RUNTIME_DLLS})
+      add_custom_command(TARGET ${TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_dll} $<TARGET_FILE_DIR:${TARGET}>)
+    endforeach()
+  endif()
+endfunction()
+curlbolt_copy_python_runtime_dlls(curlbolt)
 
 # ==================== Windows：MinGW 运行时 dll 随程序分发 ====================
 # 非全静态构建（Debug、GUI 目标等）依赖 libgcc_s_seh-1.dll / libstdc++-6.dll /
@@ -219,7 +223,7 @@ if(BUILD_GUI)
     third_party/imgui/backends/imgui_impl_glfw.cpp
     third_party/imgui/backends/imgui_impl_opengl3.cpp)
 
-  # ---- 正式 GUI 目标（Phase 1 MVP：文件模式闭环） ----
+  # ---- 正式 GUI 目标（Phase 2：文件模式 + 视频模式闭环） ----
   add_executable(curlbolt-gui WIN32
     gui/main_gui.cpp
     gui/ui.cpp
@@ -230,12 +234,17 @@ if(BUILD_GUI)
     gui/crashguard.cpp
     gui/theme.cpp
     src/Ccurl.cpp
+    src/download_video.cpp
+    src/video.cpp
+    src/embed_python.cpp
+    src/avmerge.cpp
     ${IMGUI_SRC})
   target_include_directories(curlbolt-gui PRIVATE
     third_party/imgui
     third_party/imgui/backends
     gui
-    include)
+    include
+    src)  # download_video.h / progress.h（Phase 2 视频模式）
   target_compile_options(curlbolt-gui PRIVATE
     -finput-charset=UTF-8 -fexec-charset=UTF-8)
   target_link_libraries(curlbolt-gui PRIVATE glfw)
@@ -278,6 +287,41 @@ if(BUILD_GUI)
     endif()
   endif()
   curlbolt_copy_mingw_runtime_dlls(curlbolt-gui)
+
+  # ---- 视频模式（Phase 2）：Python 嵌入（解析）+ FFmpeg（合并）链接 ----
+  # 与 CLI 同策略：运行时资源 fallback 到源码树 third_party/python/runtime（开发构建）；
+  # 发布时 exe 同目录 python_runtime/ 优先（LocateRuntimeHome 探测顺序，见 embed_python.cpp）
+  target_compile_definitions(curlbolt-gui PRIVATE
+    PYTHON_RUNTIME_FALLBACK="${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/runtime")
+  if(EXISTS ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/libpython3.11.a)
+    target_link_libraries(curlbolt-gui PRIVATE
+      ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/libpython3.11.a)
+  endif()
+  if(UNIX)
+    # libpython 依赖：openssl/zlib 用 third_party 干净静态库（同 CLI，见上）
+    set(_PY_DEPS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/static)
+    target_link_libraries(curlbolt-gui PRIVATE
+      ${_PY_DEPS_DIR}/libssl.a ${_PY_DEPS_DIR}/libcrypto.a ${_PY_DEPS_DIR}/libz.a
+      dl pthread m util)
+    foreach(_pyx lzma bz2)
+      if(EXISTS ${_PY_DEPS_DIR}/lib${_pyx}.a)
+        target_link_libraries(curlbolt-gui PRIVATE ${_PY_DEPS_DIR}/lib${_pyx}.a)
+      endif()
+    endforeach()
+  endif()
+  # FFmpeg 静态库（进程内 remux 合并音视频轨，同 CLI）
+  if(EXISTS ${FFMPEG_LIB_DIR}/libavformat.a)
+    target_link_libraries(curlbolt-gui PRIVATE
+      ${FFMPEG_LIB_DIR}/libavformat.a
+      ${FFMPEG_LIB_DIR}/libavcodec.a
+      ${FFMPEG_LIB_DIR}/libavutil.a)
+    if(WIN32)
+      # avutil 随机数种子依赖 bcrypt/ws2_32；须置于 ffmpeg 静态库之后（链接顺序）
+      target_link_libraries(curlbolt-gui PRIVATE bcrypt ws2_32)
+    endif()
+  endif()
+  # Windows：Python 运行依赖 dll 随 GUI 分发（exe 同目录，7 个 dll，POST_BUILD 自动复制）
+  curlbolt_copy_python_runtime_dlls(curlbolt-gui)
 
   # ---- 开发冒烟目标（Phase 0 验证窗口/字体链路，仅开发用） ----
   add_executable(curlbolt-gui-smoke WIN32

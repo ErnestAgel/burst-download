@@ -33,11 +33,14 @@ struct ThreadProgress {
 enum DownloadStage {
     STAGE_IDLE        = 0,  /**< 空闲（无任务） */
     STAGE_PARSING     = 1,  /**< 解析中（视频模式） */
-    STAGE_DOWNLOADING = 2,  /**< 下载中 */
+    STAGE_DOWNLOADING = 2,  /**< 下载中（文件模式） */
     STAGE_MERGING     = 3,  /**< 合并中（视频模式） */
     STAGE_DONE        = 4,  /**< 完成 */
     STAGE_ERROR       = 5,  /**< 错误（error 字段填充，供弹窗） */
     STAGE_CANCELED    = 6,  /**< 已取消 */
+    /* ---- Phase 2 视频模式细分（F8 四阶段：解析中/下载视频轨/下载音频轨/合并中） ---- */
+    STAGE_VIDEO_DL    = 7,  /**< 下载视频轨 */
+    STAGE_AUDIO_DL    = 8,  /**< 下载音频轨 */
 };
 
 /**

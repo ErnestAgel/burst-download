@@ -49,6 +49,18 @@ public:
                            int threads, int timeout = 60);
 
     /**
+     * @brief 启动一个视频下载任务（Phase 2：解析→下载视频轨/音频轨→自动合并）
+     * @param url 视频网页 URL（B站/YouTube 等，http/https）
+     * @param basename 输出基础名（不含扩展名；视频轨 .mp4 / 音频轨 .m4a / 合并产物 <base>_full.<ext>）
+     * @param threads 每流线程数（1~10，Ccurl 内部再钳位）
+     * @param timeout 低速超时秒数（0=不限，默认 60）
+     * @return 是否成功启动（已在运行则返回 false）
+     * @note 阶段状态细分：解析中→下载视频轨→下载音频轨→合并中（F8）
+     */
+    bool StartVideoDownload(const std::string& url, const std::string& basename,
+                            int threads, int timeout = 60);
+
+    /**
      * @brief 请求取消（线程安全，UI 线程可调）；取消后部分文件保留可续传
      */
     void Cancel();
@@ -82,6 +94,10 @@ private:
     /** @brief 工作线程入口：执行下载任务编排 */
     void WorkerFunc(const std::string& url, const std::string& path,
                     int threads, int timeout);
+
+    /** @brief 视频工作线程入口：解析→下载视频轨/音频轨→自动合并（Phase 2） */
+    void VideoWorkerFunc(const std::string& url, const std::string& basename,
+                         int threads, int timeout);
 
     /** @brief 锁内更新阶段状态并写日志 */
     void SetStage(int stage, const std::string& status, const std::string& logmsg);

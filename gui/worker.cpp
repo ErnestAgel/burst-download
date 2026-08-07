@@ -14,6 +14,7 @@
 #include <filesystem>
 
 #include "Ccurl.h"
+#include "download_video.h"
 #include "i18n.h"
 
 DownloadWorker::DownloadWorker() {
@@ -61,6 +62,37 @@ bool DownloadWorker::StartFileDownload(const std::string& url,
 
     m_thread = std::thread(&DownloadWorker::WorkerFunc, this, url, path,
                            threads, timeout);
+    m_running.store(true);
+    return true;
+}
+
+bool DownloadWorker::StartVideoDownload(const std::string& url,
+                                        const std::string& basename,
+                                        int threads, int timeout) {
+    if (m_running.load()) {
+        return false;  /* 单任务串行：已有一个任务在跑 */
+    }
+    if (url.empty() || basename.empty()) {
+        return false;
+    }
+    /* 前一个任务可能已自然结束但线程未 join（joinable 的 thread 重新赋值会 terminate） */
+    if (m_thread.joinable()) {
+        m_thread.join();
+    }
+    m_cancel.store(false);
+    m_joined.store(false);
+    /* 清空上一任务快照与日志 */
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_snapshot = DownloadSnapshot();
+        m_snapshot.stage = STAGE_IDLE;
+        m_snapshot.eta = "--";
+        m_log.clear();
+    }
+    AddLog("[INFO] 开始任务: " + url);
+
+    m_thread = std::thread(&DownloadWorker::VideoWorkerFunc, this, url,
+                           basename, threads, timeout);
     m_running.store(true);
     return true;
 }
@@ -235,6 +267,81 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
         m_snapshot.error = "下载失败（部分分片未完成），详见 download.log";
         SetStage(STAGE_ERROR, "error",
                  "[ERROR] 下载失败: " + url);
+    }
+    m_running.store(false);
+}
+
+void DownloadWorker::VideoWorkerFunc(const std::string& url,
+                                     const std::string& basename,
+                                     int threads, int timeout) {
+    /* 启动前创建父目录（basename 的父目录，如用户填的保存目录；Ccurl 只写文件不建目录） */
+    std::error_code ec;
+    std::filesystem::path fs_path(basename);
+    if (fs_path.has_parent_path() && !fs_path.parent_path().empty()) {
+        std::filesystem::create_directories(fs_path.parent_path(), ec);
+    }
+
+    /* 取消检查点（解析前）：置位则不再启动传输 */
+    if (m_cancel.load()) {
+        SetStage(STAGE_CANCELED, "", "[INFO] 已取消（未开始传输）");
+        m_running.store(false);
+        return;
+    }
+
+    VideoDownloader vd;
+    /* 阶段回调（F8）：解析中→下载视频轨→下载音频轨→合并中；
+     * 进度回调不覆盖 stage，保持细分阶段显示 */
+    vd.onStage = [this](int stage) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_snapshot.stage = stage;
+    };
+    /* 单流下载进度回调：与文件模式相同的快照更新（每 ~200ms，锁内拷贝标量） */
+    vd.onProgress = [this](const std::vector<ThreadProgress>& tp,
+                           double totalPercent, double totalSpeed) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_snapshot.totalPercent = totalPercent;
+        m_snapshot.totalSpeed = totalSpeed;
+        long long done = 0;
+        m_snapshot.threads.assign(tp.begin(), tp.end());
+        for (const auto& t : tp) {
+            done += t.downloaded;
+        }
+        double remain = 0;
+        if (totalPercent > 0 && totalPercent < 100) {
+            double total = done / (totalPercent / 100.0);
+            remain = total - done;
+        }
+        m_snapshot.eta = FormatEta(remain, totalSpeed);
+    };
+    vd.onLog = [this](const std::string& msg) { AddLog(msg); };
+
+    VideoResult result = vd.Run(url, basename, threads, timeout);
+    if (m_cancel.load() || result == VideoResult::Canceled) {
+        SetStage(STAGE_CANCELED, "", "[INFO] 已取消，部分文件保留可续传");
+    } else if (result == VideoResult::Ok) {
+        /* 完成：总进度与各线程进度均置 100%（视频模式结束后不再有回调更新 UI） */
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_snapshot.totalPercent = 100.0;
+            m_snapshot.totalSpeed = 0;
+            m_snapshot.eta = "--";
+            for (auto& t : m_snapshot.threads) {
+                t.downloaded = t.total;
+                t.percent = 100.0;
+                t.speed = 0;
+            }
+        }
+        SetStage(STAGE_DONE, vd.OutputPath(),
+                 "[INFO] 视频下载完成: " + vd.OutputPath());
+    } else {
+        /* 解析/下载/合并失败：具体原因传至 F12 弹窗（锁保护，UI 每帧读取） */
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_snapshot.error = vd.LastError().empty()
+                                   ? "视频下载失败"
+                                   : vd.LastError();
+        }
+        SetStage(STAGE_ERROR, "", "[ERROR] 视频下载失败: " + url);
     }
     m_running.store(false);
 }

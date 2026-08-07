@@ -60,6 +60,8 @@ bool g_video_mode = false;
 void OnStartClicked(DownloadWorker& worker);
 void StartDownload(DownloadWorker& worker, const std::string& url,
                    const std::string& path, int threads);
+void StartVideoDownload(DownloadWorker& worker, const std::string& url,
+                        const std::string& basename, int threads);
 
 /* 弹窗状态 */
 bool g_exists_open = false;
@@ -277,7 +279,12 @@ void ShowErrorPopup(const std::string& title, const std::string& msg,
 
 /** 按 §8.3 表格对错误分类并给出指引 */
 std::string ErrorGuide(const std::string& err) {
-    /* MVP 简易分类：信息不足时给通用指引 */
+    if (err.find("解析失败") != std::string::npos) {
+        return i18n::T("err.guide.parse");
+    }
+    if (err.find("合并失败") != std::string::npos) {
+        return i18n::T("err.guide.merge");
+    }
     if (err.find("初始化失败") != std::string::npos) {
         return i18n::T("err.guide.init");
     }
@@ -303,11 +310,14 @@ void RenderForm(DownloadWorker& worker) {
         g_url, sizeof(g_url),
         running ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None);
 
-    /* 保存路径 + 浏览（Windows 原生 GetSaveFileName，§3） */
+    /* 保存路径 + 浏览（Windows 原生 GetSaveFileName，§3）
+     * 视频模式路径语义 = 保存目录（输出名由 URL 自动推断 + 时间戳防覆盖） */
     ImGui::SetNextItemWidth(-70.0f);
-    ImGui::InputText("##path", g_path, sizeof(g_path),
-                     running ? ImGuiInputTextFlags_ReadOnly
-                             : ImGuiInputTextFlags_None);
+    ImGui::InputTextWithHint(
+        "##path", g_video_mode ? i18n::T("placeholder.path.video")
+                               : i18n::T("placeholder.path.file"),
+        g_path, sizeof(g_path),
+        running ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None);
 #ifdef _WIN32
     ImGui::SameLine();
     if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0)) && !running) {
@@ -404,10 +414,25 @@ void OnStartClicked(DownloadWorker& worker) {
                        i18n::T("err.url.invalid"));
         return;
     }
-    /* 视频模式：Phase 2 实现，MVP 提示 */
+    /* 视频模式（Phase 2）：路径 = 保存目录，输出基础名 = 目录 + URL 名 + 时间戳
+     * （时间戳命名天然防覆盖，与 CLI 未指定 -o 语义一致，无需 F11 四选一） */
     if (g_video_mode) {
-        ShowErrorPopup(i18n::T("dialog.error.title"),
-                       i18n::T("err.video.phase2"));
+        if (path.empty()) {
+            ShowErrorPopup(i18n::T("dialog.error.title"),
+                           i18n::T("err.path.empty"));
+            return;
+        }
+        std::string base = UrlFileName(url); /* 去查询串/取最后路径段 */
+        size_t dot = base.find_last_of('.');
+        if (dot != std::string::npos) {
+            base = base.substr(0, dot); /* 基础名不带扩展名 */
+        }
+        if (base.empty()) {
+            base = "video";
+        }
+        std::string basename =
+            JoinPath(path, base + "_" + CurrentTimeStamp());
+        StartVideoDownload(worker, url, basename, g_threads);
         return;
     }
     if (path.empty()) {
@@ -443,6 +468,16 @@ void StartDownload(DownloadWorker& worker, const std::string& url,
     worker.AddLog(std::string("[INFO] 保存到: ") + path);
     g_last_stage = STAGE_IDLE;
     if (!worker.StartFileDownload(url, path, threads, 60)) {
+        ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
+    }
+}
+
+void StartVideoDownload(DownloadWorker& worker, const std::string& url,
+                        const std::string& basename, int threads) {
+    worker.AddLog(std::string("[INFO] 视频 URL: ") + url);
+    worker.AddLog(std::string("[INFO] 输出基础名: ") + basename);
+    g_last_stage = STAGE_IDLE;
+    if (!worker.StartVideoDownload(url, basename, threads, 60)) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
     }
 }
@@ -487,11 +522,13 @@ void RenderProgress(const DownloadSnapshot& snap) {
         ImGui::EndChild();
     }
 
-    /* 阶段状态文本（F8） */
+    /* 阶段状态文本（F8；视频模式细分：解析中/下载视频轨/下载音频轨/合并中） */
     const char* stage_txt = i18n::T("stage.idle");
     switch (snap.stage) {
         case STAGE_DOWNLOADING: stage_txt = i18n::T("stage.downloading"); break;
         case STAGE_PARSING:     stage_txt = i18n::T("stage.parsing"); break;
+        case STAGE_VIDEO_DL:    stage_txt = i18n::T("stage.video"); break;
+        case STAGE_AUDIO_DL:    stage_txt = i18n::T("stage.audio"); break;
         case STAGE_MERGING:     stage_txt = i18n::T("stage.merging"); break;
         case STAGE_DONE:        stage_txt = i18n::T("stage.done"); break;
         case STAGE_CANCELED:    stage_txt = i18n::T("stage.canceled"); break;

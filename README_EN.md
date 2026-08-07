@@ -154,7 +154,7 @@ cmake --build build
 
 ## 🖥️ GUI
 
-A graphical front-end (`curlbolt-gui`) over the CLI, currently **Phase 1: File Download mode** (video mode planned).
+A graphical front-end (`curlbolt-gui`) over the CLI, currently **Phase 2: File Download + Video Download modes**.
 
 **Build** (`option(BUILD_GUI ON)` by default):
 
@@ -169,6 +169,7 @@ cmake --build build --target curlbolt-gui      # produces curlbolt-gui.exe on Wi
 
 - 🎨 **Atom One Dark theme**, frameless window with Mac-style window buttons (minimize/maximize/close)
 - ⚡ Multi-threaded segmented download (1~`min(10, cores)` threads selectable, per-thread progress bars)
+- 🎬 **Video download** (Bilibili / YouTube etc.): parse → download video/audio tracks (parallel chunks) → auto-merge, with 4-stage status shown live (Parsing / Downloading video track / Downloading audio track / Merging)
 - ⏸️ Cancel during download (resume supported); dialogs for done/cancel/error
 - 📁 Save to a directory only — filename is derived from the URL automatically; Browse opens a folder picker
 - ⚡ **Thunder links** (`thunder://`) decoded automatically

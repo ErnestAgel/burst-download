@@ -32,6 +32,7 @@
 #include "video.h"
 #include "embed_python.h"
 #include "avmerge.h"
+#include "download_video.h"
 
 using namespace std;
 
@@ -131,61 +132,18 @@ static void PrintUsage(const char* prog) {
  * @param basename 输出基础名（视频轨 .mp4 / 音频轨 .m4a）
  * @param threads 下载线程数
  * @param timeout 低速超时秒数
- * @return 是否全部成功
+ * @return 是否全部成功（合并失败视为失败，两轨文件保留可手动合并）
  */
 static bool DownloadVideo(const string& video_url, const string& basename,
                           int threads, int timeout,
                           const string& cookies_from_browser,
                           const string& cookie_str) {
-  vector<string> streams;
-  if (!ParseVideoUrls(video_url, streams, cookies_from_browser, cookie_str)) {
-    printf("视频解析失败: 请确认 URL 有效/可访问，且 Python 运行时资源完整\n");
-    return false;
-  }
-  printf("解析成功: 共 %zu 个媒体流\n", streams.size());
-
-  bool all_ok = true;
-  for (size_t i = 0; i < streams.size() && i < 2; i++) {
-    string out = (i == 0) ? basename + ".mp4" : basename + ".m4a";
-    printf("正在下载第 %zu 个流 -> %s\n", i + 1, out.c_str());
-    unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
-    ptr->SetReferer(video_url);  /* 防盗链：以视频页 URL 作为 Referer（如 B站视频流） */
-    if (!cookie_str.empty()) {
-      ptr->SetCookie(cookie_str);  /* 下载流时携带 Cookie（高清流需登录态） */
-    }
-    if (!ptr->Init(streams[i], out, threads, timeout)) {
-      all_ok = false;
-      break;
-    }
-    if (!ptr->Download_Task()) {
-      all_ok = false;
-      break;
-    }
-  }
-  if (all_ok && streams.size() > 1) {
-    /* 音视频分离流（DASH）：内置合并器自动合并为单文件（进程内，无需外部工具） */
-    string vfile = basename + ".mp4";
-    string afile = basename + ".m4a";
-    /* 输出容器按视频轨编码自动选择：VP9/AV1 -> .mkv，其余 -> .mp4 */
-    string merged = basename + "_full" + SuggestMergeExt(vfile);
-    string merr;
-    if (MergeMp4(vfile, afile, merged, merr)) {
-      printf("已自动合并音视频轨 -> %s\n", merged.c_str());
-      /* 合并成功：删除音视频中间文件，仅保留合并产物 */
-      if (remove(vfile.c_str()) == 0 && remove(afile.c_str()) == 0) {
-        printf("已清理中间文件: %s, %s\n", vfile.c_str(), afile.c_str());
-      } else {
-        printf("提示: 中间文件清理失败，可手动删除 %s 和 %s\n",
-               vfile.c_str(), afile.c_str());
-      }
-    } else {
-      printf("自动合并失败: %s\n", merr.c_str());
-      printf("提示: 可保留两轨文件，用外部工具手动合并: "
-             "ffmpeg -i %s -i %s -c copy %s\n",
-             vfile.c_str(), afile.c_str(), merged.c_str());
-    }
-  }
-  return all_ok;
+  /* 编排逻辑抽至 src/download_video.*（CLI/GUI 共用）；CLI 不设回调，
+   * 内部默认 printf 输出与原先一致；onProgress 为空时 Ccurl 保留 1% 门控打印 */
+  VideoDownloader vd;
+  VideoResult r = vd.Run(video_url, basename, threads, timeout,
+                         cookies_from_browser, cookie_str);
+  return r == VideoResult::Ok;
 }
 
 /**
