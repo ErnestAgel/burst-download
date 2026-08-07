@@ -168,12 +168,14 @@ cmake --build build --target curlbolt-gui      # produces curlbolt-gui.exe on Wi
 **Supported**:
 
 - 🎨 **Atom One Dark theme**, frameless window with Mac-style window buttons (minimize/maximize/close)
-- ⚡ Multi-threaded segmented download (1~`min(10, cores)` threads selectable, per-thread progress bars)
+- ⚡ Multi-threaded segmented download (1~`min(10, cores)` threads selectable)
 - 🎬 **Video download** (Bilibili / YouTube etc.): parse → download video/audio tracks (parallel chunks) → auto-merge, with 4-stage status shown live (Parsing / Downloading video track / Downloading audio track / Merging)
-- ⏸️ Cancel during download (resume supported); dialogs for done/cancel/error
+- ⏸️ **Pause / Resume / Stop** state machine: first "Cancel" click pauses (cache kept, **segmented resume** via `.curlbolt.part` metadata — only unfinished parts re-download); red "Stop" deletes cache and resets UI
+- 📊 **3D cylinder progress bar** (battery-cell chunks): completed cells green, active cell growing, 5px separators, per-cell percentage, hover shows per-thread speed; overall % + speed bottom-right
 - 📁 Save to a directory only — filename is derived from the URL automatically; Browse opens a folder picker
 - ⚡ **Thunder links** (`thunder://`) decoded automatically
-- 🌐 Bilingual UI (switch in Settings menu, remembered via config.ini)
+- 🌐 Bilingual UI (menu bar shows target-language hint: `language` in Chinese UI, `中文` in English UI)
+- 🪟 Frameless full-edge resize (left/right/bottom + corners, min 640×480); DPI-aware
 - 💾 Fonts and third-party libs bundled and distributed with the repo; no extra installs
 
 ---
@@ -182,7 +184,7 @@ cmake --build build --target curlbolt-gui      # produces curlbolt-gui.exe on Wi
 
 - Requires server support for **HTTP Range** (static file servers usually support it; falls back to single-thread otherwise);
 - **Video mode** works with Bilibili / YouTube and other popular sites; Bilibili 720p+ streams require login state (`--cookies-from-browser chrome`);
-- **Resume** compares file size only — delete the local file and re-download if the remote content changed;
+- **Resume** uses segmented metadata (`.curlbolt.part`); the target file is pre-allocated (sparse) so its size always matches — delete the file together with its `.curlbolt.part` to restart clean;
 - Timeout: interrupts after 60s with no progress by default; `--timeout N` adjusts it, `--no-timeout` disables it.
 
 ---
