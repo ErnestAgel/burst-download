@@ -43,7 +43,11 @@ namespace ui {
 namespace {
 
 /* 自绘标题栏高度（无边框窗口，替代系统标题栏） */
-const float kTitleBarH = 36.0f;
+#ifdef _WIN32
+const float kTitleBarH = 36.0f; /* Windows 自绘标题栏高度 */
+#else
+const float kTitleBarH = 0.0f; /* Linux 用系统标题栏，内容区从窗口顶部开始 */
+#endif
 
 /* GLFW 窗口指针（ui::Init 注入，标题栏按钮/拖动/resize 用） */
 GLFWwindow* g_window = nullptr;
@@ -1037,8 +1041,10 @@ void Init(GLFWwindow* window) {
 }
 
 bool Render(DownloadWorker& worker) {
-    /* 自绘标题栏（无边框窗口） */
+#ifdef _WIN32
+    /* 自绘标题栏（Windows 无边框窗口；Linux 用系统标题栏） */
     RenderTitleBar();
+#endif
 
     /* 主窗口：从标题栏下方铺满客户区；自带"设置"菜单栏（语言切换，常规软件逻辑） */
     const ImGuiIO& io = ImGui::GetIO();
@@ -1099,8 +1105,10 @@ bool Render(DownloadWorker& worker) {
     RenderProgress(snap);
     RenderLog(snap.log);
 
-    /* 右下角 resize 手柄（无边框窗口，须在窗口 End 前绘制） */
+#ifdef _WIN32
+    /* 右下角 resize 手柄（Windows 无边框窗口，须在窗口 End 前绘制） */
     RenderResizeGrip();
+#endif
 
     ImGui::End();
 

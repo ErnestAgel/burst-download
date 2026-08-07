@@ -162,7 +162,13 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     /* 无边框窗口：系统标题栏由 UI 自绘（最小化/最大化/关闭按钮在自绘标题栏上） */
+#ifdef _WIN32
+    /* Windows: 无边框 + 自绘标题栏/resize 手柄（ui.cpp RenderTitleBar/RenderResizeGrip） */
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+#else
+    /* Linux: 系统标题栏与边框（窗口管理器提供拖动/缩放） */
+    glfwWindowHint(GLFW_DECORATED, GLFW_TRUE);
+#endif
     GLFWwindow* window = glfwCreateWindow(900, 640, i18n::T("window.title"),
                                           NULL, NULL);
     if (window == nullptr) {
