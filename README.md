@@ -144,7 +144,7 @@ cmake -B build . && cmake --build build        # Linux
 cmake -B build -G "MinGW Makefiles" .          # Windows（MSYS2/mingw64 环境，gcc 与 mingw32-make 需在 PATH）
 ```
 
-**Release**：链接静态库，产出**单文件程序**。Windows 由于内嵌 Python 解释器，需将 `third_party/python/windows-x86_64/dll/` 下的 dll 与 exe 同目录（CMake 构建时自动复制），发布 zip 内含 `assets/` 运行时资源（stdlib/yt_dlp），解压后 exe 与 `assets/` 同目录即可用。Linux：curl/openssl/python/ffmpeg 均为仓库静态库，glibc 动态链接，运行时依赖桌面环境的 `libGL`/`libX11`；发布为 tar.gz（`burst` + `assets/`），解压后视频解析开箱即用——请勿只拷贝单个 `burst` 文件，否则缺少 Python 运行时资源会报"URL 解析失败"。
+**Release**：链接静态库，产出**单文件程序**。Windows 由于内嵌 Python 解释器，需将 `third_party/python/windows-x86_64/dll/` 下的 dll 与 exe 同目录（CMake 构建时自动复制）；Python 运行时资源（stdlib/yt_dlp）**内嵌于 exe 尾部**，首次运行自动解压到临时目录缓存（约 1~2 秒），之后秒开。Linux：curl/openssl/python/ffmpeg 均为仓库静态库，glibc 动态链接，运行时依赖桌面环境的 `libGL`/`libX11`；产物为单文件，运行时同样内嵌，视频解析开箱即用。
 
 ```bash
 # Linux（openssl 静态库由构建脚本准备）
