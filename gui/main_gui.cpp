@@ -1,6 +1,6 @@
 /**
  * @file main_gui.cpp
- * @brief burst-gui 入口：GLFW 窗口 + ImGui 初始化 + 主循环 + 安全退出流程（§8.4）
+ * @brief GUI 入口（RunGui）：GLFW 窗口 + ImGui 初始化 + 主循环 + 安全退出流程（§8.4）
  *
  * 退出铁律：置 cancel → join（≤5s）→ ImGui/GLFW 清理 → return；
  * 禁止 detach 或 RUNNING 中 exit（§8.4）。
@@ -24,6 +24,7 @@
 #include <GLFW/glfw3.h>
 
 #include "font_data.h"
+#include "app.h"
 #include "crashguard.h"
 #include "embed_python.h"
 #include "i18n.h"
@@ -120,7 +121,7 @@ bool AcquireSingleInstance() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int RunGui(int argc, char** argv) {
     /* 崩溃兜底（§8.2）：真崩溃也写 crash.log + 弹窗，不"裸退" */
     crashguard::Install();
 
