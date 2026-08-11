@@ -53,13 +53,12 @@ const float kTitleBarH = 0.0f; /* Linux 用系统标题栏，内容区从窗口�
 GLFWwindow* g_window = nullptr;
 
 /* ---- 表单状态（UI 主线程独占，工作线程不触碰） ---- */
-/* 本机可用线程上限：min(10, hardware_concurrency())（F4） */
-const int kHardwareMax =
-    std::min(MaxThread, (int)std::thread::hardware_concurrency());
+/* 本机可用线程上限：随核数自适应 4~8（F4，见 Ccurl.h BurstMaxThreads） */
+const int kHardwareMax = BurstMaxThreads();
 
 char g_url[2048] = {0};
 char g_path[2048] = {0};
-int g_threads = kHardwareMax;   /* 默认 = 本机上限 */
+int g_threads = BurstDefaultThreads();   /* 默认 = 合理值 2~4 */
 bool g_video_mode = false;
 
 /* 下载控制状态机（F9/F10）：IDLE → RUNNING → PAUSED → IDLE
@@ -391,7 +390,7 @@ void RenderForm(DownloadWorker& worker) {
     }
 #endif
 
-    /* 线程数：下拉框选择 1..kHardwareMax（F4，上限 = min(10, 核数)） */
+    /* 线程数：下拉框选择 1..kHardwareMax（F4，上限 = 4~8 随核数自适应） */
     ImGui::Text("%s:", i18n::T("label.threads"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);

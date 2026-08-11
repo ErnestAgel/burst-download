@@ -21,6 +21,8 @@
 #include<atomic>
 #include<functional>
 #include<ctime>
+#include<thread>
+#include<algorithm>
 
 #include "../src/progress.h"
 
@@ -31,7 +33,24 @@
 using namespace std;
 
 /** @brief 最大分片下载线程数（-t 参数上限） */
-#define MaxThread   10
+/* 编译期硬上限（分片任务表数组大小）；实际可用上限随 CPU 核数自适应（BurstMaxThreads，不超过 8） */
+#define MaxThread   8
+
+/* ---- 自适应线程策略（运行时按 CPU 核数） ----
+ * 逻辑核数检测失败时回退 8；
+ * 上限 = clamp(核数, 4, 8)：任何机器最多 8 条连接（IDM 默认档位，对 CDN/服务器礼貌，
+ *       超过 8 收益递减且更易触发限流/封禁）；
+ * 默认 = clamp(核数, 2, 4)：主流机器默认 4 条，1~2 核弱机用 2 条。 */
+inline int BurstLogicalCores() {
+  unsigned n = std::thread::hardware_concurrency();
+  return n > 0 ? static_cast<int>(n) : 8;
+}
+inline int BurstMaxThreads() {
+  return std::min(std::max(BurstLogicalCores(), 4), 8);
+}
+inline int BurstDefaultThreads() {
+  return std::min(std::max(BurstLogicalCores(), 2), 4);
+}
 
 /**
  * @brief 单个下载分片的任务信息结构体
@@ -86,7 +105,7 @@ public:
      * @brief 初始化下载任务：保存 URL 与文件名，检测 Range 支持并创建本地文件
      * @param url 下载地址
      * @param filename 保存到本地的文件名
-     * @param thread_num 下载线程数（1 ~ MaxThread，默认 MaxThread；服务器不支持 Range 时自动退化为 1）
+     * @param thread_num 下载线程数（1 ~ MaxThread；默认由调用方按核数自适应；服务器不支持 Range 时自动退化为 1）
      * @param timeout 低速超时秒数：下载无进展（低于 1 字节/秒）持续 timeout 秒则中断（默认 60；0 表示不自动中断）
      * @return 初始化是否成功
      */

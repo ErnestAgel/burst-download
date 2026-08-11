@@ -75,7 +75,7 @@ public:
      * @brief 执行视频下载：解析 → 逐流下载（最多视频轨+音频轨 2 个）→ 自动合并
      * @param video_url 视频网页 URL（B站/YouTube 等）
      * @param basename 输出基础名（不含扩展名；视频轨 .mp4 / 音频轨 .m4a / 合并产物 <base>_full.<ext>）
-     * @param threads 每流下载线程数（1~10，Ccurl 内部再钳位）
+     * @param threads 每流下载线程数（1~8，Ccurl 内部再钳位）
      * @param timeout 低速超时秒数（0=不限）
      * @param cookies_from_browser 浏览器 Cookie 来源（chrome/firefox/edge，可为空）
      * @param cookie 手动 Cookie 字符串（可为空）

@@ -41,7 +41,7 @@ public:
      * @brief 启动一个文件下载任务（内部创建工作线程，立即返回）
      * @param url 文件直链（http/https）
      * @param path 保存路径（UTF-8；Windows 中文路径由 Ccurl 宽字符入口处理）
-     * @param threads 线程数（1~10，Ccurl 内部再钳位）
+     * @param threads 线程数（1~8，Ccurl 内部再钳位）
      * @param timeout 低速超时秒数（0=不限，默认 60）
      * @param preserve_snapshot true=保留上一任务快照/日志（断点续传"继续"场景：
      *        不清零进度，Ccurl 首个进度回调含 resume 基数自动校准；新任务传 false）
@@ -55,7 +55,7 @@ public:
      * @brief 启动一个视频下载任务（Phase 2：解析→下载视频轨/音频轨→自动合并）
      * @param url 视频网页 URL（B站/YouTube 等，http/https）
      * @param basename 输出基础名（不含扩展名；视频轨 .mp4 / 音频轨 .m4a / 合并产物 <base>_full.<ext>）
-     * @param threads 每流线程数（1~10，Ccurl 内部再钳位）
+     * @param threads 每流线程数（1~8，Ccurl 内部再钳位）
      * @param timeout 低速超时秒数（0=不限，默认 60）
      * @param preserve_snapshot true=保留上一任务快照/日志（"继续"断点续传场景）
      * @return 是否成功启动（已在运行则返回 false）

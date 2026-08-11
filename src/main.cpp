@@ -114,7 +114,8 @@ static void PrintUsage(const char* prog) {
   printf("  --cookie <str> 请求 Cookie（如 \"SESSDATA=xxx; bili_jct=xxx\"），视频流与普通下载均适用\n");
   printf("  -o filename    保存的文件名（未指定时按 URL 推断 + 时间戳自动命名防覆盖；"
          "--video 模式为输出基础名，默认 <URL名>_<时间戳>）\n");
-  printf("  -t threads     下载线程数 1~%d（默认 %d）\n", MaxThread, MaxThread);
+  printf("  -t threads     下载线程数 1~%d（默认按 CPU 核数自适应 %d）\n",
+         BurstMaxThreads(), BurstDefaultThreads());
   printf("  --timeout N    下载无进展 N 秒后自动中断（默认 60，0 表示不限）\n");
   printf("  --no-timeout   强制下载不自动中断（等价 --timeout 0）\n");
   printf("  --update-parser  在线更新内置视频解析组件到最新版（需网络，无需重新编译）\n");
@@ -170,7 +171,7 @@ int RunCli(int argc, char** argv) {
 
   string url;
   string filename = "./test";
-  int threads = MaxThread;
+  int threads = BurstDefaultThreads();
   int timeout = 60;
   bool video_mode = false;
   string video_url;
@@ -186,6 +187,8 @@ int RunCli(int argc, char** argv) {
       filename = argv[++i];
     } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
       threads = atoi(argv[++i]);
+      if (threads < 1) threads = 1;
+      if (threads > BurstMaxThreads()) threads = BurstMaxThreads();
     } else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
       timeout = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--no-timeout") == 0) {
