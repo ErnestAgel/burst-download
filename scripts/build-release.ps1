@@ -25,6 +25,10 @@ MSYS2 安装目录(含 mingw64\bin\gcc.exe)。默认自动检测常见路径。
 .PARAMETER NotesFile
 Release 正文 Markdown 文件路径。缺省时根据 git log 自动生成变更说明。
 
+.PARAMETER Python311Exe
+Python 3.11 可执行文件（pyc 化必需，字节码需匹配 3.11 运行时）。
+缺省依次尝试环境变量 PYTHON311_EXE 与常见路径。
+
 .EXAMPLE
 .\scripts\build-release.ps1 v1.2.0
 .\scripts\build-release.ps1 -Version 1.2.0 -SkipRelease   # 只构建不发布
@@ -35,7 +39,8 @@ param(
     [string]$Msys2Path = "",
     [string]$OutDir = "",
     [switch]$SkipRelease,
-    [string]$NotesFile = ""
+    [string]$NotesFile = "",
+    [string]$Python311Exe = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -83,6 +88,18 @@ if (-not (Test-Path (Join-Path $Msys2Path 'mingw64\bin\gcc.exe'))) {
 }
 Write-Host "[工具] MSYS2: $Msys2Path"
 
+# Python 3.11 编译工具（B 方案 pyc 化必需）：参数 → 环境变量 → 常见路径
+if (-not $Python311Exe) { $Python311Exe = $env:PYTHON311_EXE }
+if (-not $Python311Exe) {
+    $Python311Exe = @('F:\curlbot\tools\python-3.11.9-embed\python.exe',
+                      'C:\Python311\python.exe', 'D:\Python311\python.exe') |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if (-not $Python311Exe) {
+    throw '缺少 Python 3.11 编译工具（B 方案 pyc 化必需）：用 -Python311Exe 指定或设置 PYTHON311_EXE'
+}
+Write-Host "[工具] Python311: $Python311Exe"
+
 # ---------- 4) tag 冲突检查(防误覆盖) ----------
 if (-not $SkipRelease) {
     $remote = git ls-remote --tags origin "refs/tags/$Version" 2>$null
@@ -126,61 +143,169 @@ Assert-LastOk 'Windows 构建'
 $WinExe = Join-Path $RepoRoot 'build-win-rel\burst.exe'
 if (-not (Test-Path $WinExe)) { throw 'Windows 产物缺失' }
 
-# ---------- 辅助：Windows zip 打包（exe + 运行 dll + python_runtime 资源） ----------
-# python_runtime/（stdlib/yt_dlp 等）必须与 exe 同目录，程序 LocateRuntimeHome 才能找到；
-# 打包后校验 zip 内必含 python_runtime/stdlib 与 python_runtime/yt_dlp，防止再次漏发。
+# ---------- 辅助：运行时 pyc 化与发布打包 ----------
+# 运行时全量 pyc 化删除 .py 源码；python311.dll 改名 bd311.dll 并修补导入名。
+function Set-BurstImportName {
+    param([string]$Path)
+    $old = [Text.Encoding]::ASCII.GetBytes('python311.dll')
+    $new = [Text.Encoding]::ASCII.GetBytes('bd311.dll')
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $changed = $false
+    for ($i = 0; $i -le $bytes.Length - $old.Length; $i++) {
+        $match = $true
+        for ($j = 0; $j -lt $old.Length; $j++) {
+            if ($bytes[$i + $j] -ne $old[$j]) { $match = $false; break }
+        }
+        if ($match) {
+            for ($j = 0; $j -lt $new.Length; $j++) { $bytes[$i + $j] = $new[$j] }
+            for ($j = $new.Length; $j -lt $old.Length; $j++) { $bytes[$i + $j] = 0 }
+            $changed = $true
+            $i += $old.Length - 1
+        }
+    }
+    if ($changed) {
+        [IO.File]::WriteAllBytes($Path, $bytes)
+        Write-Host ("  [OK] 修补导入名: " + (Split-Path -Leaf $Path))
+    }
+}
+
+function ConvertTo-PycOnlyRuntime {
+    param(
+        [string]$Src,
+        [string]$Dst,
+        [string]$PyExe,
+        [string]$Platform  # windows=留 .pyd 去 .so；linux=留 .so 去 .pyd；linux-arm64=两者都去
+    )
+    New-Item -ItemType Directory -Force -Path $Dst | Out-Null
+    Copy-Item (Join-Path $Src '*') $Dst -Recurse -Force
+    & $PyExe -m compileall -q -f -b $Dst 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'pyc 编译失败（Python 版本需与 3.11 匹配）' }
+    Get-ChildItem $Dst -Recurse -File -Filter '*.py' |
+        Where-Object { $_.FullName -notlike '*\yt_dlp\version.py' -and `
+                       $_.FullName -notlike '*/yt_dlp/version.py' } | Remove-Item -Force
+    Get-ChildItem $Dst -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
+    if ($Platform -eq 'windows') {
+        Get-ChildItem $Dst -Recurse -File -Filter '*.so' | Remove-Item -Force
+    } elseif ($Platform -eq 'linux') {
+        Get-ChildItem $Dst -Recurse -File -Filter '*.pyd' | Remove-Item -Force
+    } else {
+        # linux-arm64：仓库内扩展模块为 x86_64 构建，aarch64 不携带任何原生扩展
+        Get-ChildItem $Dst -Recurse -File -Include '*.pyd', '*.so' | Remove-Item -Force
+    }
+    Get-ChildItem $Dst -Recurse -File -Filter '.parser_last_check' | Remove-Item -Force
+    Get-ChildItem $Dst -Recurse -File -Filter '.result_*.json' | Remove-Item -Force
+}
+
+function Add-BurstEmbeddedRuntime {
+    param(
+        [string]$ExePath,
+        [string]$AssetsDir,
+        [string]$PyExe
+    )
+    $blob = Join-Path $env:TEMP ("burst-blob-" + [guid]::NewGuid().ToString('N') + '.bin')
+    try {
+        $res = (& $PyExe (Join-Path $RepoRoot 'scripts\make_runtime_blob.py') `
+                    $AssetsDir $blob 2>$null | Select-Object -Last 1)
+        $parts = ($res -split '\s+')
+        if ($parts.Count -ne 2) { throw "运行时打包生成失败: $res" }
+        $hash = [Convert]::ToUInt64($parts[0], 16)
+        $data = [IO.File]::ReadAllBytes($blob)
+        $fs = [IO.File]::Open($ExePath, [IO.FileMode]::Append)
+        try {
+            $fs.Write($data, 0, $data.Length)
+            $footer = [Text.Encoding]::ASCII.GetBytes('BURSTARC')
+            $footer += [BitConverter]::GetBytes([uint64]$data.Length)
+            $footer += [BitConverter]::GetBytes($hash)
+            $footer += [Text.Encoding]::ASCII.GetBytes('BURSTEND')
+            if ($footer.Length -ne 32) { throw "footer 长度异常: $($footer.Length)" }
+            $fs.Write($footer, 0, $footer.Length)
+        } finally {
+            $fs.Close()
+        }
+        $fs2 = [IO.File]::Open($ExePath, [IO.FileMode]::Open, [IO.FileAccess]::Read)
+        try {
+            $fs2.Seek(-32, [IO.SeekOrigin]::End) | Out-Null
+            $tail = New-Object byte[] 32
+            [void]$fs2.Read($tail, 0, 32)
+            if ([Text.Encoding]::ASCII.GetString($tail, 0, 8) -ne 'BURSTARC') {
+                throw '运行时资源写入校验失败'
+            }
+        } finally {
+            $fs2.Close()
+        }
+        Write-Host ("  [OK] 打包运行时 -> {0} (+{1:N1} MB)" -f `
+            (Split-Path -Leaf $ExePath), ($data.Length / 1MB))
+    } finally {
+        Remove-Item $blob -ErrorAction SilentlyContinue
+    }
+}
+
 function New-BurstWindowsZip {
     param(
         [string]$ExeName,   # 如 burst.exe / burst-gui.exe
         [string]$BuildDir,  # build-win-rel
         [string]$ZipPath,   # 输出 zip 完整路径
         [string]$RuntimeDir,# third_party/python/runtime
+        [string]$PyExe,     # Python 3.11 可执行文件（pyc 化）
         [string]$Label      # 日志前缀
     )
     $ExePath = Join-Path $BuildDir $ExeName
     if (-not (Test-Path $ExePath)) { throw "$Label 缺少产物: $ExePath" }
+    if (-not (Test-Path $PyExe)) {
+        throw "$Label 缺少 Python 3.11 编译工具: $PyExe（用 -Python311Exe 指定或设置 PYTHON311_EXE）"
+    }
     foreach ($req in @('stdlib', 'yt_dlp')) {
         if (-not (Test-Path (Join-Path $RuntimeDir $req))) {
             throw "$Label 缺少 Python 运行时资源: $(Join-Path $RuntimeDir $req)"
         }
     }
 
-    # 暂存目录：exe/dll 平铺，python_runtime/ 与 exe 同目录
+    # 暂存目录：exe/dll 平铺；assets 仅作为打包素材，最终不进 zip
     $StageDir = Join-Path $BuildDir ("stage-" + [IO.Path]::GetFileNameWithoutExtension($ExeName))
     if (Test-Path $StageDir) { Remove-Item -LiteralPath $StageDir -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
-    Copy-Item $ExePath $StageDir
+
+    # 1) 运行时 pyc 化（B 方案）到暂存 assets
+    ConvertTo-PycOnlyRuntime -Src $RuntimeDir -Dst (Join-Path $StageDir 'assets') `
+        -PyExe $PyExe -Platform 'windows'
+    # 2) 修补 assets/lib-dynload 内 .pyd 的导入名（python311.dll → bd311.dll）
+    Get-ChildItem (Join-Path $StageDir 'assets\lib-dynload') -File -Filter '*.pyd' `
+        -ErrorAction SilentlyContinue | ForEach-Object { Set-BurstImportName $_.FullName }
+    # 3) exe 副本：修补导入名 + 打包运行时
+    Copy-Item $ExePath (Join-Path $StageDir $ExeName)
+    Set-BurstImportName (Join-Path $StageDir $ExeName)
+    Add-BurstEmbeddedRuntime -ExePath (Join-Path $StageDir $ExeName) `
+        -AssetsDir (Join-Path $StageDir 'assets') -PyExe $PyExe
+    # 4) dll：python311.dll → bd311.dll；assets 不再随包
     Copy-Item (Join-Path $BuildDir '*.dll') $StageDir
-    Copy-Item $RuntimeDir (Join-Path $StageDir 'python_runtime') -Recurse
+    if (Test-Path (Join-Path $StageDir 'python311.dll')) {
+        Move-Item (Join-Path $StageDir 'python311.dll') (Join-Path $StageDir 'bd311.dll') -Force
+    }
+    Remove-Item (Join-Path $StageDir 'assets') -Recurse -Force
 
-    # Windows 包瘦身：清缓存，去掉 Linux 扩展模块(.so)，保留 Windows .pyd
-    Get-ChildItem (Join-Path $StageDir 'python_runtime') -Recurse -Directory -Filter '__pycache__' |
-        Remove-Item -Recurse -Force
-    Get-ChildItem (Join-Path $StageDir 'python_runtime') -Recurse -File -Include '*.pyc', '*.so' |
-        Remove-Item -Force
-    # 运行时临时文件（自动更新节流时间戳 / 解析结果残留）不入发布包
-    Get-ChildItem (Join-Path $StageDir 'python_runtime') -Recurse -File -Filter '.parser_last_check' |
-        Remove-Item -Force
-    Get-ChildItem (Join-Path $StageDir 'python_runtime') -Recurse -File -Filter '.result_*.json' |
-        Remove-Item -Force
-
+    # 5) 压缩
     Remove-Item $ZipPath -ErrorAction SilentlyContinue
     Compress-Archive -Path (Join-Path $StageDir '*') -DestinationPath $ZipPath -Force
     if (-not (Test-Path $ZipPath)) { throw "$Label zip 打包失败: $ZipPath" }
     Remove-Item -LiteralPath $StageDir -Recurse -Force
 
-    # 打包后校验：zip 内必须含 python_runtime/stdlib 与 python_runtime/yt_dlp
+    # 6) 校验：zip 只含 exe + dll；不得含 assets/运行时文件/python311.dll
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($ZipPath)
     try {
         $names = $zip.Entries | ForEach-Object { $_.FullName }
-        foreach ($req in @('python_runtime/stdlib/', 'python_runtime/yt_dlp/')) {
-            if (-not ($names | Where-Object { $_ -like ($req + '*') })) {
-                throw "$Label zip 缺少 $req —— 发布物不完整，禁止上传"
-            }
+        if (-not ($names -contains 'bd311.dll')) {
+            throw "$Label zip 缺少 bd311.dll（python311.dll 改名失败），禁止上传"
+        }
+        if ($names -contains 'python311.dll') {
+            throw "$Label zip 仍包含 python311.dll（改名失败），禁止上传"
+        }
+        if ($names | Where-Object { $_ -like 'assets/*' -or $_ -like 'assets\*' -or `
+                $_ -like '*.py' -or $_ -like '*.so' -or $_ -like '*.pyd' -or $_ -like '*.pyc' }) {
+            throw "$Label zip 不应包含运行时文件，禁止上传"
         }
         $sizeMB = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
-        Write-Host ("  [OK] {0} -> {1} ({2} MB, {3} 条目, 含 python_runtime)" -f `
+        Write-Host ("  [OK] {0} -> {1} ({2} MB, {3} 条目, 运行时已打包)" -f `
             $Label, $ZipPath, $sizeMB, $zip.Entries.Count)
     } finally {
         $zip.Dispose()
@@ -189,15 +314,28 @@ function New-BurstWindowsZip {
 
 # ---------- 6) 打包 ----------
 Write-Host "== 打包产物到 $OutDir =="
-Copy-Item (Join-Path $RepoRoot 'build-rel-x64\burst')  (Join-Path $OutDir 'burst-linux-x86_64')  -Force
-Copy-Item (Join-Path $RepoRoot 'build-rel-arm64\burst') (Join-Path $OutDir 'burst-linux-aarch64') -Force
 
-# Windows: 单文件双模 burst.exe + Python 运行 dll + python_runtime 资源(含 stdlib/yt_dlp) 打 zip，解压即用
-$WinBuildDir = Join-Path $RepoRoot 'build-win-rel'
+# Linux x86_64 / aarch64：单文件发布
 $PyRuntimeDir = Join-Path $RepoRoot 'third_party\python\runtime'
+$LinuxAssets = Join-Path $env:TEMP ("burst-linux-assets-" + [guid]::NewGuid().ToString('N'))
+ConvertTo-PycOnlyRuntime -Src $PyRuntimeDir -Dst $LinuxAssets -PyExe $Python311Exe -Platform 'linux'
+Copy-Item (Join-Path $RepoRoot 'build-rel-x64\burst') (Join-Path $OutDir 'burst-linux-x86_64') -Force
+Add-BurstEmbeddedRuntime -ExePath (Join-Path $OutDir 'burst-linux-x86_64') `
+    -AssetsDir $LinuxAssets -PyExe $Python311Exe
+Remove-Item $LinuxAssets -Recurse -Force
+# aarch64：剔除全部原生扩展（纯 pyc）
+$ArmAssets = Join-Path $env:TEMP ("burst-arm-assets-" + [guid]::NewGuid().ToString('N'))
+ConvertTo-PycOnlyRuntime -Src $PyRuntimeDir -Dst $ArmAssets -PyExe $Python311Exe -Platform 'linux-arm64'
+Copy-Item (Join-Path $RepoRoot 'build-rel-arm64\burst') (Join-Path $OutDir 'burst-linux-aarch64') -Force
+Add-BurstEmbeddedRuntime -ExePath (Join-Path $OutDir 'burst-linux-aarch64') `
+    -AssetsDir $ArmAssets -PyExe $Python311Exe
+Remove-Item $ArmAssets -Recurse -Force
+
+# Windows: burst.exe + Python 运行 dll 打 zip，解压即用
+$WinBuildDir = Join-Path $RepoRoot 'build-win-rel'
 $ZipPath = Join-Path $OutDir 'burst-windows-x86_64.zip'
 New-BurstWindowsZip -ExeName 'burst.exe' -BuildDir $WinBuildDir `
-    -ZipPath $ZipPath -RuntimeDir $PyRuntimeDir -Label 'burst-windows-x86_64'
+    -ZipPath $ZipPath -RuntimeDir $PyRuntimeDir -PyExe $Python311Exe -Label 'burst-windows-x86_64'
 
 # ---------- 7) 校验 ----------
 Write-Host "== 校验产物 =="
@@ -231,7 +369,7 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
 } else {
     $prevTag = (git tag --sort=-version:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1)
     $log = if ($prevTag) { (git log "$prevTag..HEAD" --oneline | Out-String).Trim() } else { (git log --oneline -10 | Out-String).Trim() }
-    $releaseNotes = "## burst $Version`n`n### 变更记录`n$log`n`n### 平台产物`n- burst-linux-x86_64 : 单文件双模(GUI+CLI；curl/Python/FFmpeg 静态，依赖桌面 libGL/X11)`n- burst-linux-aarch64 : CLI（交叉编译，不含 GUI）`n- burst-windows-x86_64.zip : 单文件双模 burst.exe + Python 运行 dll + python_runtime 资源(解压即用；双击=GUI, 终端带参数=CLI)"
+    $releaseNotes = "## burst $Version`n`n### 变更记录`n$log`n`n### 平台产物`n- burst-linux-x86_64 : 单文件（curl/Python/FFmpeg 静态，依赖桌面 libGL/X11）`n- burst-linux-aarch64 : 交叉编译`n- burst-windows-x86_64.zip : burst.exe + Python 运行 dll（解压即用）"
 }
 
 # 8.3 创建 Release
