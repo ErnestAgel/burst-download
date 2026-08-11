@@ -29,6 +29,14 @@ Release 正文 Markdown 文件路径。缺省时根据 git log 自动生成变�
 Python 3.11 可执行文件（pyc 化必需，字节码需匹配 3.11 运行时）。
 缺省依次尝试环境变量 PYTHON311_EXE 与常见路径。
 
+.PARAMETER CodeSignCert
+可选：Windows Authenticode 代码签名证书（.pfx）路径。提供后 Windows exe
+将用 signtool（Windows SDK）做 SHA256 + RFC3161 时间戳签名并校验。
+未提供则跳过签名（产物仍可发布，但 SmartScreen 无信任）。
+
+.PARAMETER CodeSignPassword
+证书私钥密码（.pfx）。明文传参，注意脚本调用环境的可见性。
+
 .EXAMPLE
 .\scripts\build-release.ps1 v1.2.0
 .\scripts\build-release.ps1 -Version 1.2.0 -SkipRelease   # 只构建不发布
@@ -40,7 +48,9 @@ param(
     [string]$OutDir = "",
     [switch]$SkipRelease,
     [string]$NotesFile = "",
-    [string]$Python311Exe = ""
+    [string]$Python311Exe = "",
+    [string]$CodeSignCert = "",
+    [string]$CodeSignPassword = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,6 +59,41 @@ $scriptName = Split-Path -Leaf $PSCommandPath
 function Assert-LastOk {
     param([string]$What)
     if ($LASTEXITCODE -ne 0) { throw "$What 失败(退出码 $LASTEXITCODE)" }
+}
+
+function Invoke-CodeSign {
+    param([string]$ExePath)
+    if (-not $CodeSignCert) { return }
+    $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if (-not $signtool) {
+        # 常见 Windows SDK 路径（按版本目录取最新）
+        $kitsRoots = @("${env:ProgramFiles(x86)}\Windows Kits\10\bin",
+                       "${env:ProgramFiles}\Windows Kits\10\bin")
+        foreach ($r in $kitsRoots) {
+            if (-not (Test-Path $r)) { continue }
+            $ver = Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^\d+\.' } |
+                Sort-Object Name -Descending | Select-Object -First 1
+            if (-not $ver) { continue }
+            $cand = Join-Path $ver.FullName 'x64\signtool.exe'
+            if (Test-Path $cand) { $signtool = $cand; break }
+        }
+    }
+    if (-not $signtool) {
+        throw "未找到 signtool.exe（需安装 Windows SDK），无法执行代码签名"
+    }
+    $stPath = if ($signtool -is [System.Management.Automation.CommandInfo]) {
+        $signtool.Source
+    } else {
+        $signtool
+    }
+    # SHA256 + RFC3161 时间戳：证书过期后签名仍有效
+    & $stPath sign /fd SHA256 /tr 'http://timestamp.digicert.com' /td SHA256 `
+        /f $CodeSignCert /p $CodeSignPassword $ExePath
+    if ($LASTEXITCODE -ne 0) { throw "signtool 签名失败: $ExePath" }
+    & $stPath verify /pa /v $ExePath | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "signtool 校验失败: $ExePath" }
+    Write-Host "  [OK] Authenticode 签名完成: $ExePath"
 }
 
 # ---------- 1) 参数校验 ----------
@@ -62,6 +107,9 @@ if (-not $SkipRelease) {
     }
     if (-not $Version.StartsWith('v')) { $Version = "v$Version" }
 }
+# 注入二进制的版本号（不带 v 前缀）；SkipRelease 未给版本时用 CMake 默认值
+$VerNoV = if ($Version) { $Version.TrimStart('v') } else { '' }
+$VerArg = if ($VerNoV) { "-DBURST_VERSION=$VerNoV" } else { '' }
 
 # ---------- 2) 路径 ----------
 $RepoRoot = Split-Path -Parent $PSScriptRoot        # scripts/ 上一级 = 仓库根
@@ -123,20 +171,20 @@ if (-not $SkipRelease) {
 # ---------- 5) 构建三平台 ----------
 # 5.1 Linux x86_64(WSL 原生)
 Write-Host "== [1/3] Linux x86_64 Release (WSL) =="
-wsl.exe -e bash -lc "set -o pipefail; cd $WslRepo && cmake -B build-rel-x64 -DCMAKE_BUILD_TYPE=Release . >/dev/null 2>&1 && cmake --build build-rel-x64 -j`$(nproc) 2>&1 | tail -2"
+wsl.exe -e bash -lc "set -o pipefail; cd $WslRepo && cmake -B build-rel-x64 -DCMAKE_BUILD_TYPE=Release $VerArg . >/dev/null 2>&1 && cmake --build build-rel-x64 -j`$(nproc) 2>&1 | tail -2"
 Assert-LastOk 'Linux x86_64 构建'
 if (-not (Test-Path (Join-Path $RepoRoot 'build-rel-x64\burst'))) { throw 'Linux x86_64 产物缺失' }
 
 # 5.2 Linux aarch64(WSL 交叉编译)
 Write-Host "== [2/3] Linux aarch64 Release (WSL 交叉) =="
-wsl.exe -e bash -lc "set -o pipefail; cd $WslRepo && cmake -B build-rel-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ . >/dev/null 2>&1 && cmake --build build-rel-arm64 -j`$(nproc) 2>&1 | tail -2"
+wsl.exe -e bash -lc "set -o pipefail; cd $WslRepo && cmake -B build-rel-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ $VerArg . >/dev/null 2>&1 && cmake --build build-rel-arm64 -j`$(nproc) 2>&1 | tail -2"
 Assert-LastOk 'Linux aarch64 构建'
 if (-not (Test-Path (Join-Path $RepoRoot 'build-rel-arm64\burst'))) { throw 'Linux aarch64 产物缺失' }
 
 # 5.3 Windows x86_64(MSYS2/mingw64)
 Write-Host "== [3/3] Windows x86_64 Release (MSYS2) =="
 $env:Path = "$Msys2Path\mingw64\bin;$Msys2Path\usr\bin;" + $env:Path
-cmake -B (Join-Path $RepoRoot 'build-win-rel') -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release $RepoRoot
+cmake -B (Join-Path $RepoRoot 'build-win-rel') -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release $VerArg $RepoRoot
 Assert-LastOk 'Windows cmake 配置'
 cmake --build (Join-Path $RepoRoot 'build-win-rel') -j 8
 Assert-LastOk 'Windows 构建'
@@ -276,6 +324,7 @@ function New-BurstWindowsZip {
     Set-BurstImportName (Join-Path $StageDir $ExeName)
     Add-BurstEmbeddedRuntime -ExePath (Join-Path $StageDir $ExeName) `
         -AssetsDir (Join-Path $StageDir 'assets') -PyExe $PyExe
+    Invoke-CodeSign (Join-Path $StageDir $ExeName)
     # 4) dll：python311.dll → bd311.dll；assets 不再随包
     Copy-Item (Join-Path $BuildDir '*.dll') $StageDir
     if (Test-Path (Join-Path $StageDir 'python311.dll')) {
@@ -347,6 +396,14 @@ if ($ok -lt 3) { throw "产物校验未全部通过($ok/3)" }
 
 Write-Host "== 产物清单 =="
 Get-ChildItem $OutDir -Filter 'burst-*' | Select-Object Name, Length | Format-Table -AutoSize
+
+Write-Host "== 生成 SHA256 哈希清单 =="
+Get-ChildItem $OutDir -File | Where-Object { $_.Name -like 'burst-*' } |
+    ForEach-Object {
+        $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash
+        "{0}  {1}" -f $h, $_.Name
+    } | Set-Content -LiteralPath (Join-Path $OutDir 'SHA256SUMS.txt') -Encoding ASCII
+Write-Host "  [OK] SHA256SUMS.txt（供用户/更新器校验产物完整性）"
 
 if ($SkipRelease) {
     Write-Host "`n[SkipRelease] 构建与打包完成,跳过 GitHub 发布。产物在: $OutDir"

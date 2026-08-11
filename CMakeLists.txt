@@ -124,7 +124,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_definitions(CURL_STATICLIB)
     target_link_libraries(burst ${CURL_STATIC_LIB} crypt32 ws2_32 bcrypt)
     set_target_properties(burst PROPERTIES
-      LINK_FLAGS "-static-libgcc -static-libstdc++ -static")
+      LINK_FLAGS "-static-libgcc -static-libstdc++ -static -s")
   else()
     # Linux: libcurl.a + 静态 openssl/zlib
     target_link_libraries(burst ${CURL_STATIC_LIB})
@@ -162,7 +162,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     # 合并 GUI 后需动态链接 libGL/X11（无 libGL.a，全静态 -static 会链接失败），
     # 故改为静态 C++ 运行库 + 动态 glibc；curl/openssl/python/ffmpeg 仍为仓库静态库
     set_target_properties(burst PROPERTIES
-      LINK_FLAGS "-static-libgcc -static-libstdc++")
+      LINK_FLAGS "-static-libgcc -static-libstdc++ -s")
   endif()
 
 # ==================== Debug：动态库（便于调试） ====================
