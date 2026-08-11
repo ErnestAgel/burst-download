@@ -46,7 +46,7 @@ add_executable(burst WIN32 ${SRC})
 target_include_directories(burst PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 # Debug：保留调试信息（便于 gdb/调试器）；Release：不带 -g 且剥离符号，
-# 减小体积并提高逆向门槛（见 docs/issue-analysis.md 反逆向章节）。
+# 减小体积并提高逆向门槛（Release 加固）。
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
   add_compile_options(-g)
 endif()
