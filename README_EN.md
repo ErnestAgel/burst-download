@@ -17,9 +17,9 @@
 [![Last commit](https://img.shields.io/github/last-commit/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/commits/main)
 
 > 🎬 **Video download**: one command to download videos from Bilibili / YouTube and other popular sites
-> ⚡ **Multi-threading**: HTTP Range chunking with 1–10 threads to saturate bandwidth
+> ⚡ **Multi-threading**: HTTP Range chunking with 1–8 threads (default adaptive to CPU cores) to saturate bandwidth
 > 📦 **Resume support**: continue from where it stopped instead of restarting
-> 🖥 **Three-platform builds**: Linux x86_64 / ARM64 / Windows; **GUI and CLI are merged into one binary** (double-click/no args = GUI, args in a terminal = CLI); Windows Release ships the embedded-Python runtime DLLs and the `python_runtime/` resources (DLLs copied by CMake, resources bundled by the release script)
+> 🖥 **Three-platform builds**: Linux x86_64 / ARM64 / Windows; single-file Release per platform
 
 </div>
 
@@ -30,12 +30,12 @@
 | | Description |
 |---|---|
 | 🎬 **Video download** | `--video` mode: pass a video page URL, the built-in parser resolves the media stream (Bilibili / YouTube and more), then downloads with multi-threaded chunking; DASH streams are **auto-merged** into one file (MP4 / WebM containers) |
-| ⚡ **Multi-threaded** | `-t` 1–10 threads, HTTP Range chunking, the last chunk absorbs the remainder |
+| ⚡ **Multi-threaded** | `-t` 1–8 threads (default 2–4, adaptive to CPU cores), HTTP Range chunking, the last chunk absorbs the remainder |
 | 📦 **Resume** | Automatically detects an existing local file and resumes; falls back to single-thread when the server lacks Range support |
 | ⏱ **Timeout & logging** | `--timeout` / `--no-timeout` control; timeouts and failure details are written to `download.log` |
 | 🍪 **Cookie support** | `--cookies-from-browser` reads browser login state (Bilibili 720p+ streams), `--cookie` for manual cookies |
 | 🛡 **Referer** | Automatically sends the video page Referer to avoid anti-hotlinking 403s |
-| 🖥 **Cross-platform** | Linux x86_64 / Linux aarch64 / Windows; **Debug (dynamic libs) + Release (static single-file) dual builds**; on Windows the embedded-Python runtime DLLs must sit next to the exe (copied automatically by CMake), and release zips bundle `python_runtime/` (stdlib + yt_dlp) for out-of-the-box `--video` |
+| 🖥 **Cross-platform** | Linux x86_64 / Linux aarch64 / Windows; **Debug (dynamic libs) + Release (static single-file) dual builds**; on Windows the embedded-Python runtime DLLs must sit next to the exe (copied automatically by CMake) |
 
 ---
 
@@ -45,7 +45,7 @@
 
 | | curl / wget | burst |
 |---|---|---|
-| Connections | single-threaded, single connection | 1–10 concurrent connections |
+| Connections | single-threaded, single connection | 1–8 concurrent connections |
 | Bandwidth | limited by TCP slow start / congestion window; often can't saturate high-bandwidth, high-latency links | parallel connections approach the bandwidth ceiling |
 | Resume | manual `curl -C -` | automatic detection & resume |
 | Video download | ❌ not supported | `--video` auto-resolves stream URLs |
@@ -100,12 +100,9 @@ One command for any supported site:
 
 ## 🚀 Quick Start
 
-**burst is a single binary that is both CLI and GUI**: run it with no arguments (double-click on Windows) to open the GUI; run it with arguments in a terminal for command-line downloads.
-
 ```bash
 ./burst <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
 ./burst --video <video-url> [-o basename] [-t threads] [--timeout sec]
-./burst --gui        # explicitly open the GUI (same as running with no arguments)
 ```
 
 ```bash
@@ -141,7 +138,7 @@ cmake -B build . && cmake --build build        # Linux
 cmake -B build -G "MinGW Makefiles" .          # Windows (MSYS2/mingw64 env, gcc and mingw32-make on PATH)
 ```
 
-**Release**: links static libraries into a **single dual-mode binary** (GUI + CLI). On Windows, since the Python interpreter is embedded, the DLLs under `third_party/python/windows-x86_64/dll/` must sit next to the exe (copied automatically by CMake); release zips bundle the `python_runtime/` resources (stdlib + yt_dlp) next to the exe, so `--video` works out of the box. On Linux, curl/openssl/python/ffmpeg are static from the repo while glibc is dynamic; because the GUI is merged into the same binary it depends on the desktop's `libGL`/`libX11` at runtime (same as the old GUI build), and the Linux artifact also needs `python_runtime/` next to the executable for `--video`.
+**Release**: links static libraries into a **single-file binary**. On Windows, since the Python interpreter is embedded, the DLLs under `third_party/python/windows-x86_64/dll/` must sit next to the exe (copied automatically by CMake); the release zip works out of the box for `--video`. On Linux, curl/openssl/python/ffmpeg are static from the repo while glibc is dynamic; the binary depends on the desktop's `libGL`/`libX11` at runtime.
 
 ```bash
 # Linux (static openssl prepared by the build script)
@@ -159,7 +156,7 @@ cmake --build build
 
 ![Burst Download GUI (Windows)](docs/GUI.png)
 
-**burst is a single binary that is both CLI and GUI**: run it with no arguments (or double-click) to open the GUI; run it with arguments in a terminal for the CLI. The GUI is currently **Phase 2: File Download + Video Download modes**, supported on **Windows x86_64 / Linux x86_64** (the Linux aarch64 build is CLI-only, without the GUI).
+The GUI provides **File Download + Video Download** operations and is supported on **Windows x86_64 / Linux x86_64** (the Linux aarch64 build has no GUI).
 
 **Run**:
 
@@ -169,25 +166,25 @@ cmake --build build
 ./burst <url> ...       # terminal CLI download
 ```
 
-Windows: double-click `burst.exe` to open the GUI (a very brief console window may flash at startup and then hide — this is the console-subsystem trade-off that keeps terminal output pipe/capture friendly). Linux: run `./burst` with no arguments to open the GUI; it depends on the desktop's `libGL`/`libX11` (also required for CLI mode since GUI is merged into the same binary).
+Windows: double-click `burst.exe` to open the GUI; Linux: run `./burst` with no arguments to open the GUI (depends on the desktop's `libGL`/`libX11`).
 
-**Build** (`option(BUILD_GUI ON)` by default; the GUI is merged into the `burst` target):
+**Build** (`option(BUILD_GUI ON)` by default):
 
 ```bash
 # Windows (MSYS2/mingw64)
 cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target burst      # produces burst.exe (dual-mode)
+cmake --build build --target burst      # produces burst.exe
 
 # Linux (needs X11 dev packages: libgl1-mesa-dev libx11-dev libxrandr-dev
 #   libxinerama-dev libxcursor-dev libxi-dev)
 cmake -B build -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target burst      # produces burst (dual-mode)
+cmake --build build --target burst      # produces burst
 ```
 
 **Supported**:
 
 - 🎨 **Atom One Dark theme**; Windows: frameless window with Mac-style buttons (minimize/maximize/close); Linux: native title bar
-- ⚡ Multi-threaded segmented download (1~`min(10, cores)` threads selectable)
+- ⚡ Multi-threaded segmented download (1–8 threads selectable, default adaptive to CPU cores)
 - 🎬 **Video download** (Bilibili / YouTube etc.): parse → download video/audio tracks (parallel chunks) → auto-merge, with 4-stage status shown live (Parsing / Downloading video track / Downloading audio track / Merging)
 - ⏸️ **Pause / Resume / Stop** state machine: first "Cancel" click pauses (cache kept, **segmented resume** via `.curlbolt.part` metadata — only unfinished parts re-download); red "Stop" deletes cache and resets UI
 - 📊 **3D cylinder progress bar** (battery-cell chunks): completed cells green, active cell growing, 5px separators, per-cell percentage, hover shows per-thread speed; overall % + speed bottom-right
