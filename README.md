@@ -37,7 +37,7 @@
 | ⏱ **超时中断与日志** | `--timeout` / `--no-timeout` 控制；超时中断、失败详情写入 `download.log` |
 | 🍪 **Cookie 支持** | `--cookies-from-browser` 读浏览器登录态（B站 720p+ 高清流）、`--cookie` 手动指定 |
 | 🛡 **防盗链 Referer** | 自动携带视频页 Referer，B站等视频流防 403 |
-| 🖥 **跨平台** | Linux x86_64 / Linux aarch64 / Windows；**Debug（动态库调试）+ Release（静态单文件发布）双构建**；Windows 因内嵌 Python 解释器，Release 需将运行 dll 与 exe 同目录（构建时自动复制） |
+| 🖥 **跨平台** | Linux x86_64 / Linux aarch64 / Windows；**Debug（动态库调试）+ Release（静态单文件发布）双构建**；Windows Release 需将运行 dll 与 exe 同目录（构建时自动复制） |
 
 ---
 
@@ -135,7 +135,7 @@ percent: 42% speed: 3.20 MB/s ETA: 00:05:12
 
 ## 🔨 构建 Build
 
-项目自带三平台 libcurl 库、最小化 FFmpeg 静态库与 Python 嵌入运行时（`third_party/`），无需安装开发包。
+项目自带三平台 libcurl 库、最小化 FFmpeg 静态库与 Python 运行时（`third_party/`），无需安装开发包。
 
 **Debug（默认）**：链接动态库，便于 gdb 调试
 
@@ -144,7 +144,7 @@ cmake -B build . && cmake --build build        # Linux
 cmake -B build -G "MinGW Makefiles" .          # Windows（MSYS2/mingw64 环境，gcc 与 mingw32-make 需在 PATH）
 ```
 
-**Release**：链接静态库，产出**单文件程序**。Windows 由于内嵌 Python 解释器，需将 `third_party/python/windows-x86_64/dll/` 下的 dll 与 exe 同目录（CMake 构建时自动复制）；Python 运行时资源（stdlib/yt_dlp）**内嵌于 exe 尾部**，首次运行自动解压到临时目录缓存（约 1~2 秒），之后秒开。Linux：curl/openssl/python/ffmpeg 均为仓库静态库，glibc 动态链接，运行时依赖桌面环境的 `libGL`/`libX11`；产物为单文件，运行时同样内嵌，视频解析开箱即用。
+**Release**：链接静态库，产出**单文件程序**。Windows 需将 `third_party/python/windows-x86_64/dll/` 下的运行 dll 与 exe 同目录（CMake 构建时自动复制），解压即用。Linux：curl/openssl/python/ffmpeg 均为仓库静态库，glibc 动态链接，运行时依赖桌面环境的 `libGL`/`libX11`；产物为单文件。视频解析组件随程序分发，开箱即用。
 
 ```bash
 # Linux（openssl 静态库由构建脚本准备）

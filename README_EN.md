@@ -35,7 +35,7 @@
 | ⏱ **Timeout & logging** | `--timeout` / `--no-timeout` control; timeouts and failure details are written to `download.log` |
 | 🍪 **Cookie support** | `--cookies-from-browser` reads browser login state (Bilibili 720p+ streams), `--cookie` for manual cookies |
 | 🛡 **Referer** | Automatically sends the video page Referer to avoid anti-hotlinking 403s |
-| 🖥 **Cross-platform** | Linux x86_64 / Linux aarch64 / Windows; **Debug (dynamic libs) + Release (static single-file) dual builds**; on Windows the embedded-Python runtime DLLs must sit next to the exe (copied automatically by CMake) |
+| 🖥 **Cross-platform** | Linux x86_64 / Linux aarch64 / Windows; **Debug (dynamic libs) + Release (static single-file) dual builds**; on Windows the runtime DLLs must sit next to the exe (copied automatically by CMake) |
 
 ---
 
@@ -129,7 +129,7 @@ percent: 42% speed: 3.20 MB/s ETA: 00:05:12
 
 ## 🔨 Build
 
-The project ships prebuilt libcurl libraries, a minimal static FFmpeg and the embedded Python runtime for all three platforms (`third_party/`) — no need to install dev packages.
+The project ships prebuilt libcurl libraries, a minimal static FFmpeg and the Python runtime for all three platforms (`third_party/`) — no need to install dev packages.
 
 **Debug (default)**: links dynamic libraries, convenient for gdb
 
@@ -138,7 +138,7 @@ cmake -B build . && cmake --build build        # Linux
 cmake -B build -G "MinGW Makefiles" .          # Windows (MSYS2/mingw64 env, gcc and mingw32-make on PATH)
 ```
 
-**Release**: links static libraries into a **single-file binary**. On Windows, since the Python interpreter is embedded, the DLLs under `third_party/python/windows-x86_64/dll/` must sit next to the exe (copied automatically by CMake); the Python runtime resources (`stdlib/yt_dlp`) are **embedded in the exe** and auto-extracted to a temp cache on first run (~1–2 s), then cached for instant startup. On Linux, curl/openssl/python/ffmpeg are static from the repo while glibc is dynamic; the binary depends on the desktop's `libGL`/`libX11` at runtime; the artifact is a single file with the runtime embedded, so video parsing works out of the box.
+**Release**: links static libraries into a **single-file binary**. On Windows, the DLLs under `third_party/python/windows-x86_64/dll/` must sit next to the exe (copied automatically by CMake) — unpack and run. On Linux, curl/openssl/python/ffmpeg are static from the repo while glibc is dynamic; the binary depends on the desktop's `libGL`/`libX11` at runtime; the artifact is a single file. The video parser ships with the program and works out of the box.
 
 ```bash
 # Linux (static openssl prepared by the build script)
