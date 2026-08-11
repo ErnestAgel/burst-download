@@ -125,9 +125,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
       endif()
     endif()
     target_link_libraries(burst dl pthread)
-    # 全静态单文件（-static），目标机无需任何 libcurl/openssl 动态库
+    # 合并 GUI 后需动态链接 libGL/X11（无 libGL.a，全静态 -static 会链接失败），
+    # 故改为静态 C++ 运行库 + 动态 glibc；curl/openssl/python/ffmpeg 仍为仓库静态库
     set_target_properties(burst PROPERTIES
-      LINK_FLAGS "-static-libgcc -static-libstdc++ -static")
+      LINK_FLAGS "-static-libgcc -static-libstdc++")
   endif()
 
 # ==================== Debug：动态库（便于调试） ====================
@@ -223,8 +224,11 @@ if(BUILD_GUI)
     third_party/imgui/backends/imgui_impl_glfw.cpp
     third_party/imgui/backends/imgui_impl_opengl3.cpp)
 
-  # ---- 正式 GUI 目标（Phase 2：文件模式 + 视频模式闭环） ----
-  add_executable(burst-gui WIN32
+  # ---- GUI 合并进 burst：同一程序双模（无参数/--gui = 图形界面，带参数 = 终端 CLI） ----
+  # curl/Python/FFmpeg 已在上方统一链接到 burst（CLI/GUI 共用同一目标，无需重复链接）；
+  # Windows 保持控制台子系统：终端 CLI 输出可管道/变量捕获，GUI 路径启动时 FreeConsole() 隐藏控制台。
+  target_compile_definitions(burst PRIVATE BURST_HAS_GUI)
+  target_sources(burst PRIVATE
     gui/main_gui.cpp
     gui/ui.cpp
     gui/toggle.cpp
@@ -234,98 +238,24 @@ if(BUILD_GUI)
     gui/crashguard.cpp
     gui/theme.cpp
     gui/dirbrowser.cpp
-    src/Ccurl.cpp
-    src/download_video.cpp
-    src/video.cpp
-    src/embed_python.cpp
-    src/avmerge.cpp
     ${IMGUI_SRC})
-  target_include_directories(burst-gui PRIVATE
+  target_include_directories(burst PRIVATE
     third_party/imgui
     third_party/imgui/backends
     gui
     include
-    src)  # download_video.h / progress.h（Phase 2 视频模式）
-  target_compile_options(burst-gui PRIVATE
+    src)  # download_video.h / progress.h（视频模式）
+  target_compile_options(burst PRIVATE
     -finput-charset=UTF-8 -fexec-charset=UTF-8)
-  target_link_libraries(burst-gui PRIVATE glfw)
+  target_link_libraries(burst glfw)
 
   if(MINGW)
-    target_link_libraries(burst-gui PRIVATE
+    target_link_libraries(burst
       opengl32 gdi32 user32 shell32 advapi32 winmm ole32)
   else()
     find_package(OpenGL REQUIRED)
-    target_link_libraries(burst-gui PRIVATE ${OPENGL_LIBRARIES})
+    target_link_libraries(burst ${OPENGL_LIBRARIES})
   endif()
-
-  # curl 链接（与 burst 同策略：Release 静态 / Debug 动态）
-  if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(GUI_CURL_STATIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/static/libcurl.a)
-    if(EXISTS ${GUI_CURL_STATIC})
-      target_compile_definitions(burst-gui PRIVATE CURL_STATICLIB)
-      if(WIN32)
-        target_link_libraries(burst-gui PRIVATE
-          ${GUI_CURL_STATIC} crypt32 ws2_32 bcrypt)
-      else()
-        target_link_libraries(burst-gui PRIVATE
-          ${GUI_CURL_STATIC} dl pthread)
-      endif()
-    endif()
-  else()
-    if(WIN32)
-      set(GUI_CURL_DYN ${CMAKE_CURRENT_SOURCE_DIR}/third_party/windows-x86_64/dynamic)
-      if(EXISTS ${GUI_CURL_DYN}/libcurl.dll.a)
-        target_link_libraries(burst-gui PRIVATE
-          ${GUI_CURL_DYN}/libcurl.dll.a bcrypt ws2_32)
-        if(EXISTS ${GUI_CURL_DYN}/libcurl-4.dll)
-          add_custom_command(TARGET burst-gui POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              ${GUI_CURL_DYN}/libcurl-4.dll $<TARGET_FILE_DIR:burst-gui>)
-        endif()
-      endif()
-    else()
-      target_link_libraries(burst-gui PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic/libcurl.so pthread)
-      set_target_properties(burst-gui PROPERTIES
-        BUILD_RPATH ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic)
-    endif()
-  endif()
-  burst_copy_mingw_runtime_dlls(burst-gui)
-
-  # ---- 视频模式（Phase 2）：Python 嵌入（解析）+ FFmpeg（合并）链接 ----
-  # 与 CLI 同策略：运行时资源 fallback 到源码树 third_party/python/runtime（开发构建）；
-  # 发布时 exe 同目录 python_runtime/ 优先（LocateRuntimeHome 探测顺序，见 embed_python.cpp）
-  target_compile_definitions(burst-gui PRIVATE
-    PYTHON_RUNTIME_FALLBACK="${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/runtime")
-  if(EXISTS ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/libpython3.11.a)
-    target_link_libraries(burst-gui PRIVATE
-      ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/libpython3.11.a)
-  endif()
-  if(UNIX)
-    # libpython 依赖：openssl/zlib 用 third_party 干净静态库（同 CLI，见上）
-    set(_PY_DEPS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/static)
-    target_link_libraries(burst-gui PRIVATE
-      ${_PY_DEPS_DIR}/libssl.a ${_PY_DEPS_DIR}/libcrypto.a ${_PY_DEPS_DIR}/libz.a
-      dl pthread m util)
-    foreach(_pyx lzma bz2)
-      if(EXISTS ${_PY_DEPS_DIR}/lib${_pyx}.a)
-        target_link_libraries(burst-gui PRIVATE ${_PY_DEPS_DIR}/lib${_pyx}.a)
-      endif()
-    endforeach()
-  endif()
-  # FFmpeg 静态库（进程内 remux 合并音视频轨，同 CLI）
-  if(EXISTS ${FFMPEG_LIB_DIR}/libavformat.a)
-    target_link_libraries(burst-gui PRIVATE
-      ${FFMPEG_LIB_DIR}/libavformat.a
-      ${FFMPEG_LIB_DIR}/libavcodec.a
-      ${FFMPEG_LIB_DIR}/libavutil.a)
-    if(WIN32)
-      # avutil 随机数种子依赖 bcrypt/ws2_32；须置于 ffmpeg 静态库之后（链接顺序）
-      target_link_libraries(burst-gui PRIVATE bcrypt ws2_32)
-    endif()
-  endif()
-  # Windows：Python 运行依赖 dll 随 GUI 分发（exe 同目录，7 个 dll，POST_BUILD 自动复制）
-  burst_copy_python_runtime_dlls(burst-gui)
 
   # ---- 开发冒烟目标（Phase 0 验证窗口/字体链路，仅开发用） ----
   add_executable(burst-gui-smoke WIN32
@@ -340,6 +270,9 @@ if(BUILD_GUI)
   if(MINGW)
     target_link_libraries(burst-gui-smoke PRIVATE
       opengl32 gdi32 user32 shell32 advapi32 winmm)
+  else()
+    find_package(OpenGL REQUIRED)
+    target_link_libraries(burst-gui-smoke PRIVATE ${OPENGL_LIBRARIES})
   endif()
   burst_copy_mingw_runtime_dlls(burst-gui-smoke)
 endif()

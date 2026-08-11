@@ -20,7 +20,7 @@
 > 🎬 **视频下载**：一条命令下载 B站 / YouTube 等主流网站的视频，多线程分片下载
 > ⚡ **多线程加速**：HTTP Range 分片，1~10 线程并发，榨干带宽
 > 📦 **断点续传**：中断后从断点继续，不重头来
-> 🖥 **三平台构建**：Linux x86_64 / ARM64 / Windows；Linux Release 静态单文件零依赖，Windows Release 随附 Python 运行 dll（CMake 自动复制到 exe 目录）
+> 🖥 **三平台构建**：Linux x86_64 / ARM64 / Windows；**GUI 与 CLI 合并为单一程序**（双击/无参数=GUI，终端带参数=CLI）；Windows Release 随附 Python 运行 dll 与 python_runtime 资源（dll 由 CMake 自动复制，python_runtime 由发布脚本打包进 zip）
 
 </div>
 
@@ -37,7 +37,7 @@
 | ⏱ **超时中断与日志** | `--timeout` / `--no-timeout` 控制；超时中断、失败详情写入 `download.log` |
 | 🍪 **Cookie 支持** | `--cookies-from-browser` 读浏览器登录态（B站 720p+ 高清流）、`--cookie` 手动指定 |
 | 🛡 **防盗链 Referer** | 自动携带视频页 Referer，B站等视频流防 403 |
-| 🖥 **跨平台** | Linux x86_64 / Linux aarch64 / Windows；**Debug（动态库调试）+ Release（静态单文件发布）双构建**；Windows 因内嵌 Python 解释器，Release 需将运行 dll 与 exe 同目录（构建时自动复制） |
+| 🖥 **跨平台** | Linux x86_64 / Linux aarch64 / Windows；**Debug（动态库调试）+ Release（静态单文件发布）双构建**；Windows 因内嵌 Python 解释器，Release 需将运行 dll 与 exe 同目录（构建时自动复制），发布 zip 内置 python_runtime/（stdlib + yt_dlp）解压即用 |
 
 ---
 
@@ -102,10 +102,13 @@
 
 ## 🚀 快速开始 Quick Start
 
+**burst 是 CLI 与 GUI 合并的单一程序**：无参数运行（Windows 双击）打开图形界面；在终端带参数运行即命令行下载。
+
 ```bash
 ./burst <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
 ./burst --video <video-url> [-o basename] [-t threads] [--timeout sec]
 ./burst --update-parser
+./burst --gui        # 显式打开图形界面（也可直接无参数运行）
 ```
 
 ```bash
@@ -144,7 +147,7 @@ cmake -B build . && cmake --build build        # Linux
 cmake -B build -G "MinGW Makefiles" .          # Windows（MSYS2/mingw64 环境，gcc 与 mingw32-make 需在 PATH）
 ```
 
-**Release**：链接静态库，Linux 产出**单文件可执行程序**（无动态依赖，用于发布）；Windows 由于内嵌 Python 解释器，需将 `third_party/python/windows-x86_64/dll/` 下的 dll 与 exe 同目录（CMake 构建时自动复制）
+**Release**：链接静态库，产出**单文件双模程序**（GUI + CLI）。Windows 由于内嵌 Python 解释器，需将 `third_party/python/windows-x86_64/dll/` 下的 dll 与 exe 同目录（CMake 构建时自动复制）；发布 zip 已内置 `python_runtime/`（stdlib + yt_dlp）资源，与 exe 解压同目录即可使用 `--video`。Linux：curl/openssl/python/ffmpeg 均为仓库静态库，glibc 动态链接；因 GUI 合并进同一二进制，运行时依赖桌面环境的 `libGL`/`libX11`（与旧 GUI 版一致）；Linux 发布物同样需将 `python_runtime/` 放在可执行文件同目录才能使用 `--video`。
 
 ```bash
 # Linux（openssl 静态库由构建脚本准备）
@@ -162,22 +165,30 @@ cmake --build build
 
 ![Burst Download GUI（Windows）](docs/GUI.png)
 
-图形界面是 CLI 的图形封装（`burst-gui`），当前为 **Phase 2：文件下载 + 视频下载模式**，支持 **Windows x86_64 / Linux x86_64**。
+**burst 是 CLI 与 GUI 合并的单一程序**：无参数运行（或双击）打开图形界面；在终端带参数运行即 CLI。当前 GUI 为 **Phase 2：文件下载 + 视频下载模式**，支持 **Windows x86_64 / Linux x86_64**（Linux aarch64 构建为 CLI-only，不含图形界面）。
 
-**构建**（`option(BUILD_GUI ON)` 默认开启）：
+**运行**：
+
+```bash
+./burst                 # 打开图形界面（GUI）
+./burst --gui           # 显式指定打开图形界面
+./burst <url> ...       # 终端 CLI 下载
+```
+
+Windows：双击 `burst.exe` 打开 GUI（启动瞬间可能有极短暂的控制台窗口闪一下随即隐藏——这是"同一程序同时支持终端 CLI 与 GUI"的控制台子系统方案，换来终端输出可管道/变量捕获）。Linux：`./burst` 无参数打开 GUI，依赖桌面环境自带的 `libGL`/`libX11`（CLI 模式同样要求系统存在这些库）。
+
+**构建**（`option(BUILD_GUI ON)` 默认开启，GUI 合并进 `burst` 目标）：
 
 ```bash
 # Windows（MSYS2/mingw64）
 cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target burst-gui      # 产出 burst-gui.exe
+cmake --build build --target burst      # 产出 burst.exe（双模）
 
 # Linux（需 X11 开发包：libgl1-mesa-dev libx11-dev libxrandr-dev
 #   libxinerama-dev libxcursor-dev libxi-dev）
 cmake -B build -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target burst-gui      # 产出 burst-gui
+cmake --build build --target burst      # 产出 burst（双模）
 ```
-
-**运行**：Windows 直接运行 `burst-gui.exe`（运行时 dll 由 CMake 构建时自动复制到 exe 同目录，含 MinGW 运行时与 Python 嵌入 dll）；Linux 运行 `./burst-gui`（依赖桌面环境自带的 `libGL`/`libX11`）。
 
 **已支持**：
 

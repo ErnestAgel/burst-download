@@ -106,13 +106,13 @@ if (-not $SkipRelease) {
 # ---------- 5) 构建三平台 ----------
 # 5.1 Linux x86_64(WSL 原生)
 Write-Host "== [1/3] Linux x86_64 Release (WSL) =="
-wsl.exe -e bash -lc "cd $WslRepo && cmake -B build-rel-x64 -DCMAKE_BUILD_TYPE=Release . >/dev/null 2>&1 && cmake --build build-rel-x64 -j`$(nproc) 2>&1 | tail -2"
+wsl.exe -e bash -lc "set -o pipefail; cd $WslRepo && cmake -B build-rel-x64 -DCMAKE_BUILD_TYPE=Release . >/dev/null 2>&1 && cmake --build build-rel-x64 -j`$(nproc) 2>&1 | tail -2"
 Assert-LastOk 'Linux x86_64 构建'
 if (-not (Test-Path (Join-Path $RepoRoot 'build-rel-x64\burst'))) { throw 'Linux x86_64 产物缺失' }
 
 # 5.2 Linux aarch64(WSL 交叉编译)
 Write-Host "== [2/3] Linux aarch64 Release (WSL 交叉) =="
-wsl.exe -e bash -lc "cd $WslRepo && cmake -B build-rel-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ . >/dev/null 2>&1 && cmake --build build-rel-arm64 -j`$(nproc) 2>&1 | tail -2"
+wsl.exe -e bash -lc "set -o pipefail; cd $WslRepo && cmake -B build-rel-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ . >/dev/null 2>&1 && cmake --build build-rel-arm64 -j`$(nproc) 2>&1 | tail -2"
 Assert-LastOk 'Linux aarch64 构建'
 if (-not (Test-Path (Join-Path $RepoRoot 'build-rel-arm64\burst'))) { throw 'Linux aarch64 产物缺失' }
 
@@ -126,18 +126,78 @@ Assert-LastOk 'Windows 构建'
 $WinExe = Join-Path $RepoRoot 'build-win-rel\burst.exe'
 if (-not (Test-Path $WinExe)) { throw 'Windows 产物缺失' }
 
+# ---------- 辅助：Windows zip 打包（exe + 运行 dll + python_runtime 资源） ----------
+# python_runtime/（stdlib/yt_dlp 等）必须与 exe 同目录，程序 LocateRuntimeHome 才能找到；
+# 打包后校验 zip 内必含 python_runtime/stdlib 与 python_runtime/yt_dlp，防止再次漏发。
+function New-BurstWindowsZip {
+    param(
+        [string]$ExeName,   # 如 burst.exe / burst-gui.exe
+        [string]$BuildDir,  # build-win-rel
+        [string]$ZipPath,   # 输出 zip 完整路径
+        [string]$RuntimeDir,# third_party/python/runtime
+        [string]$Label      # 日志前缀
+    )
+    $ExePath = Join-Path $BuildDir $ExeName
+    if (-not (Test-Path $ExePath)) { throw "$Label 缺少产物: $ExePath" }
+    foreach ($req in @('stdlib', 'yt_dlp')) {
+        if (-not (Test-Path (Join-Path $RuntimeDir $req))) {
+            throw "$Label 缺少 Python 运行时资源: $(Join-Path $RuntimeDir $req)"
+        }
+    }
+
+    # 暂存目录：exe/dll 平铺，python_runtime/ 与 exe 同目录
+    $StageDir = Join-Path $BuildDir ("stage-" + [IO.Path]::GetFileNameWithoutExtension($ExeName))
+    if (Test-Path $StageDir) { Remove-Item -LiteralPath $StageDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
+    Copy-Item $ExePath $StageDir
+    Copy-Item (Join-Path $BuildDir '*.dll') $StageDir
+    Copy-Item $RuntimeDir (Join-Path $StageDir 'python_runtime') -Recurse
+
+    # Windows 包瘦身：清缓存，去掉 Linux 扩展模块(.so)，保留 Windows .pyd
+    Get-ChildItem (Join-Path $StageDir 'python_runtime') -Recurse -Directory -Filter '__pycache__' |
+        Remove-Item -Recurse -Force
+    Get-ChildItem (Join-Path $StageDir 'python_runtime') -Recurse -File -Include '*.pyc', '*.so' |
+        Remove-Item -Force
+    # 运行时临时文件（自动更新节流时间戳 / 解析结果残留）不入发布包
+    Get-ChildItem (Join-Path $StageDir 'python_runtime') -Recurse -File -Filter '.parser_last_check' |
+        Remove-Item -Force
+    Get-ChildItem (Join-Path $StageDir 'python_runtime') -Recurse -File -Filter '.result_*.json' |
+        Remove-Item -Force
+
+    Remove-Item $ZipPath -ErrorAction SilentlyContinue
+    Compress-Archive -Path (Join-Path $StageDir '*') -DestinationPath $ZipPath -Force
+    if (-not (Test-Path $ZipPath)) { throw "$Label zip 打包失败: $ZipPath" }
+    Remove-Item -LiteralPath $StageDir -Recurse -Force
+
+    # 打包后校验：zip 内必须含 python_runtime/stdlib 与 python_runtime/yt_dlp
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $names = $zip.Entries | ForEach-Object { $_.FullName }
+        foreach ($req in @('python_runtime/stdlib/', 'python_runtime/yt_dlp/')) {
+            if (-not ($names | Where-Object { $_ -like ($req + '*') })) {
+                throw "$Label zip 缺少 $req —— 发布物不完整，禁止上传"
+            }
+        }
+        $sizeMB = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
+        Write-Host ("  [OK] {0} -> {1} ({2} MB, {3} 条目, 含 python_runtime)" -f `
+            $Label, $ZipPath, $sizeMB, $zip.Entries.Count)
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 # ---------- 6) 打包 ----------
 Write-Host "== 打包产物到 $OutDir =="
 Copy-Item (Join-Path $RepoRoot 'build-rel-x64\burst')  (Join-Path $OutDir 'burst-linux-x86_64')  -Force
 Copy-Item (Join-Path $RepoRoot 'build-rel-arm64\burst') (Join-Path $OutDir 'burst-linux-aarch64') -Force
 
-# Windows:exe + Python 运行 dll 打 zip
+# Windows: 单文件双模 burst.exe + Python 运行 dll + python_runtime 资源(含 stdlib/yt_dlp) 打 zip，解压即用
 $WinBuildDir = Join-Path $RepoRoot 'build-win-rel'
+$PyRuntimeDir = Join-Path $RepoRoot 'third_party\python\runtime'
 $ZipPath = Join-Path $OutDir 'burst-windows-x86_64.zip'
-Remove-Item $ZipPath -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $WinBuildDir 'burst.exe'),
-    (Join-Path $WinBuildDir '*.dll') -DestinationPath $ZipPath -Force
-if (-not (Test-Path $ZipPath)) { throw 'Windows zip 打包失败' }
+New-BurstWindowsZip -ExeName 'burst.exe' -BuildDir $WinBuildDir `
+    -ZipPath $ZipPath -RuntimeDir $PyRuntimeDir -Label 'burst-windows-x86_64'
 
 # ---------- 7) 校验 ----------
 Write-Host "== 校验产物 =="
@@ -171,7 +231,7 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
 } else {
     $prevTag = (git tag --sort=-version:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1)
     $log = if ($prevTag) { (git log "$prevTag..HEAD" --oneline | Out-String).Trim() } else { (git log --oneline -10 | Out-String).Trim() }
-    $releaseNotes = "## burst $Version`n`n### 变更记录`n$log`n`n### 平台产物`n- burst-linux-x86_64 : 静态单文件`n- burst-linux-aarch64 : 静态单文件(交叉编译)`n- burst-windows-x86_64.zip : exe + Python 运行 dll(解压即用)"
+    $releaseNotes = "## burst $Version`n`n### 变更记录`n$log`n`n### 平台产物`n- burst-linux-x86_64 : 单文件双模(GUI+CLI；curl/Python/FFmpeg 静态，依赖桌面 libGL/X11)`n- burst-linux-aarch64 : CLI（交叉编译，不含 GUI）`n- burst-windows-x86_64.zip : 单文件双模 burst.exe + Python 运行 dll + python_runtime 资源(解压即用；双击=GUI, 终端带参数=CLI)"
 }
 
 # 8.3 创建 Release
