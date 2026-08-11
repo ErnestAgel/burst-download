@@ -804,6 +804,15 @@ void RenderProgress(const DownloadSnapshot& snap) {
 void RenderLog(const std::vector<std::string>& log) {
     ImGui::Separator();
     ImGui::Text("%s", i18n::T("label.log"));
+    ImGui::SameLine();
+    if (ImGui::SmallButton(i18n::T("log.copy"))) {
+        std::string all;
+        for (const auto& line : log) {
+            all += line;
+            all += "\n";
+        }
+        ImGui::SetClipboardText(all.c_str());
+    }
     ImGui::BeginChild("##log", ImVec2(0, 160), true,
                       ImGuiWindowFlags_HorizontalScrollbar);
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f) {

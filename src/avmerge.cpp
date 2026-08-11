@@ -16,7 +16,9 @@
 
 #include "avmerge.h"
 
+#include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 extern "C" {
@@ -26,6 +28,25 @@ extern "C" {
 }
 
 namespace {
+
+/* 捕获 FFmpeg 错误日志，便于把真实失败原因带进报错（GUI 无 stderr 可见） */
+thread_local std::string g_avlog;
+
+void AvLogCapture(void*, int level, const char* fmt, va_list vl) {
+  if (level > AV_LOG_ERROR) return;
+  char buf[1024];
+  vsnprintf(buf, sizeof(buf), fmt, vl);
+  g_avlog += buf;
+  if (g_avlog.size() > 4096) {
+    g_avlog.erase(0, g_avlog.size() - 4096);
+  }
+}
+
+std::string TakeAvLog() {
+  std::string s = g_avlog;
+  g_avlog.clear();
+  return s;
+}
 
 /* 根据视频流编码建议容器扩展名：VP9/AV1/VP8（WebM 典型）-> .mkv，其余 -> .mp4 */
 std::string ExtForVideoCodec(int codec_id) {
@@ -38,11 +59,17 @@ std::string ExtForVideoCodec(int codec_id) {
 
 /* 将包时间戳从输入流时基换算到输出流时基 */
 void RescalePkt(AVPacket* pkt, const AVStream* is, const AVStream* os) {
-  pkt->pts = av_rescale_q_rnd(pkt->pts, is->time_base, os->time_base,
-                              (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-  pkt->dts = av_rescale_q_rnd(pkt->dts, is->time_base, os->time_base,
-                              (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-  pkt->duration = av_rescale_q(pkt->duration, is->time_base, os->time_base);
+  if (pkt->pts != AV_NOPTS_VALUE) {
+    pkt->pts = av_rescale_q_rnd(pkt->pts, is->time_base, os->time_base,
+                                (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+  }
+  if (pkt->dts != AV_NOPTS_VALUE) {
+    pkt->dts = av_rescale_q_rnd(pkt->dts, is->time_base, os->time_base,
+                                (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+  }
+  if (pkt->duration > 0) {
+    pkt->duration = av_rescale_q(pkt->duration, is->time_base, os->time_base);
+  }
   pkt->pos = -1;
 }
 
@@ -92,6 +119,8 @@ std::string SuggestMergeExt(const std::string& video_path) {
 
 bool MergeMp4(const std::string& video_path, const std::string& audio_path,
               const std::string& output_path, std::string& err) {
+  g_avlog.clear();
+  av_log_set_callback(AvLogCapture);
   av_log_set_level(AV_LOG_ERROR);
 
   AVFormatContext* vctx = nullptr;
@@ -170,7 +199,9 @@ bool MergeMp4(const std::string& video_path, const std::string& audio_path,
         }
       }
       if (veof && aeof) break;
-      if (v_pending && (aeof || (a_pending && pv->dts <= pa->dts))) {
+      /* 交错写帧：按 DTS 排序；任一时间戳无效时按“先写有效侧”处理，避免写入失败 */
+      if (v_pending && (aeof || !a_pending || pa->dts == AV_NOPTS_VALUE ||
+                        (pv->dts != AV_NOPTS_VALUE && pv->dts <= pa->dts))) {
         if (av_interleaved_write_frame(octx, pv) < 0) {
           av_packet_free(&pv);
           av_packet_free(&pa);
@@ -209,6 +240,20 @@ bool MergeMp4(const std::string& video_path, const std::string& audio_path,
       avio_closep(&octx->pb);
     avformat_free_context(octx);
   }
-  if (!ok) remove(output_path.c_str()); /* 失败清理半成品 */
+  av_log_set_callback(av_log_default_callback);
+  av_log_set_level(AV_LOG_INFO);
+  if (!ok) {
+    remove(output_path.c_str()); /* 失败清理半成品 */
+    /* 附上 FFmpeg 真实错误日志（去行尾空白） */
+    std::string l = TakeAvLog();
+    while (!l.empty() && (l.back() == '\n' || l.back() == '\r' ||
+                          l.back() == ' ' || l.back() == '\t')) {
+      l.pop_back();
+    }
+    if (!l.empty()) {
+      err += " | ffmpeg: ";
+      err += l;
+    }
+  }
   return ok;
 }

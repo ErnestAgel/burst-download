@@ -49,6 +49,12 @@ std::string ExeDirOf(const std::string& exe_path) {
   return (slash != std::string::npos) ? exe_path.substr(0, slash) : "";
 }
 
+/* 运行时根可用性：解压目录（stdlib/）或打包文件（python311.zip）任一存在即可 */
+bool RuntimeHomeUsable(const std::string& home) {
+  return access((home + "/stdlib").c_str(), R_OK) == 0 ||
+         access((home + "/python311.zip").c_str(), R_OK) == 0;
+}
+
 /* 定位运行时资源目录：exe 同目录 assets/ → 临时缓存 →
  * 环境变量 CURLBOLT_PYHOME → 编译期宏（开发源码树） */
 std::string LocateRuntimeHome(const std::string& exe_path) {
@@ -57,20 +63,24 @@ std::string LocateRuntimeHome(const std::string& exe_path) {
   std::string exe_dir = ExeDirOf(exe);
   if (!exe_dir.empty()) {
     std::string cand = exe_dir + "/assets";
-    if (access((cand + "/stdlib").c_str(), R_OK) == 0) home = cand;
+    if (!RuntimeHomeUsable(cand)) {
+      /* 兼容旧版目录名 python_runtime/（老解压目录原地替换 exe 时仍可用） */
+      cand = exe_dir + "/python_runtime";
+    }
+    if (RuntimeHomeUsable(cand)) home = cand;
   }
   /* 运行时资源缓存（临时目录） */
   if (home.empty()) {
     std::string cached;
     if (ExtractEmbeddedRuntime(cached) && !cached.empty() &&
-        access((cached + "/stdlib").c_str(), R_OK) == 0) {
+        RuntimeHomeUsable(cached)) {
       home = cached;
     }
   }
   if (home.empty()) {
     const char* env = getenv("CURLBOLT_PYHOME");
     if (env != nullptr && *env != '\0' &&
-        access((std::string(env) + "/stdlib").c_str(), R_OK) == 0) {
+        RuntimeHomeUsable(env)) {
       home = env;
     }
   }
@@ -83,22 +93,33 @@ std::string ResultFile() {
   return g_python_home + "/.result_" + std::to_string(static_cast<long>(getpid())) + ".json";
 }
 
-/* 读取 yt_dlp/version.py 中的 __version__ 值（读不到返回空串） */
-std::string ReadPackageVersion(const std::string& version_file) {
-  std::ifstream in(version_file);
-  if (!in.is_open()) return "";
-  std::string line;
-  while (std::getline(in, line)) {
-    size_t p = line.find("__version__");
-    if (p == std::string::npos) continue;
-    size_t q1 = line.find('\'', p);
-    if (q1 == std::string::npos) q1 = line.find('"', p);
-    if (q1 != std::string::npos) {
-      size_t q2 = line.find(line[q1], q1 + 1);
-      if (q2 != std::string::npos) return line.substr(q1 + 1, q2 - q1 - 1);
+/* 读取解析器版本：优先 version_ytdlp.txt（纯文本），老布局回退 yt_dlp/version.py */
+std::string ReadVersionMarker(const std::string& home) {
+  std::ifstream in(home + "/version_ytdlp.txt");
+  std::string v;
+  std::getline(in, v);
+  if (!in) {
+    std::ifstream vf(home + "/yt_dlp/version.py");
+    std::string line;
+    while (std::getline(vf, line)) {
+      size_t p = line.find("__version__");
+      if (p == std::string::npos) continue;
+      size_t q1 = line.find('\'', p);
+      if (q1 == std::string::npos) q1 = line.find('"', p);
+      if (q1 != std::string::npos) {
+        size_t q2 = line.find(line[q1], q1 + 1);
+        if (q2 != std::string::npos) {
+          v = line.substr(q1 + 1, q2 - q1 - 1);
+        }
+      }
+      break;
     }
   }
-  return "";
+  while (!v.empty() && (v.back() == '\r' || v.back() == '\n' ||
+                        v.back() == ' ' || v.back() == '\t')) {
+    v.pop_back();
+  }
+  return v;
 }
 
 /* 生成安全的 Python 单引号字符串字面量（转义反斜杠与引号） */
@@ -126,8 +147,8 @@ std::string ExtractJsonStr(const std::string& content, const std::string& key) {
 
 /* 在指定 home 下执行 yt_dlp 在线检查与更新（手动 --update-parser 与自动更新共用） */
 bool UpdateParserAt(const std::string& home, std::string& msg) {
-  /* 当前解析器版本（无 version.py 时为空串，跳过版本比较直接更新） */
-  std::string cur_ver = ReadPackageVersion(home + "/yt_dlp/version.py");
+  /* 当前解析器版本（无标记文件时为空串，跳过版本比较直接更新） */
+  std::string cur_ver = ReadVersionMarker(home);
 
   if (!EmbedPythonInit(home)) {
     msg = "Python 运行时初始化失败，无法执行在线更新";
@@ -214,6 +235,8 @@ bool UpdateParserAt(const std::string& home, std::string& msg) {
     "                f.unlink()\n"
     "            for d in list(pathlib.Path(dst).rglob('__pycache__')):\n"
     "                shutil.rmtree(d, ignore_errors=True)\n"
+    "            with open(os.path.join(HOME, 'version_ytdlp.txt'), 'w') as vf:\n"
+    "                vf.write(tag + chr(10))\n"
     "            out['old'] = CUR\n"
     "            out['ok'] = True\n"
     "            out['msg'] = 'updated'\n"
@@ -276,14 +299,21 @@ bool EmbedPythonInit(const std::string& python_home) {
 
   /* 定位运行时资源目录：显式传入 → exe 同目录 → 环境变量 → 编译期宏 */
   std::string home = python_home;
-  if (!home.empty() && access((home + "/stdlib").c_str(), R_OK) != 0) {
+  if (!home.empty() && !RuntimeHomeUsable(home)) {
     home.clear();  /* 传入路径无效，继续回退 */
   }
   if (home.empty()) home = LocateRuntimeHome("");
-  if (home.empty()) return false;
+  if (home.empty()) {
+    fprintf(stderr,
+            "[embed_python] 找不到 Python 运行时资源：已检查 exe 同目录 assets/、"
+            "python_runtime/、内嵌运行时缓存、环境变量 CURLBOLT_PYHOME。\n"
+            "[embed_python] 发布物请将 assets/（含 stdlib/ 与 yt_dlp/）"
+            "放在可执行文件同目录后重新运行。\n");
+    return false;
+  }
 
-  /* 校验 stdlib 存在 */
-  if (access((home + "/stdlib").c_str(), R_OK) != 0) {
+  /* 校验运行时资源存在 */
+  if (!RuntimeHomeUsable(home)) {
     fprintf(stderr, "[embed_python] 找不到 Python 运行时资源: %s\n", home.c_str());
     return false;
   }
@@ -294,10 +324,17 @@ bool EmbedPythonInit(const std::string& python_home) {
   /* 显式告知运行时根，避免 Python 打印 "Could not find platform independent libraries" 噪音 */
   PyConfig_SetBytesString(&config, &config.home, home.c_str());
   config.module_search_paths_set = 1;
-  PyWideStringList_Append(&config.module_search_paths,
-                          Py_DecodeLocale((home + "/stdlib").c_str(), nullptr));
+  /* stdlib：优先解压目录（开发布局），发布布局为单个 python311.zip
+   * （CPython 约定名，初始化早期加载 encodings 时也会自动生效） */
+  std::string stdlib_path = home + "/stdlib";
+  if (access(stdlib_path.c_str(), R_OK) != 0) {
+    stdlib_path = home + "/python311.zip";
+  }
+  /* 真实文件目录在前：初始化早期 zipimport 尚不可用，必需模块（encodings 等）从真实目录加载 */
   PyWideStringList_Append(&config.module_search_paths,
                           Py_DecodeLocale(home.c_str(), nullptr));
+  PyWideStringList_Append(&config.module_search_paths,
+                          Py_DecodeLocale(stdlib_path.c_str(), nullptr));
   /* Windows 嵌入的 Python 扩展模块（.pyd）目录；Linux runtime 无此目录，加路径无害 */
   PyWideStringList_Append(&config.module_search_paths,
                           Py_DecodeLocale((home + "/lib-dynload").c_str(), nullptr));
@@ -347,10 +384,15 @@ bool EmbedParseVideoUrls(const std::string& url,
     "            urls = [vids[0]['url'], auds[0]['url']]  # [0] 视频轨, [1] 音频轨\n"
     "        else:\n"
     "            urls = [f.get('url') for f in fmts if f.get('url')]\n"
+    "        if not urls:\n"
+    "            if not fmts:\n"
+    "                raise Exception('页面解析成功但未返回任何媒体格式：视频可能需要登录 Cookie，或受区域限制')\n"
+    "            raise Exception('解析到 ' + str(len(fmts)) + ' 个格式但均无可用直链：可能需要登录 Cookie')\n"
     "        json.dump({'title': info.get('title'), 'urls': urls},\n"
-    "                  open(%s, 'w'))\n"
+    "                  open(%s, 'w', encoding='utf-8'), ensure_ascii=False)\n"
     "except Exception as e:\n"
-    "    json.dump({'error': repr(e)}, open(%s, 'w'))\n",
+    "    json.dump({'error': (str(e) or repr(e))},\n"
+    "              open(%s, 'w', encoding='utf-8'), ensure_ascii=False)\n",
     PyStr(cookies_from_browser).c_str(), PyStr(cookies_from_browser).c_str(),
     PyStr(cookie).c_str(), PyStr(cookie).c_str(),
     PyStr(url).c_str(), PyStr(result_file).c_str(), PyStr(result_file).c_str());

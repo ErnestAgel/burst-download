@@ -19,7 +19,7 @@ include_directories(${CURL_INCLUDE_DIR})
 file(GLOB SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
 add_compile_options(-g)
-add_executable(burst ${SRC})
+add_executable(burst WIN32 ${SRC})
 
 # ---- 平台目录：third_party/<PLATFORM_DIR> ----
 if(WIN32)
@@ -38,8 +38,12 @@ if(EXISTS ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/include)
 else()
   include_directories(${PYTHON_EMBED_DIR}/include)
 endif()
-target_compile_definitions(burst PRIVATE
-  PYTHON_RUNTIME_FALLBACK="${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/runtime")
+# 发布版（Release）不注入源码树运行时路径：产物只认 exe 同目录 assets/，
+# 避免"本机正常、他机缺 assets"的假象；开发构建（Debug）保留回退以便源码树直接运行。
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+  target_compile_definitions(burst PRIVATE
+    PYTHON_RUNTIME_FALLBACK="${CMAKE_CURRENT_SOURCE_DIR}/third_party/python/runtime")
+endif()
 if(EXISTS ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/libpython3.11.a)
   target_link_libraries(burst ${PYTHON_EMBED_DIR}/${PLATFORM_DIR}/libpython3.11.a)
 endif()

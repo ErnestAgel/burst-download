@@ -138,7 +138,7 @@ cmake -B build . && cmake --build build        # Linux
 cmake -B build -G "MinGW Makefiles" .          # Windows (MSYS2/mingw64 env, gcc and mingw32-make on PATH)
 ```
 
-**Release**: links static libraries into a **single-file binary**. On Windows, since the Python interpreter is embedded, the DLLs under `third_party/python/windows-x86_64/dll/` must sit next to the exe (copied automatically by CMake); the release zip works out of the box for `--video`. On Linux, curl/openssl/python/ffmpeg are static from the repo while glibc is dynamic; the binary depends on the desktop's `libGL`/`libX11` at runtime.
+**Release**: links static libraries into a **single-file binary**. On Windows, since the Python interpreter is embedded, the DLLs under `third_party/python/windows-x86_64/dll/` must sit next to the exe (copied automatically by CMake); the release zip bundles the `assets/` runtime resources (`stdlib/yt_dlp`) and works out of the box for `--video` once `assets/` sits next to the exe. On Linux, curl/openssl/python/ffmpeg are static from the repo while glibc is dynamic; the binary depends on the desktop's `libGL`/`libX11` at runtime; the release is a tar.gz (`burst` + `assets/`) — unpack it as-is for out-of-the-box video parsing. Do **not** copy only the `burst` binary, otherwise the missing Python runtime will cause "URL parse failed" errors.
 
 ```bash
 # Linux (static openssl prepared by the build script)

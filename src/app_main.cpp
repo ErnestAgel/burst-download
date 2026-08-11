@@ -2,8 +2,8 @@
  * @file app_main.cpp
  * @brief 统一入口：无参数/--gui 打开图形界面；带参数走终端 CLI
  *
- * Windows 保持"控制台子系统"（终端 CLI 输出可被管道/变量捕获）；
- * 双击无参数启动时先 FreeConsole() 隐藏弹出的控制台窗口再进入 GUI。
+ * Windows 为 GUI 子系统：双击无参数启动不创建控制台窗口；
+ * 终端带参数运行时附加到父进程控制台输出（已重定向到文件/管道时沿用现有句柄）。
  *
  * @author ErnestAgel
  * @date 2026-08-11
@@ -29,22 +29,32 @@ int main(int argc, char** argv) {
                    std::strcmp(argv[1], "-g") == 0);
 #ifdef BURST_HAS_GUI
   if (explicit_gui || argc <= 1) {
-#ifdef _WIN32
-    if (argc <= 1) {
-      FreeConsole();  /* 无参数（资源管理器双击）：隐藏控制台后启动 GUI */
-    }
-#endif
     return RunGui(argc, argv);
   }
-  /* 带参数：终端 CLI */
-  return RunCli(argc, argv);
 #else
-  /* 未编译 GUI 的构建（如 aarch64 CLI-only）：--gui 明确报错，其余走 CLI */
   if (explicit_gui) {
     std::fprintf(stderr,
                  "此构建不包含图形界面（CLI-only），请使用 x86_64 版本获取 GUI\n");
     return 1;
   }
-  return RunCli(argc, argv);
 #endif
+
+#ifdef _WIN32
+  /* CLI：stdout 已是文件/管道（重定向）则直接沿用；否则附加父进程控制台（无则分配） */
+  {
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    bool redirected = h != NULL && h != INVALID_HANDLE_VALUE &&
+                      GetFileType(h) != FILE_TYPE_CHAR;
+    if (!redirected) {
+      if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+        AllocConsole();
+      }
+      /* 程序输出为 UTF-8：把控制台代码页切到 UTF-8，避免中文乱码 */
+      SetConsoleOutputCP(CP_UTF8);
+      freopen("CONOUT$", "w", stdout);
+      freopen("CONOUT$", "w", stderr);
+    }
+  }
+#endif
+  return RunCli(argc, argv);
 }

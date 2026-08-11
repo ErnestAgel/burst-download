@@ -875,36 +875,33 @@ bool Ccurl::get_Download_FileSize() {
     curl_easy_setopt(m_easyHandle, CURLOPT_LOW_SPEED_TIME, m_timeout);
   }
 
-  /* 尝试 1：HEAD 探测（多数服务器支持；B站/YouTube 音频流可能 HEAD 被拒或无 Content-Length） */
+  /* 尝试 1：HEAD 探测 —— 仅作候选（部分 CDN/代理对 HEAD 返回异常的 Content-Length，
+   * 例如 B站流在他机节点返回 18 字节，直接信任会按 18 字节下载导致文件损坏）。
+   * 要求 HTTP 200 才记入候选；最终大小以 Range GET 的 Content-Range 为准。 */
+  curl_off_t head_len = -1;
+  bool head_range = false;
   CURLcode res = curl_easy_perform(m_easyHandle);
   if (CHECK_CURL(res)) {
-    res = curl_easy_getinfo(m_easyHandle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
-                            &m_fileLen);
-    if (res == CURLE_OK && m_fileLen > 0) {
-      LOG_INFO("dowload File length success (HEAD): %lld\n",
-               (long long)m_fileLen);
-      /* HEAD 已确认 Accept-Ranges: bytes → Range 支持确定，跳过独立探测 */
-      if (accept_ranges) {
-        m_range_supported = true;
-        m_range_known = true;
-      }
-      curl_easy_cleanup(m_easyHandle);
-      flag = true;
-      g_filelen = (double)m_fileLen;
-      return true;
+    long head_code = 0;
+    curl_easy_getinfo(m_easyHandle, CURLINFO_RESPONSE_CODE, &head_code);
+    curl_easy_getinfo(m_easyHandle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
+                      &head_len);
+    if (head_code == 200 && head_len > 0) {
+      head_range = accept_ranges;
+      LOG_INFO("HEAD ok: content-length=%lld, accept-ranges=%s (candidate)\n",
+               (long long)head_len, head_range ? "yes" : "no");
+    } else {
+      LOG_INFO("HEAD ignored: code=%ld content-length=%lld, try Range GET\n",
+               head_code, (long long)head_len);
     }
-    LOG_INFO("HEAD ok but no valid content-length (%lld), try Range GET\n",
-             (long long)m_fileLen);
   } else {
     AppendLog("[WARN] HEAD probe failed, fallback to Range GET: url=%s, curl error: %s",
               m_url.c_str(), curl_easy_strerror(res));
   }
   curl_easy_cleanup(m_easyHandle);
   m_easyHandle = nullptr;
-  m_fileLen = -1;
 
-  /* 尝试 2：Range GET bytes=0-0（回退；从响应头 Content-Range 的 "bytes 0-0/TOTAL" 取总大小）
-   * 仅用 HEAD 的服务器不支持时（部分 DASH 音频流/防盗链站点），GET 仍可返回 206 */
+  /* 尝试 2：Range GET bytes=0-0 —— 权威大小探测（服务器实际响应决定，避免 HEAD 假值） */
   CURL* probe = curl_easy_init();
   if (probe != nullptr) {
     curl_easy_setopt(probe, CURLOPT_URL, m_url.c_str());
@@ -933,29 +930,42 @@ bool Ccurl::get_Download_FileSize() {
     CURLcode res2 = curl_easy_perform(probe);
     long http_code = 0;
     curl_easy_getinfo(probe, CURLINFO_RESPONSE_CODE, &http_code);
-    if (CHECK_CURL(res2) && (http_code == 206 || http_code == 200) &&
-        probe_total > 0) {
-      m_fileLen = probe_total;
-    }
     curl_easy_cleanup(probe);
-    if (m_fileLen > 0) {
+    if (CHECK_CURL(res2) && http_code == 206 && probe_total > 0) {
+      m_fileLen = probe_total;
       LOG_INFO("dowload File length success (Range GET): %lld\n",
                (long long)m_fileLen);
-      /* Range GET 返回 206 → 服务器支持 Range（同 Check_Range_Support 结论） */
+      /* 206 确认服务器支持 Range */
       m_range_supported = true;
       m_range_known = true;
       flag = true;
       g_filelen = (double)m_fileLen;
       return true;
     }
-    LOG_ERR("file_size failed (HEAD + Range GET)\n");
-    AppendLog("[ERROR] probe file size failed (HEAD + Range GET): url=%s",
-              m_url.c_str());
-    m_fileLen = -1;
-    g_filelen = -1;
-    flag = false;
+    LOG_INFO("Range GET not confirmed (code=%ld total=%lld), use HEAD candidate\n",
+             http_code, (long long)probe_total);
   }
 
+  /* 兜底：GET 未确认（服务器不支持 Range / 探测失败）时回退 HEAD 候选 */
+  if (head_len > 0) {
+    m_fileLen = head_len;
+    LOG_INFO("dowload File length success (HEAD fallback): %lld\n",
+             (long long)m_fileLen);
+    if (head_range) {
+      m_range_supported = true;
+      m_range_known = true;
+    }
+    flag = true;
+    g_filelen = (double)m_fileLen;
+    return true;
+  }
+
+  LOG_ERR("file_size failed (HEAD + Range GET)\n");
+  AppendLog("[ERROR] probe file size failed (HEAD + Range GET): url=%s",
+            m_url.c_str());
+  m_fileLen = -1;
+  g_filelen = -1;
+  flag = false;
   return flag;
 }
 

@@ -196,50 +196,6 @@ function ConvertTo-PycOnlyRuntime {
     Get-ChildItem $Dst -Recurse -File -Filter '.result_*.json' | Remove-Item -Force
 }
 
-function Add-BurstEmbeddedRuntime {
-    param(
-        [string]$ExePath,
-        [string]$AssetsDir,
-        [string]$PyExe
-    )
-    $blob = Join-Path $env:TEMP ("burst-blob-" + [guid]::NewGuid().ToString('N') + '.bin')
-    try {
-        $res = (& $PyExe (Join-Path $RepoRoot 'scripts\make_runtime_blob.py') `
-                    $AssetsDir $blob 2>$null | Select-Object -Last 1)
-        $parts = ($res -split '\s+')
-        if ($parts.Count -ne 2) { throw "运行时打包生成失败: $res" }
-        $hash = [Convert]::ToUInt64($parts[0], 16)
-        $data = [IO.File]::ReadAllBytes($blob)
-        $fs = [IO.File]::Open($ExePath, [IO.FileMode]::Append)
-        try {
-            $fs.Write($data, 0, $data.Length)
-            $footer = [Text.Encoding]::ASCII.GetBytes('BURSTARC')
-            $footer += [BitConverter]::GetBytes([uint64]$data.Length)
-            $footer += [BitConverter]::GetBytes($hash)
-            $footer += [Text.Encoding]::ASCII.GetBytes('BURSTEND')
-            if ($footer.Length -ne 32) { throw "footer 长度异常: $($footer.Length)" }
-            $fs.Write($footer, 0, $footer.Length)
-        } finally {
-            $fs.Close()
-        }
-        $fs2 = [IO.File]::Open($ExePath, [IO.FileMode]::Open, [IO.FileAccess]::Read)
-        try {
-            $fs2.Seek(-32, [IO.SeekOrigin]::End) | Out-Null
-            $tail = New-Object byte[] 32
-            [void]$fs2.Read($tail, 0, 32)
-            if ([Text.Encoding]::ASCII.GetString($tail, 0, 8) -ne 'BURSTARC') {
-                throw '运行时资源写入校验失败'
-            }
-        } finally {
-            $fs2.Close()
-        }
-        Write-Host ("  [OK] 打包运行时 -> {0} (+{1:N1} MB)" -f `
-            (Split-Path -Leaf $ExePath), ($data.Length / 1MB))
-    } finally {
-        Remove-Item $blob -ErrorAction SilentlyContinue
-    }
-}
-
 function New-BurstWindowsZip {
     param(
         [string]$ExeName,   # 如 burst.exe / burst-gui.exe
@@ -260,28 +216,25 @@ function New-BurstWindowsZip {
         }
     }
 
-    # 暂存目录：exe/dll 平铺；assets 仅作为打包素材，最终不进 zip
+    # 暂存目录：exe/dll 平铺，assets/（pyc-only 运行时）随 zip 分发
     $StageDir = Join-Path $BuildDir ("stage-" + [IO.Path]::GetFileNameWithoutExtension($ExeName))
     if (Test-Path $StageDir) { Remove-Item -LiteralPath $StageDir -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 
-    # 1) 运行时 pyc 化（B 方案）到暂存 assets
+    # 1) 运行时 pyc 化到 assets/
     ConvertTo-PycOnlyRuntime -Src $RuntimeDir -Dst (Join-Path $StageDir 'assets') `
         -PyExe $PyExe -Platform 'windows'
     # 2) 修补 assets/lib-dynload 内 .pyd 的导入名（python311.dll → bd311.dll）
     Get-ChildItem (Join-Path $StageDir 'assets\lib-dynload') -File -Filter '*.pyd' `
         -ErrorAction SilentlyContinue | ForEach-Object { Set-BurstImportName $_.FullName }
-    # 3) exe 副本：修补导入名 + 打包运行时
+    # 3) exe 副本：修补导入名
     Copy-Item $ExePath (Join-Path $StageDir $ExeName)
     Set-BurstImportName (Join-Path $StageDir $ExeName)
-    Add-BurstEmbeddedRuntime -ExePath (Join-Path $StageDir $ExeName) `
-        -AssetsDir (Join-Path $StageDir 'assets') -PyExe $PyExe
-    # 4) dll：python311.dll → bd311.dll；assets 不再随包
+    # 4) dll：python311.dll → bd311.dll
     Copy-Item (Join-Path $BuildDir '*.dll') $StageDir
     if (Test-Path (Join-Path $StageDir 'python311.dll')) {
         Move-Item (Join-Path $StageDir 'python311.dll') (Join-Path $StageDir 'bd311.dll') -Force
     }
-    Remove-Item (Join-Path $StageDir 'assets') -Recurse -Force
 
     # 5) 压缩
     Remove-Item $ZipPath -ErrorAction SilentlyContinue
@@ -289,49 +242,87 @@ function New-BurstWindowsZip {
     if (-not (Test-Path $ZipPath)) { throw "$Label zip 打包失败: $ZipPath" }
     Remove-Item -LiteralPath $StageDir -Recurse -Force
 
-    # 6) 校验：zip 只含 exe + dll；不得含 assets/运行时文件/python311.dll
+    # 6) 校验：必须含 assets/stdlib、assets/yt_dlp、bd311.dll；不得含 .py 源码/.so/python311.dll
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($ZipPath)
     try {
         $names = $zip.Entries | ForEach-Object { $_.FullName }
+        foreach ($req in @('assets/stdlib/', 'assets/yt_dlp/')) {
+            if (-not ($names | Where-Object { $_ -like ($req + '*') })) {
+                throw "$Label zip 缺少 $req —— 发布物不完整，禁止上传"
+            }
+        }
         if (-not ($names -contains 'bd311.dll')) {
             throw "$Label zip 缺少 bd311.dll（python311.dll 改名失败），禁止上传"
         }
         if ($names -contains 'python311.dll') {
             throw "$Label zip 仍包含 python311.dll（改名失败），禁止上传"
         }
-        if ($names | Where-Object { $_ -like 'assets/*' -or $_ -like 'assets\*' -or `
-                $_ -like '*.py' -or $_ -like '*.so' -or $_ -like '*.pyd' -or $_ -like '*.pyc' }) {
-            throw "$Label zip 不应包含运行时文件，禁止上传"
+        if ($names | Where-Object { $_ -like '*.py' -and $_ -notlike '*.pyc' -and `
+                $_ -notlike '*/yt_dlp/version.py' -and $_ -notlike '*\yt_dlp\version.py' }) {
+            throw "$Label zip 包含 .py 源码（pyc 化失败），禁止上传"
+        }
+        if ($names | Where-Object { $_ -like '*.so' }) {
+            throw "$Label zip 包含 Linux .so 扩展模块，禁止上传"
         }
         $sizeMB = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
-        Write-Host ("  [OK] {0} -> {1} ({2} MB, {3} 条目, 运行时已打包)" -f `
+        Write-Host ("  [OK] {0} -> {1} ({2} MB, {3} 条目, assets 随包 pyc-only)" -f `
             $Label, $ZipPath, $sizeMB, $zip.Entries.Count)
     } finally {
         $zip.Dispose()
     }
 }
 
+function New-BurstLinuxTarGz {
+    param(
+        [string]$BinPath,       # 构建出的 burst 单文件
+        [string]$TarGzPath,     # 输出 tar.gz 完整路径
+        [string]$RuntimeDir,    # third_party/python/runtime
+        [string]$PyExe,         # Python 3.11（pyc 化必需）
+        [string]$Platform,      # linux=留 .so 去 .pyd；linux-arm64=两者都去
+        [string]$Label          # 日志前缀
+    )
+    if (-not (Test-Path $BinPath)) { throw "$Label 缺少产物: $BinPath" }
+    foreach ($req in @('stdlib', 'yt_dlp')) {
+        if (-not (Test-Path (Join-Path $RuntimeDir $req))) {
+            throw "$Label 缺少 Python 运行时资源: $(Join-Path $RuntimeDir $req)"
+        }
+    }
+
+    # 暂存目录：burst + assets/（pyc-only）平铺，解压后 exe 同目录即 assets/
+    $StageDir = Join-Path $env:TEMP ("burst-linux-stage-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path (Join-Path $StageDir 'assets') | Out-Null
+    try {
+        ConvertTo-PycOnlyRuntime -Src $RuntimeDir `
+            -Dst (Join-Path $StageDir 'assets') -PyExe $PyExe -Platform $Platform
+        Copy-Item $BinPath (Join-Path $StageDir 'burst') -Force
+
+        New-Item -ItemType Directory -Force -Path (Split-Path $TarGzPath) | Out-Null
+        Remove-Item $TarGzPath -ErrorAction SilentlyContinue
+        tar.exe -czf $TarGzPath -C $StageDir burst assets
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $TarGzPath)) {
+            throw "$Label tar.gz 打包失败: $TarGzPath"
+        }
+        Write-Host ("  [OK] {0} -> {1} ({2:N1} MB, burst + assets/ 同包)" -f `
+            $Label, $TarGzPath, ((Get-Item $TarGzPath).Length / 1MB))
+    } finally {
+        Remove-Item -LiteralPath $StageDir -Recurse -Force
+    }
+}
+
 # ---------- 6) 打包 ----------
 Write-Host "== 打包产物到 $OutDir =="
 
-# Linux x86_64 / aarch64：单文件发布
+# Linux x86_64 / aarch64：burst + assets/（pyc-only）打包 tar.gz，解压即用
 $PyRuntimeDir = Join-Path $RepoRoot 'third_party\python\runtime'
-$LinuxAssets = Join-Path $env:TEMP ("burst-linux-assets-" + [guid]::NewGuid().ToString('N'))
-ConvertTo-PycOnlyRuntime -Src $PyRuntimeDir -Dst $LinuxAssets -PyExe $Python311Exe -Platform 'linux'
-Copy-Item (Join-Path $RepoRoot 'build-rel-x64\burst') (Join-Path $OutDir 'burst-linux-x86_64') -Force
-Add-BurstEmbeddedRuntime -ExePath (Join-Path $OutDir 'burst-linux-x86_64') `
-    -AssetsDir $LinuxAssets -PyExe $Python311Exe
-Remove-Item $LinuxAssets -Recurse -Force
-# aarch64：剔除全部原生扩展（纯 pyc）
-$ArmAssets = Join-Path $env:TEMP ("burst-arm-assets-" + [guid]::NewGuid().ToString('N'))
-ConvertTo-PycOnlyRuntime -Src $PyRuntimeDir -Dst $ArmAssets -PyExe $Python311Exe -Platform 'linux-arm64'
-Copy-Item (Join-Path $RepoRoot 'build-rel-arm64\burst') (Join-Path $OutDir 'burst-linux-aarch64') -Force
-Add-BurstEmbeddedRuntime -ExePath (Join-Path $OutDir 'burst-linux-aarch64') `
-    -AssetsDir $ArmAssets -PyExe $Python311Exe
-Remove-Item $ArmAssets -Recurse -Force
+New-BurstLinuxTarGz -BinPath (Join-Path $RepoRoot 'build-rel-x64\burst') `
+    -TarGzPath (Join-Path $OutDir 'burst-linux-x86_64.tar.gz') `
+    -RuntimeDir $PyRuntimeDir -PyExe $Python311Exe -Platform 'linux' -Label 'burst-linux-x86_64'
+New-BurstLinuxTarGz -BinPath (Join-Path $RepoRoot 'build-rel-arm64\burst') `
+    -TarGzPath (Join-Path $OutDir 'burst-linux-aarch64.tar.gz') `
+    -RuntimeDir $PyRuntimeDir -PyExe $Python311Exe -Platform 'linux-arm64' -Label 'burst-linux-aarch64'
 
-# Windows: burst.exe + Python 运行 dll 打 zip，解压即用
+# Windows: burst.exe + Python 运行 dll + assets/（pyc-only）打 zip，解压即用
 $WinBuildDir = Join-Path $RepoRoot 'build-win-rel'
 $ZipPath = Join-Path $OutDir 'burst-windows-x86_64.zip'
 New-BurstWindowsZip -ExeName 'burst.exe' -BuildDir $WinBuildDir `
@@ -344,6 +335,17 @@ if ((wsl.exe -e bash -lc "cd $WslRepo && ./build-rel-x64/burst -h 2>&1 | head -1
 if ((wsl.exe -e bash -lc "file $WslRepo/build-rel-arm64/burst 2>/dev/null | grep -o aarch64" ) -match 'aarch64') { $ok++; Write-Host "  [OK] linux-aarch64(架构)" } else { Write-Host "  [!!] linux-aarch64 架构异常" }
 if ((& $WinExe -h 2>&1 | Select-Object -First 1) -match 'Usage') { $ok++; Write-Host "  [OK] windows-x86_64" } else { Write-Host "  [!!] windows-x86_64 运行异常" }
 if ($ok -lt 3) { throw "产物校验未全部通过($ok/3)" }
+foreach ($tgz in @('burst-linux-x86_64.tar.gz', 'burst-linux-aarch64.tar.gz')) {
+    $Path = Join-Path $OutDir $tgz
+    $names = tar.exe -tf $Path 2>$null
+    $hasBurst = $names -contains 'burst'
+    $hasStdlib = [bool]($names | Where-Object { $_ -like 'assets/stdlib/*' })
+    $hasYtDlp  = [bool]($names | Where-Object { $_ -like 'assets/yt_dlp/*' })
+    if (-not ($hasBurst -and $hasStdlib -and $hasYtDlp)) {
+        throw "$tgz 内容不完整（burst=$hasBurst stdlib=$hasStdlib yt_dlp=$hasYtDlp），禁止上传"
+    }
+    Write-Host "  [OK] $tgz (含 burst + assets/，assets 随包)"
+}
 
 Write-Host "== 产物清单 =="
 Get-ChildItem $OutDir -Filter 'burst-*' | Select-Object Name, Length | Format-Table -AutoSize
@@ -369,7 +371,7 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
 } else {
     $prevTag = (git tag --sort=-version:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1)
     $log = if ($prevTag) { (git log "$prevTag..HEAD" --oneline | Out-String).Trim() } else { (git log --oneline -10 | Out-String).Trim() }
-    $releaseNotes = "## burst $Version`n`n### 变更记录`n$log`n`n### 平台产物`n- burst-linux-x86_64 : 单文件（curl/Python/FFmpeg 静态，依赖桌面 libGL/X11）`n- burst-linux-aarch64 : 交叉编译`n- burst-windows-x86_64.zip : burst.exe + Python 运行 dll（解压即用）"
+    $releaseNotes = "## burst $Version`n`n### 变更记录`n$log`n`n### 平台产物`n- burst-linux-x86_64.tar.gz : burst + assets/（视频解析开箱即用，依赖桌面 libGL/X11）`n- burst-linux-aarch64.tar.gz : 交叉编译（CLI-only）`n- burst-windows-x86_64.zip : burst.exe + Python 运行 dll + assets/（解压即用）"
 }
 
 # 8.3 创建 Release
@@ -388,9 +390,9 @@ Write-Host "  Release 已创建: $($release.html_url)"
 
 # 8.4 上传三平台资产
 $assets = @(
-    @{ Name = 'burst-linux-x86_64';    Path = Join-Path $OutDir 'burst-linux-x86_64' },
-    @{ Name = 'burst-linux-aarch64';   Path = Join-Path $OutDir 'burst-linux-aarch64' },
-    @{ Name = 'burst-windows-x86_64.zip'; Path = $ZipPath }
+    @{ Name = 'burst-linux-x86_64.tar.gz';    Path = Join-Path $OutDir 'burst-linux-x86_64.tar.gz' },
+    @{ Name = 'burst-linux-aarch64.tar.gz';   Path = Join-Path $OutDir 'burst-linux-aarch64.tar.gz' },
+    @{ Name = 'burst-windows-x86_64.zip';     Path = $ZipPath }
 )
 foreach ($a in $assets) {
     $uri = "https://uploads.github.com/repos/ErnestAgel/burst-download/releases/$($release.id)/assets?name=$($a.Name)"

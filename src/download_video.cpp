@@ -76,6 +76,9 @@ VideoResult VideoDownloader::Run(const std::string& video_url,
                         &parse_err)) {
         m_last_error =
             "视频解析失败：请确认 URL 有效/可访问，且 Python 运行时资源完整";
+        if (parse_err.empty()) {
+            parse_err = "未获取到可下载的媒体流（无详细错误信息）";
+        }
         if (!parse_err.empty()) {
             m_last_error += "\n[详细原因] " + parse_err;
         }
@@ -162,9 +165,28 @@ VideoResult VideoDownloader::Run(const std::string& video_url,
         /* 输出容器按视频轨编码自动选择：VP9/AV1 -> .mkv，其余 -> .mp4 */
         const string merged = basename + "_full" + SuggestMergeExt(vfile);
         string merr;
-        if (MergeMp4(vfile, afile, merged, merr)) {
-            Log("[INFO] 已自动合并音视频轨 -> " + merged);
-            m_output_path = merged;
+        string merged_used = merged;
+        if (!MergeMp4(vfile, afile, merged, merr)) {
+            /* 通用兜底：mp4 容器无法写入某些编码（如 Opus 音频/HEVC 标签缺失）时，
+             * 回退 Matroska（.mkv，兼容几乎所有编码），不依赖具体视频 URL */
+            if (merged.size() > 4 &&
+                merged.compare(merged.size() - 4, 4, ".mp4") == 0) {
+                const string merged_mkv =
+                    merged.substr(0, merged.size() - 4) + ".mkv";
+                string merr2;
+                if (MergeMp4(vfile, afile, merged_mkv, merr2)) {
+                    Log("[INFO] mp4 容器不兼容，已改用 mkv 合并 -> " +
+                        merged_mkv);
+                    merged_used = merged_mkv;
+                    merr.clear();
+                } else {
+                    merr += "（mp4 失败）；mkv 回退也失败: " + merr2;
+                }
+            }
+        }
+        if (merr.empty()) {
+            Log("[INFO] 已自动合并音视频轨 -> " + merged_used);
+            m_output_path = merged_used;
             /* 合并成功：删除音视频中间文件与分片续传元数据，仅保留合并产物
              * （std::filesystem::remove 跨平台，Windows 中文路径无乱码） */
             std::error_code rm_ec;
@@ -184,7 +206,8 @@ VideoResult VideoDownloader::Run(const std::string& video_url,
             m_last_error = "自动合并失败: " + merr;
             Log("[ERROR] " + m_last_error);
             Log("[INFO] 提示: 可保留两轨文件，用外部工具手动合并: "
-                "ffmpeg -i " + vfile + " -i " + afile + " -c copy " + merged);
+                "ffmpeg -i " + vfile + " -i " + afile + " -c copy " +
+                merged_used);
             return VideoResult::Error; /* 两轨已下载，但用户期望单文件 → 报错指引 */
         }
     } else {

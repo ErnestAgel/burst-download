@@ -109,7 +109,8 @@ bool ExtractEmbeddedRuntime(std::string& home) {
     uint64_t mh = 0;
     size_t ms = 0;
     if (ReadMarker(cache, mh, ms) && mh == hash && ms == blob_size &&
-        access((cache + "/stdlib").c_str(), 0) == 0) {
+        (access((cache + "/python311.zip").c_str(), 0) == 0 ||
+         access((cache + "/stdlib").c_str(), 0) == 0)) {
       home = cache;
       return true;
     }

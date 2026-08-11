@@ -41,6 +41,9 @@ build-rel-arm64/
 build-win-rel/
 burst-build-win/
 
+# 本地验证产物（assets 方案测试包，不入库）
+release-assets-test/
+
 # GUI Phase 0 临时构建目录
 build-gui-p0/
 

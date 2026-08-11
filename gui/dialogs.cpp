@@ -9,6 +9,8 @@
 
 #include "dialogs.h"
 
+#include <cstring>
+
 #include "i18n.h"
 #include "imgui.h"
 
@@ -50,11 +52,23 @@ void ShowError(const std::string& title, const std::string& message,
     }
     ImGui::TextWrapped("%s", title.c_str());
     ImGui::Separator();
-    ImGui::TextWrapped("%s", message.c_str());
+    /* 可选中/复制：只读多行输入框（支持 Ctrl+C） */
+    {
+        char buf[8192];
+        std::strncpy(buf, message.c_str(), sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        ImGui::InputTextMultiline("##errmsg", buf, sizeof(buf),
+                                  ImVec2(-FLT_MIN, 0.0f),
+                                  ImGuiInputTextFlags_ReadOnly);
+    }
     if (!guide.empty()) {
         ImGui::TextWrapped("%s", guide.c_str());
     }
     ImGui::Separator();
+    if (ImGui::Button(i18n::T("dialog.error.copy"))) {
+        ImGui::SetClipboardText(message.c_str());
+    }
+    ImGui::SameLine();
     if (ImGui::Button(i18n::T("dialog.error.ok"), ImVec2(120, 0))) {
         open = false;
         ImGui::CloseCurrentPopup();
