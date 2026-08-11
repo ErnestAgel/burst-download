@@ -54,6 +54,15 @@ bool EmbedParseVideoUrls(const std::string& url,
 bool EmbedUpdateParser(const std::string& exe_path, std::string& msg);
 
 /**
+ * @brief 自动更新内置视频解析组件（视频模式启动时调用）
+ * @param msg 输出：执行结果描述；24h 节流内跳过时为空串
+ * @return 是否完成检查（节流跳过也返回 true；运行时缺失/网络失败返回 false，调用方可忽略）
+ * @note 24 小时节流一次（同一运行时目录），失败静默不阻塞后续解析；
+ *       需要网络；仅替换 yt_dlp 包目录（原子替换，失败自动回滚保留旧版）
+ */
+bool EmbedAutoUpdateParser(std::string& msg);
+
+/**
  * @brief 释放嵌入的 CPython 与资源（可选调用，进程退出前）
  */
 void EmbedPythonShutdown();

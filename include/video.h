@@ -20,11 +20,13 @@
  * @param urls 输出：媒体流 URL 列表（DASH 分离时依次为视频轨、音频轨）
  * @param cookies_from_browser 浏览器 Cookie 来源（chrome/firefox/edge 等，可为空）
  * @param cookie 手动 Cookie 字符串（可为空），部分流需登录态
+ * @param err 输出：失败时的底层原因（可为空指针）
  * @return 是否成功
  * @note 依赖嵌入的 Python 运行时（third_party/python/runtime），须先 EmbedPythonInit
  */
 bool ParseVideoUrls(const std::string& url, std::vector<std::string>& urls,
                     const std::string& cookies_from_browser = "",
-                    const std::string& cookie = "");
+                    const std::string& cookie = "",
+                    std::string* err = nullptr);
 
 #endif  // VIDEO_H

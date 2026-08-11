@@ -71,9 +71,14 @@ VideoResult VideoDownloader::Run(const std::string& video_url,
     }
     Log("[INFO] 开始解析视频: " + video_url);
     vector<string> streams;
-    if (!ParseVideoUrls(video_url, streams, cookies_from_browser, cookie)) {
+    string parse_err;
+    if (!ParseVideoUrls(video_url, streams, cookies_from_browser, cookie,
+                        &parse_err)) {
         m_last_error =
             "视频解析失败：请确认 URL 有效/可访问，且 Python 运行时资源完整";
+        if (!parse_err.empty()) {
+            m_last_error += "\n[详细原因] " + parse_err;
+        }
         Log("[ERROR] " + m_last_error);
         return VideoResult::Error;
     }

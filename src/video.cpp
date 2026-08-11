@@ -23,10 +23,12 @@ using namespace std;
 
 bool ParseVideoUrls(const string& url, vector<string>& urls,
                     const string& cookies_from_browser,
-                    const string& cookie) {
-  string err;
-  if (!EmbedParseVideoUrls(url, urls, cookies_from_browser, cookie, err)) {
-    fprintf(stderr, "[video] 解析失败: %s\n", err.c_str());
+                    const string& cookie,
+                    string* err) {
+  string detail;
+  if (!EmbedParseVideoUrls(url, urls, cookies_from_browser, cookie, detail)) {
+    fprintf(stderr, "[video] 解析失败: %s\n", detail.c_str());
+    if (err) *err = detail;
     return false;
   }
   return true;

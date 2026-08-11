@@ -22,9 +22,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 
 #ifndef PYTHON_RUNTIME_FALLBACK
@@ -36,6 +38,9 @@ namespace {
 std::mutex g_init_mutex;
 bool g_initialized = false;
 std::string g_python_home;
+
+/* 自动更新节流：同一运行时目录 24 小时内最多检查一次 */
+constexpr long kParserAutoUpdateIntervalSec = 24 * 3600;
 
 /* 从可执行文件路径提取所在目录 */
 std::string ExeDirOf(const std::string& exe_path) {
@@ -108,141 +113,8 @@ std::string ExtractJsonStr(const std::string& content, const std::string& key) {
   return content.substr(q1 + 1, q2 - q1 - 1);
 }
 
-}  // namespace
-
-bool EmbedPythonInit(const std::string& python_home) {
-  std::lock_guard<std::mutex> lock(g_init_mutex);
-  if (g_initialized) return true;
-
-  /* 定位运行时资源目录：显式传入 → exe 同目录 → 环境变量 → 编译期宏 */
-  std::string home = python_home;
-  if (!home.empty() && access((home + "/stdlib").c_str(), R_OK) != 0) {
-    home.clear();  /* 传入路径无效，继续回退 */
-  }
-  if (home.empty()) home = LocateRuntimeHome("");
-  if (home.empty()) return false;
-
-  /* 校验 stdlib 存在 */
-  if (access((home + "/stdlib").c_str(), R_OK) != 0) {
-    fprintf(stderr, "[embed_python] 找不到 Python 运行时资源: %s\n", home.c_str());
-    return false;
-  }
-
-  PyConfig config;
-  PyConfig_InitPythonConfig(&config);
-  PyConfig_SetBytesString(&config, &config.program_name, "burst");
-  /* 显式告知运行时根，避免 Python 打印 "Could not find platform independent libraries" 噪音 */
-  PyConfig_SetBytesString(&config, &config.home, home.c_str());
-  config.module_search_paths_set = 1;
-  PyWideStringList_Append(&config.module_search_paths,
-                          Py_DecodeLocale((home + "/stdlib").c_str(), nullptr));
-  PyWideStringList_Append(&config.module_search_paths,
-                          Py_DecodeLocale(home.c_str(), nullptr));
-  /* Windows 嵌入的 Python 扩展模块（.pyd）目录；Linux runtime 无此目录，加路径无害 */
-  PyWideStringList_Append(&config.module_search_paths,
-                          Py_DecodeLocale((home + "/lib-dynload").c_str(), nullptr));
-  PyStatus status = Py_InitializeFromConfig(&config);
-  if (PyStatus_Exception(status)) {
-    fprintf(stderr, "[embed_python] Py_Initialize 失败: %s\n",
-            status.err_msg ? status.err_msg : "?");
-    PyConfig_Clear(&config);
-    return false;
-  }
-  PyConfig_Clear(&config);
-  g_python_home = home;
-  g_initialized = true;
-  return true;
-}
-
-bool EmbedParseVideoUrls(const std::string& url,
-                         std::vector<std::string>& urls,
-                         const std::string& cookies_from_browser,
-                         const std::string& cookie,
-                         std::string& err) {
-  urls.clear();
-  if (!g_initialized) {
-    err = "Python 运行时未初始化";
-    return false;
-  }
-
-  const std::string result_file = ResultFile();
-  /* Python 脚本：调 yt_dlp 解析，结果 JSON 写入临时文件 */
-  char script[16384];
-  snprintf(script, sizeof(script),
-    "import yt_dlp, json\n"
-    "try:\n"
-    "    opts = {'quiet': True, 'skip_download': True, 'no_warnings': True}\n"
-    "    if '%s':\n"
-    "        opts['cookiesfrombrowser'] = ('%s',)\n"
-    "    if '%s':\n"
-    "        opts['http_headers'] = {'Cookie': '%s'}\n"
-    "    with yt_dlp.YoutubeDL(opts) as ydl:\n"
-    "        info = ydl.extract_info('%s', download=False)\n"
-    "        fmts = info.get('formats') or []\n"
-    "        vids = sorted([f for f in fmts if f.get('vcodec') and f.get('vcodec') != 'none' and f.get('url')],\n"
-    "                      key=lambda f: (f.get('height') or 0, f.get('tbr') or 0), reverse=True)\n"
-    "        auds = sorted([f for f in fmts if f.get('acodec') and f.get('acodec') != 'none' and f.get('url')],\n"
-    "                      key=lambda f: (f.get('abr') or 0, f.get('tbr') or 0), reverse=True)\n"
-    "        if vids and auds:\n"
-    "            urls = [vids[0]['url'], auds[0]['url']]  # [0] 视频轨, [1] 音频轨\n"
-    "        else:\n"
-    "            urls = [f.get('url') for f in fmts if f.get('url')]\n"
-    "        json.dump({'title': info.get('title'), 'urls': urls},\n"
-    "                  open('%s', 'w'))\n"
-    "except Exception as e:\n"
-    "    json.dump({'error': repr(e)}, open('%s', 'w'))\n",
-    cookies_from_browser.c_str(), cookies_from_browser.c_str(),
-    cookie.c_str(), cookie.c_str(),
-    url.c_str(), result_file.c_str(), result_file.c_str());
-
-  int rc = PyRun_SimpleString(script);
-  if (rc != 0) {
-    err = "Python 脚本执行失败";
-    return false;
-  }
-
-  /* 读回 JSON */
-  std::ifstream in(result_file);
-  if (!in.is_open()) {
-    err = "解析结果读取失败";
-    return false;
-  }
-  std::string content((std::istreambuf_iterator<char>(in)),
-                      std::istreambuf_iterator<char>());
-  in.close();
-  remove(result_file.c_str());
-
-  /* 极简 JSON 解析：只提取 "urls" 数组中的字符串 */
-  size_t err_pos = content.find("\"error\"");
-  if (err_pos != std::string::npos) {
-    err = content.substr(err_pos + 8, content.size() - err_pos - 10);
-    return false;
-  }
-  size_t arr = content.find("\"urls\"");
-  if (arr == std::string::npos) {
-    err = "结果中无 urls 字段";
-    return false;
-  }
-  size_t i = content.find('[', arr);
-  while (i != std::string::npos && i < content.size()) {
-    size_t q1 = content.find('"', i);
-    if (q1 == std::string::npos) break;
-    size_t q2 = content.find('"', q1 + 1);
-    if (q2 == std::string::npos) break;
-    urls.push_back(content.substr(q1 + 1, q2 - q1 - 1));
-    i = content.find('"', q2 + 1);
-  }
-  return !urls.empty();
-}
-
-bool EmbedUpdateParser(const std::string& exe_path, std::string& msg) {
-  /* 定位运行时资源目录（与 Init 同一套回退链） */
-  std::string home = LocateRuntimeHome(exe_path);
-  if (home.empty()) {
-    msg = "找不到 Python 运行时资源目录（可执行文件同目录 python_runtime/ 缺失）";
-    return false;
-  }
-
+/* 在指定 home 下执行 yt_dlp 在线检查与更新（手动 --update-parser 与自动更新共用） */
+bool UpdateParserAt(const std::string& home, std::string& msg) {
   /* 当前解析器版本（无 version.py 时为空串，跳过版本比较直接更新） */
   std::string cur_ver = ReadPackageVersion(home + "/yt_dlp/version.py");
 
@@ -271,7 +143,7 @@ bool EmbedUpdateParser(const std::string& exe_path, std::string& msg) {
     "    ctx = ssl.create_default_context(cafile=certifi.where())\n"
     "    api = 'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest'\n"
     "    req = urllib.request.Request(api, headers={'User-Agent': 'burst/1.0', 'Accept': 'application/vnd.github+json'})\n"
-    "    with urllib.request.urlopen(req, timeout=30, context=ctx) as r:\n"
+    "    with urllib.request.urlopen(req, timeout=10, context=ctx) as r:\n"
     "        rel = json.load(r)\n"
     "    tag = rel.get('tag_name', '')\n"
     "    url = ''\n"
@@ -375,6 +247,167 @@ bool EmbedUpdateParser(const std::string& exe_path, std::string& msg) {
   }
   msg = st.empty() ? "未知结果" : st;
   return true;
+}
+
+}  // namespace
+
+bool EmbedPythonInit(const std::string& python_home) {
+  std::lock_guard<std::mutex> lock(g_init_mutex);
+  if (g_initialized) return true;
+
+  /* 定位运行时资源目录：显式传入 → exe 同目录 → 环境变量 → 编译期宏 */
+  std::string home = python_home;
+  if (!home.empty() && access((home + "/stdlib").c_str(), R_OK) != 0) {
+    home.clear();  /* 传入路径无效，继续回退 */
+  }
+  if (home.empty()) home = LocateRuntimeHome("");
+  if (home.empty()) return false;
+
+  /* 校验 stdlib 存在 */
+  if (access((home + "/stdlib").c_str(), R_OK) != 0) {
+    fprintf(stderr, "[embed_python] 找不到 Python 运行时资源: %s\n", home.c_str());
+    return false;
+  }
+
+  PyConfig config;
+  PyConfig_InitPythonConfig(&config);
+  PyConfig_SetBytesString(&config, &config.program_name, "burst");
+  /* 显式告知运行时根，避免 Python 打印 "Could not find platform independent libraries" 噪音 */
+  PyConfig_SetBytesString(&config, &config.home, home.c_str());
+  config.module_search_paths_set = 1;
+  PyWideStringList_Append(&config.module_search_paths,
+                          Py_DecodeLocale((home + "/stdlib").c_str(), nullptr));
+  PyWideStringList_Append(&config.module_search_paths,
+                          Py_DecodeLocale(home.c_str(), nullptr));
+  /* Windows 嵌入的 Python 扩展模块（.pyd）目录；Linux runtime 无此目录，加路径无害 */
+  PyWideStringList_Append(&config.module_search_paths,
+                          Py_DecodeLocale((home + "/lib-dynload").c_str(), nullptr));
+  PyStatus status = Py_InitializeFromConfig(&config);
+  if (PyStatus_Exception(status)) {
+    fprintf(stderr, "[embed_python] Py_Initialize 失败: %s\n",
+            status.err_msg ? status.err_msg : "?");
+    PyConfig_Clear(&config);
+    return false;
+  }
+  PyConfig_Clear(&config);
+  g_python_home = home;
+  g_initialized = true;
+  return true;
+}
+
+bool EmbedParseVideoUrls(const std::string& url,
+                         std::vector<std::string>& urls,
+                         const std::string& cookies_from_browser,
+                         const std::string& cookie,
+                         std::string& err) {
+  urls.clear();
+  if (!g_initialized) {
+    err = "Python 运行时未初始化";
+    return false;
+  }
+
+  const std::string result_file = ResultFile();
+  /* Python 脚本：调 yt_dlp 解析，结果 JSON 写入临时文件 */
+  char script[16384];
+  snprintf(script, sizeof(script),
+    "import yt_dlp, json\n"
+    "try:\n"
+    "    opts = {'quiet': True, 'skip_download': True, 'no_warnings': True}\n"
+    "    if %s:\n"
+    "        opts['cookiesfrombrowser'] = (%s,)\n"
+    "    if %s:\n"
+    "        opts['http_headers'] = {'Cookie': %s}\n"
+    "    with yt_dlp.YoutubeDL(opts) as ydl:\n"
+    "        info = ydl.extract_info(%s, download=False)\n"
+    "        fmts = info.get('formats') or []\n"
+    "        vids = sorted([f for f in fmts if f.get('vcodec') and f.get('vcodec') != 'none' and f.get('url')],\n"
+    "                      key=lambda f: (f.get('height') or 0, f.get('tbr') or 0), reverse=True)\n"
+    "        auds = sorted([f for f in fmts if f.get('acodec') and f.get('acodec') != 'none' and f.get('url')],\n"
+    "                      key=lambda f: (f.get('abr') or 0, f.get('tbr') or 0), reverse=True)\n"
+    "        if vids and auds:\n"
+    "            urls = [vids[0]['url'], auds[0]['url']]  # [0] 视频轨, [1] 音频轨\n"
+    "        else:\n"
+    "            urls = [f.get('url') for f in fmts if f.get('url')]\n"
+    "        json.dump({'title': info.get('title'), 'urls': urls},\n"
+    "                  open(%s, 'w'))\n"
+    "except Exception as e:\n"
+    "    json.dump({'error': repr(e)}, open(%s, 'w'))\n",
+    PyStr(cookies_from_browser).c_str(), PyStr(cookies_from_browser).c_str(),
+    PyStr(cookie).c_str(), PyStr(cookie).c_str(),
+    PyStr(url).c_str(), PyStr(result_file).c_str(), PyStr(result_file).c_str());
+
+  int rc = PyRun_SimpleString(script);
+  if (rc != 0) {
+    err = "Python 脚本执行失败";
+    return false;
+  }
+
+  /* 读回 JSON */
+  std::ifstream in(result_file);
+  if (!in.is_open()) {
+    err = "解析结果读取失败";
+    return false;
+  }
+  std::string content((std::istreambuf_iterator<char>(in)),
+                      std::istreambuf_iterator<char>());
+  in.close();
+  remove(result_file.c_str());
+
+  /* 极简 JSON 解析：只提取 "urls" 数组中的字符串 */
+  size_t err_pos = content.find("\"error\"");
+  if (err_pos != std::string::npos) {
+    err = content.substr(err_pos + 8, content.size() - err_pos - 10);
+    return false;
+  }
+  size_t arr = content.find("\"urls\"");
+  if (arr == std::string::npos) {
+    err = "结果中无 urls 字段";
+    return false;
+  }
+  size_t i = content.find('[', arr);
+  while (i != std::string::npos && i < content.size()) {
+    size_t q1 = content.find('"', i);
+    if (q1 == std::string::npos) break;
+    size_t q2 = content.find('"', q1 + 1);
+    if (q2 == std::string::npos) break;
+    urls.push_back(content.substr(q1 + 1, q2 - q1 - 1));
+    i = content.find('"', q2 + 1);
+  }
+  return !urls.empty();
+}
+
+bool EmbedUpdateParser(const std::string& exe_path, std::string& msg) {
+  /* 定位运行时资源目录（与 Init 同一套回退链） */
+  std::string home = LocateRuntimeHome(exe_path);
+  if (home.empty()) {
+    msg = "找不到 Python 运行时资源目录（可执行文件同目录 python_runtime/ 缺失）";
+    return false;
+  }
+  return UpdateParserAt(home, msg);
+}
+
+bool EmbedAutoUpdateParser(std::string& msg) {
+  /* 优先用已初始化（g_python_home）的运行时目录，未初始化时回退探测 */
+  std::string home = g_python_home;
+  if (home.empty()) home = LocateRuntimeHome("");
+  if (home.empty()) {
+    msg = "找不到 Python 运行时资源目录";
+    return false;
+  }
+
+  /* 24h 节流：同一运行时目录每天最多检查一次（离线/失败也不反复阻塞解析） */
+  const std::string stamp = home + "/.parser_last_check";
+  struct stat st;
+  if (stat(stamp.c_str(), &st) == 0) {
+    const time_t now = time(nullptr);
+    if (now >= st.st_mtime &&
+        (now - st.st_mtime) < kParserAutoUpdateIntervalSec) {
+      msg.clear();  /* 今日已检查：静默跳过 */
+      return true;
+    }
+  }
+  { std::ofstream f(stamp.c_str(), std::ios::app); }  /* 更新时间戳（无则创建） */
+  return UpdateParserAt(home, msg);
 }
 
 void EmbedPythonShutdown() {
