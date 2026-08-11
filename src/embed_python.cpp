@@ -122,15 +122,51 @@ std::string ReadVersionMarker(const std::string& home) {
   return v;
 }
 
-/* 生成安全的 Python 单引号字符串字面量（转义反斜杠与引号） */
-std::string PyStr(const std::string& s) {
-  std::string out = "'";
-  for (char c : s) {
-    if (c == '\\' || c == '\'') out += '\\';
-    out += c;
+/* base64 编码（字母表仅含 A-Za-z0-9+/=，不含引号/换行/反斜杠）：
+ * Python 内嵌字符串一律以 base64 传递，脚本侧 b64decode 还原，
+ * 杜绝"URL/Cookie 含换行等控制字符闭合字符串字面量"的脚本注入。 */
+std::string Base64Encode(const std::string& in) {
+  static const char tbl[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve((in.size() + 2) / 3 * 4);
+  size_t i = 0;
+  while (i + 2 < in.size()) {
+    uint32_t v = ((uint8_t)in[i] << 16) | ((uint8_t)in[i + 1] << 8) |
+                 (uint8_t)in[i + 2];
+    out += tbl[(v >> 18) & 63];
+    out += tbl[(v >> 12) & 63];
+    out += tbl[(v >> 6) & 63];
+    out += tbl[v & 63];
+    i += 3;
   }
-  out += "'";
+  const size_t rem = in.size() - i;
+  if (rem == 1) {
+    uint32_t v = (uint8_t)in[i] << 16;
+    out += tbl[(v >> 18) & 63];
+    out += tbl[(v >> 12) & 63];
+    out += "==";
+  } else if (rem == 2) {
+    uint32_t v = ((uint8_t)in[i] << 16) | ((uint8_t)in[i + 1] << 8);
+    out += tbl[(v >> 18) & 63];
+    out += tbl[(v >> 12) & 63];
+    out += tbl[(v >> 6) & 63];
+    out += '=';
+  }
   return out;
+}
+
+/* Python 内嵌字符串字面量：'<base64>'（base64 文本在单引号内绝对安全） */
+std::string B64Lit(const std::string& s) { return "'" + Base64Encode(s) + "'"; }
+
+/* cookiesfrombrowser 白名单（yt-dlp 支持范围） */
+bool ValidBrowserName(const std::string& b) {
+  static const char* k[] = {"brave", "chrome", "chromium", "edge", "firefox",
+                            "opera", "safari", "vivaldi", "whale"};
+  for (const char* x : k) {
+    if (b == x) return true;
+  }
+  return false;
 }
 
 /* 极简 JSON 字符串字段提取（"key": "value"） */
@@ -160,11 +196,12 @@ bool UpdateParserAt(const std::string& home, std::string& msg) {
   std::string script;
   script.reserve(4096);
   script +=
-    "import json, os, shutil, ssl, sys, tarfile, urllib.request\n"
+    "import json, os, shutil, ssl, sys, tarfile, urllib.request, base64\n"
     "import certifi\n"
-    "OUT = " + PyStr(result_file) + "\n"
-    "HOME = " + PyStr(home) + "\n"
-    "CUR = " + PyStr(cur_ver) + "\n"
+    "def _b(s): return base64.b64decode(s.encode('ascii')).decode('utf-8', 'replace')\n"
+    "OUT = " + B64Lit(result_file) + "\n"
+    "HOME = " + B64Lit(home) + "\n"
+    "CUR = " + B64Lit(cur_ver) + "\n"
     "out = {'ok': False, 'msg': '', 'old': '', 'new': ''}\n"
     "class UpdateAbort(Exception):\n"
     "    pass\n"
@@ -361,20 +398,43 @@ bool EmbedParseVideoUrls(const std::string& url,
     err = "Python 运行时未初始化";
     return false;
   }
+  /* 输入防护：长度与浏览器名白名单（配合 base64 传递杜绝脚本注入） */
+  if (url.empty() || url.size() > 8192 ||
+      url.find('\n') != std::string::npos ||
+      url.find('\r') != std::string::npos) {
+    err = "URL 无效（为空、过长或包含非法控制字符）";
+    return false;
+  }
+  if (cookie.size() > 4096 || cookie.find('\n') != std::string::npos ||
+      cookie.find('\r') != std::string::npos) {
+    err = "Cookie 无效（过长或包含非法控制字符）";
+    return false;
+  }
+  if (!cookies_from_browser.empty() &&
+      (!ValidBrowserName(cookies_from_browser) ||
+       cookies_from_browser.size() > 64)) {
+    err = "不支持的浏览器名称（支持: brave/chrome/chromium/edge/firefox/"
+          "opera/safari/vivaldi/whale）";
+    return false;
+  }
 
   const std::string result_file = ResultFile();
   /* Python 脚本：调 yt_dlp 解析，结果 JSON 写入临时文件 */
   char script[16384];
   snprintf(script, sizeof(script),
-    "import yt_dlp, json\n"
+    "import yt_dlp, json, base64\n"
+    "def _b(s): return base64.b64decode(s.encode('ascii')).decode('utf-8', 'replace')\n"
     "try:\n"
     "    opts = {'quiet': True, 'skip_download': True, 'no_warnings': True}\n"
-    "    if %s:\n"
-    "        opts['cookiesfrombrowser'] = (%s,)\n"
-    "    if %s:\n"
-    "        opts['http_headers'] = {'Cookie': %s}\n"
+    "    _browser = %s\n"
+    "    _cookie = %s\n"
+    "    _url = %s\n"
+    "    if _browser:\n"
+    "        opts['cookiesfrombrowser'] = (_browser,)\n"
+    "    if _cookie:\n"
+    "        opts['http_headers'] = {'Cookie': _cookie}\n"
     "    with yt_dlp.YoutubeDL(opts) as ydl:\n"
-    "        info = ydl.extract_info(%s, download=False)\n"
+    "        info = ydl.extract_info(_url, download=False)\n"
     "        fmts = info.get('formats') or []\n"
     "        vids = sorted([f for f in fmts if f.get('vcodec') and f.get('vcodec') != 'none' and f.get('url')],\n"
     "                      key=lambda f: (f.get('height') or 0, f.get('tbr') or 0), reverse=True)\n"
@@ -393,9 +453,9 @@ bool EmbedParseVideoUrls(const std::string& url,
     "except Exception as e:\n"
     "    json.dump({'error': (str(e) or repr(e))},\n"
     "              open(%s, 'w', encoding='utf-8'), ensure_ascii=False)\n",
-    PyStr(cookies_from_browser).c_str(), PyStr(cookies_from_browser).c_str(),
-    PyStr(cookie).c_str(), PyStr(cookie).c_str(),
-    PyStr(url).c_str(), PyStr(result_file).c_str(), PyStr(result_file).c_str());
+    B64Lit(cookies_from_browser).c_str(), B64Lit(cookie).c_str(),
+    B64Lit(url).c_str(), B64Lit(result_file).c_str(),
+    B64Lit(result_file).c_str());
 
   int rc = PyRun_SimpleString(script);
   if (rc != 0) {
