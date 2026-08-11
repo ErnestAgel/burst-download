@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief 程序入口：多线程分片下载命令行工具（支持 --video 视频直链下载模式）
+ * @brief CLI 入口（RunCli）：多线程分片下载命令行工具（支持 --video 视频直链下载模式）
  *
  * 用法:
  *   curl_download <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 #include "Ccurl.h"
+#include "app.h"
 #include "video.h"
 #include "embed_python.h"
 #include "avmerge.h"
@@ -117,6 +118,7 @@ static void PrintUsage(const char* prog) {
   printf("  --timeout N    下载无进展 N 秒后自动中断（默认 60，0 表示不限）\n");
   printf("  --no-timeout   强制下载不自动中断（等价 --timeout 0）\n");
   printf("  --update-parser  在线更新内置视频解析组件到最新版（需网络，无需重新编译）\n");
+  printf("  --no-auto-update  视频模式：关闭启动时自动检查/更新解析组件（默认开启，24 小时节流一次）\n");
   printf("  -h, --help     显示本帮助\n");
   printf("示例:\n");
   printf("  %s https://example.com/file.iso -o file.iso -t 8 --timeout 30\n", prog);
@@ -152,7 +154,7 @@ static bool DownloadVideo(const string& video_url, const string& basename,
  * @param argv 参数数组
  * @return 程序退出码（0 成功，1 失败或用法错误）
  */
-int main(int argc, char** argv) {
+int RunCli(int argc, char** argv) {
   if (argc < 2) {
     PrintUsage(argv[0]);
     return 1;
@@ -181,6 +183,7 @@ int main(int argc, char** argv) {
   string video_url;
   string cookies_from_browser;
   string cookie_str;
+  bool auto_update_parser = true;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--video") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
@@ -202,6 +205,8 @@ int main(int argc, char** argv) {
       }
       printf("%s\n", msg.c_str());
       return 0;
+    } else if (strcmp(argv[i], "--no-auto-update") == 0) {
+      auto_update_parser = false;
     } else if (strcmp(argv[i], "--cookies-from-browser") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
       cookies_from_browser = argv[++i];
     } else if (strcmp(argv[i], "--cookie") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
@@ -235,6 +240,13 @@ int main(int argc, char** argv) {
     } else if (VideoOutputExists(filename)) {
       filename += "_" + CurrentTimeStamp();
       printf("同名输出已存在，为避免覆盖改用: %s\n", filename.c_str());
+    }
+    /* 自动更新解析组件（24h 节流；失败静默，不阻塞解析） */
+    if (auto_update_parser) {
+      string up_msg;
+      if (EmbedAutoUpdateParser(up_msg) && !up_msg.empty()) {
+        printf("%s\n", up_msg.c_str());
+      }
     }
     if (!DownloadVideo(video_url, filename, threads, timeout,
                        cookies_from_browser, cookie_str)) {

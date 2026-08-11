@@ -332,6 +332,14 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
         return;
     }
 
+    /* 自动更新视频解析组件（24h 节流一次；失败静默，不阻塞解析） */
+    {
+        std::string up_msg;
+        if (EmbedAutoUpdateParser(up_msg) && !up_msg.empty()) {
+            AddLog("[INFO] " + up_msg);
+        }
+    }
+
     VideoDownloader vd;
     /* 阶段回调（F8）：解析中→下载视频轨→下载音频轨→合并中；
      * 进度回调不覆盖 stage，保持细分阶段显示 */

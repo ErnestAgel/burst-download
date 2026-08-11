@@ -22,6 +22,8 @@ build-arm/
 __pycache__/
 *.py[cod]
 *$py.class
+# 解析组件自动更新节流时间戳（运行时生成，不入库）
+.parser_last_check
 
 # 运行日志
 *.log
@@ -37,6 +39,7 @@ build-win-release/
 build-rel-x64/
 build-rel-arm64/
 build-win-rel/
+burst-build-win/
 
 # GUI Phase 0 临时构建目录
 build-gui-p0/
