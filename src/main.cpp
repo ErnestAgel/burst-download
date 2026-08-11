@@ -164,16 +164,9 @@ int RunCli(int argc, char** argv) {
     return 0;
   }
 
-  /* 初始化嵌入的 Python 运行时（优先可执行文件同目录 python_runtime/，
-   * 否则回退到编译期宏 PYTHON_RUNTIME_FALLBACK 的源码树资源） */
-  {
-    string exe_dir(argv[0]);
-    size_t slash = exe_dir.find_last_of("/\\");
-    string py_home = (slash != string::npos)
-                         ? exe_dir.substr(0, slash) + "/python_runtime"
-                         : "";
-    EmbedPythonInit(py_home);
-  }
+  /* 初始化嵌入的 Python 运行时（定位顺序：exe 同目录 assets/ → 临时缓存
+   * → 环境变量 CURLBOLT_PYHOME → 编译期宏源码树） */
+  EmbedPythonInit();
 
   string url;
   string filename = "./test";

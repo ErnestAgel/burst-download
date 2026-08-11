@@ -16,6 +16,7 @@
  */
 
 #include "embed_python.h"
+#include "embedded_runtime.h"
 
 #include <Python.h>
 
@@ -48,13 +49,23 @@ std::string ExeDirOf(const std::string& exe_path) {
   return (slash != std::string::npos) ? exe_path.substr(0, slash) : "";
 }
 
-/* 定位运行时资源目录：exe 同目录 python_runtime/ → 环境变量 CURLBOLT_PYHOME → 编译期宏 */
+/* 定位运行时资源目录：exe 同目录 assets/ → 临时缓存 →
+ * 环境变量 CURLBOLT_PYHOME → 编译期宏（开发源码树） */
 std::string LocateRuntimeHome(const std::string& exe_path) {
   std::string home;
-  std::string exe_dir = ExeDirOf(exe_path);
+  std::string exe = exe_path.empty() ? EmbedGetExePath() : exe_path;
+  std::string exe_dir = ExeDirOf(exe);
   if (!exe_dir.empty()) {
-    std::string cand = exe_dir + "/python_runtime";
+    std::string cand = exe_dir + "/assets";
     if (access((cand + "/stdlib").c_str(), R_OK) == 0) home = cand;
+  }
+  /* 运行时资源缓存（临时目录） */
+  if (home.empty()) {
+    std::string cached;
+    if (ExtractEmbeddedRuntime(cached) && !cached.empty() &&
+        access((cached + "/stdlib").c_str(), R_OK) == 0) {
+      home = cached;
+    }
   }
   if (home.empty()) {
     const char* env = getenv("CURLBOLT_PYHOME");
@@ -195,6 +206,14 @@ bool UpdateParserAt(const std::string& home, std::string& msg) {
     "                raise\n"
     "            if had_old:\n"
     "                shutil.rmtree(bak, ignore_errors=True)\n"
+    "            import compileall, pathlib, py_compile\n"
+    "            compileall.compile_dir(dst, quiet=1, legacy=True, force=True)\n"
+    "            for f in list(pathlib.Path(dst).rglob('*.py')):\n"
+    "                if f.name == 'version.py':\n"
+    "                    continue\n"
+    "                f.unlink()\n"
+    "            for d in list(pathlib.Path(dst).rglob('__pycache__')):\n"
+    "                shutil.rmtree(d, ignore_errors=True)\n"
     "            out['old'] = CUR\n"
     "            out['ok'] = True\n"
     "            out['msg'] = 'updated'\n"
@@ -380,7 +399,7 @@ bool EmbedUpdateParser(const std::string& exe_path, std::string& msg) {
   /* 定位运行时资源目录（与 Init 同一套回退链） */
   std::string home = LocateRuntimeHome(exe_path);
   if (home.empty()) {
-    msg = "找不到 Python 运行时资源目录（可执行文件同目录 python_runtime/ 缺失）";
+    msg = "找不到 Python 运行时资源目录（可执行文件同目录 assets/ 缺失）";
     return false;
   }
   return UpdateParserAt(home, msg);

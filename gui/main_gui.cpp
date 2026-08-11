@@ -150,9 +150,9 @@ int RunGui(int argc, char** argv) {
     i18n::Init(ExeDir(argc > 0 ? argv[0] : ""));
 
     /* 初始化嵌入的 Python 运行时（视频解析用；幂等）。
-     * 优先 exe 同目录 python_runtime/（发布形态），否则回退环境变量/编译期宏；
+     * 定位顺序：exe 同目录 assets/ → 临时缓存 → 环境变量/编译期宏；
      * 初始化失败不阻塞 GUI（文件模式仍可用），视频任务时 worker 会再次尝试并明确报错 */
-    EmbedPythonInit(ExeDir(argc > 0 ? argv[0] : "") + "/python_runtime");
+    EmbedPythonInit();
 
     /* ---- GLFW ---- */
     if (!glfwInit()) {

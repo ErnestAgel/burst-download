@@ -11,6 +11,7 @@
  */
 
 #include "app.h"
+#include "embedded_runtime.h"
 
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,8 @@
 #endif
 
 int main(int argc, char** argv) {
+  /* 记录可执行文件路径，供运行时定位使用 */
+  EmbedSetExePath(argc > 0 ? argv[0] : "");
   /* 显式 --gui / -g：无论是否带其它参数都打开图形界面 */
   const bool explicit_gui =
       argc > 1 && (std::strcmp(argv[1], "--gui") == 0 ||

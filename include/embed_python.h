@@ -3,7 +3,7 @@
  * @brief 进程内嵌入 CPython + yt_dlp 的视频直链解析（纯代码调用，无外部进程）
  *
  * 运行时资源（stdlib/、yt_dlp/）从 python_home 加载：
- *   - 默认 <可执行文件同目录>/python_runtime/
+ *   - 默认 <可执行文件同目录>/assets/
  *   - 编译期宏 PYTHON_RUNTIME_FALLBACK 指定的源码树路径（开发调试用）
  *
  * @author ErnestAgel
@@ -21,7 +21,7 @@
 /**
  * @brief 初始化嵌入的 CPython（进程内调用一次，线程安全计数）
  * @param python_home 运行时资源根目录；为空时依次尝试：
- *                    exe 同目录/python_runtime → 环境变量 CURLBOLT_PYHOME →
+ *                    exe 同目录/assets → 环境变量 CURLBOLT_PYHOME →
  *                    编译期宏 PYTHON_RUNTIME_FALLBACK
  * @return 是否初始化成功
  */
@@ -45,7 +45,7 @@ bool EmbedParseVideoUrls(const std::string& url,
 
 /**
  * @brief 在线更新内置视频解析组件（yt_dlp 包）到 GitHub 最新版
- * @param exe_path 可执行文件路径（argv[0]），用于定位同目录 python_runtime/
+ * @param exe_path 可执行文件路径（argv[0]），用于定位同目录 assets/
  * @param msg 输出：执行结果描述（"已是最新" 或 新旧版本变化；失败为原因）
  * @return 是否执行成功（"已是最新" 也视为成功）
  * @note 需网络；仅替换 yt_dlp 包目录（原子替换，失败自动回滚保留旧版）；

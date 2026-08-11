@@ -322,8 +322,8 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_snapshot.error =
-                "Python 运行时初始化失败：缺少 python_runtime 资源（stdlib/yt_dlp）。\n"
-                "开发构建使用仓库 third_party/python/runtime；发布物需将 python_runtime "
+                "Python 运行时初始化失败：缺少运行时资源目录 assets/（stdlib/yt_dlp）。\n"
+                "开发构建使用仓库 third_party/python/runtime；发布物需将 assets/ "
                 "随 exe 同目录分发。";
         }
         SetStage(STAGE_ERROR, "",
