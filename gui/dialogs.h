@@ -48,4 +48,11 @@ ExistsChoice ShowFileExists(const std::string& path, bool& open);
  */
 void ShowDone(const std::string& path, bool& open);
 
+/**
+ * @brief 关于弹窗：显示应用名称、版本、平台与开源协议
+ * @param version 版本号字符串（如 "2.3.0"，来自 version.h）
+ * @param open 弹窗开关（每帧传入）
+ */
+void ShowAbout(const std::string& version, bool& open);
+
 }  // namespace dialogs

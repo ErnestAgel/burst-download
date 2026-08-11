@@ -34,6 +34,7 @@
 #include "embed_python.h"
 #include "avmerge.h"
 #include "download_video.h"
+#include "version.h"
 
 using namespace std;
 
@@ -104,6 +105,7 @@ static string StampName(const string& base) {
  * @param prog 程序名
  */
 static void PrintUsage(const char* prog) {
+  printf("burst %s (Burst Download)\n", BURST_VERSION_STRING);
   printf("Usage: %s <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]\n", prog);
   printf("       %s --video <video-url> [-o basename] [-t threads] [--timeout sec]\n", prog);
   printf("  <url>          下载地址\n");
@@ -121,6 +123,7 @@ static void PrintUsage(const char* prog) {
   printf("  --update-parser  在线更新内置视频解析组件到最新版（需网络，无需重新编译）\n");
   printf("  --no-auto-update  视频模式：关闭启动时自动检查/更新解析组件（默认开启，24 小时节流一次）\n");
   printf("  -h, --help     显示本帮助\n");
+  printf("  -v, --version  显示版本号\n");
   printf("示例:\n");
   printf("  %s https://example.com/file.iso -o file.iso -t 8 --timeout 30\n", prog);
   printf("  %s --video https://www.bilibili.com/video/BVxxxx -o movie -t 8\n", prog);
@@ -159,6 +162,18 @@ int RunCli(int argc, char** argv) {
   if (argc < 2) {
     PrintUsage(argv[0]);
     return 1;
+  }
+  if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
+    printf("burst %s (Burst Download)\n", BURST_VERSION_STRING);
+    printf("platform: ");
+#ifdef _WIN32
+    printf("Windows x86_64\n");
+#elif defined(__aarch64__)
+    printf("Linux aarch64\n");
+#else
+    printf("Linux x86_64\n");
+#endif
+    return 0;
   }
   if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
     PrintUsage(argv[0]);

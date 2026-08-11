@@ -121,4 +121,30 @@ void ShowDone(const std::string& path, bool& open) {
     EndModal(open);
 }
 
+void ShowAbout(const std::string& version, bool& open) {
+    if (!BeginModal("##about", open)) {
+        return;
+    }
+    ImGui::TextWrapped("%s", i18n::T("dialog.about.title"));
+    ImGui::Separator();
+    ImGui::Text("burst %s (Burst Download)", version.c_str());
+    ImGui::Text("%s:", i18n::T("dialog.about.platform"));
+    ImGui::SameLine();
+#ifdef _WIN32
+    ImGui::TextUnformatted("Windows x86_64");
+#elif defined(__aarch64__)
+    ImGui::TextUnformatted("Linux aarch64");
+#else
+    ImGui::TextUnformatted("Linux x86_64");
+#endif
+    ImGui::Text("%s: MIT License", i18n::T("dialog.about.license"));
+    ImGui::TextWrapped("Copyright (c) 2026 ErnestAgel");
+    ImGui::Separator();
+    if (ImGui::Button(i18n::T("dialog.about.ok"), ImVec2(120, 0))) {
+        open = false;
+        ImGui::CloseCurrentPopup();
+    }
+    EndModal(open);
+}
+
 }  // namespace dialogs

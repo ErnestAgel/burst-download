@@ -72,6 +72,7 @@ const Entry kStrings[] = {
     /* 设置 */
     {"menu.settings", "设置", "Settings"},
     {"menu.language", "语言", "Language"},
+    {"menu.about", "关于", "About"},
     /* 菜单栏语言切换入口：显示"目标语言"提示（中文界面→language，英文界面→中文），
      * 便于引导用户切换语言（用户需求） */
     {"menu.lang_hint", "language", "中文"},
@@ -101,6 +102,12 @@ const Entry kStrings[] = {
     {"dialog.exists.cancel", "取消", "Cancel"},
     {"dialog.done.title", "下载完成", "Download Complete"},
     {"dialog.done.ok", "确定", "OK"},
+    /* 关于弹窗 */
+    {"dialog.about.title", "关于 Burst Download", "About Burst Download"},
+    {"dialog.about.version", "版本", "Version"},
+    {"dialog.about.platform", "平台", "Platform"},
+    {"dialog.about.license", "开源协议", "License"},
+    {"dialog.about.ok", "确定", "OK"},
     /* 通用 */
     {"msg.canceled", "已取消，部分文件保留可续传",
      "Canceled. Partial files kept for resume."},

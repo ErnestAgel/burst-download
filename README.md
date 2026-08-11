@@ -106,6 +106,7 @@
 ./burst <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
 ./burst --video <video-url> [-o basename] [-t threads] [--timeout sec]
 ./burst --update-parser
+./burst --version
 ```
 
 ```bash
@@ -123,6 +124,9 @@
 
 # 查看帮助
 ./burst -h
+
+# 查看版本
+./burst --version
 ```
 
 终端实时输出**进度 / 速率 / 剩余时间**：

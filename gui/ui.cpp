@@ -27,6 +27,7 @@
 #include "imgui.h"
 #include "toggle.h"
 #include "Ccurl.h"  /* MaxThread */
+#include "version.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -85,6 +86,7 @@ bool g_error_open = false;
 bool g_done_open = false;
 std::string g_error_title, g_error_msg, g_error_guide;
 std::string g_done_path;
+bool g_about_open = false;
 
 #ifndef _WIN32
 /* Linux 内置目录浏览器状态（Windows 用原生 IFileDialog，见 RenderForm） */
@@ -1081,6 +1083,9 @@ bool Render(DownloadWorker& worker) {
             }
             ImGui::EndMenu();
         }
+        if (ImGui::MenuItem(i18n::T("menu.about"))) {
+            g_about_open = true;
+        }
         ImGui::EndMenuBar();
     }
 
@@ -1158,6 +1163,9 @@ bool Render(DownloadWorker& worker) {
 
     /* 完成弹窗（F13） */
     dialogs::ShowDone(g_done_path, g_done_open);
+
+    /* 关于弹窗 */
+    dialogs::ShowAbout(BURST_VERSION_STRING, g_about_open);
 
 #ifndef _WIN32
     /* Linux 内置目录浏览器（Windows 走原生 IFileDialog，无此状态） */

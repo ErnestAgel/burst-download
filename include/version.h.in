@@ -1,0 +1,15 @@
+/**
+ * @file version.h.in
+ * @brief 应用版本号模板：由 CMake configure_file 生成到构建目录
+ *
+ * 版本号唯一来源：CMake 变量 BURST_VERSION（默认见 CMakeLists.txt，
+ * 发布脚本 build-release.ps1 构建时会用 -DBURST_VERSION=<tag> 覆盖）。
+ *
+ * @license SPDX-License-Identifier: MIT
+ */
+#pragma once
+
+#define BURST_VERSION_STRING "@BURST_VERSION@"
+#define BURST_VERSION_MAJOR @BURST_VERSION_MAJOR@
+#define BURST_VERSION_MINOR @BURST_VERSION_MINOR@
+#define BURST_VERSION_PATCH @BURST_VERSION_PATCH@

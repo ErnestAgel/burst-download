@@ -3,6 +3,30 @@ cmake_minimum_required(VERSION 3.10)
 
 project("burst-download")
 
+# ---- 应用版本号（构建进二进制，--version / GUI 关于弹窗读取） ----
+# 默认与当前发布 tag 同步；发布脚本会以 -DBURST_VERSION=<tag> 覆盖，
+# 保证发布物内的版本号与实际 Release 一致。
+set(BURST_VERSION "2.3.0" CACHE STRING "Burst Download 版本号（x.y.z）")
+string(REPLACE "." ";" BURST_VERSION_PARTS "${BURST_VERSION}")
+list(LENGTH BURST_VERSION_PARTS BURST_VERSION_PARTS_LEN)
+if(BURST_VERSION_PARTS_LEN GREATER 0)
+  list(GET BURST_VERSION_PARTS 0 BURST_VERSION_MAJOR)
+else()
+  set(BURST_VERSION_MAJOR 0)
+endif()
+if(BURST_VERSION_PARTS_LEN GREATER 1)
+  list(GET BURST_VERSION_PARTS 1 BURST_VERSION_MINOR)
+else()
+  set(BURST_VERSION_MINOR 0)
+endif()
+if(BURST_VERSION_PARTS_LEN GREATER 2)
+  list(GET BURST_VERSION_PARTS 2 BURST_VERSION_PATCH)
+else()
+  set(BURST_VERSION_PATCH 0)
+endif()
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/version.h.in
+               ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h @ONLY)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -18,8 +42,14 @@ include_directories(${CURL_INCLUDE_DIR})
 
 file(GLOB SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
-add_compile_options(-g)
 add_executable(burst WIN32 ${SRC})
+target_include_directories(burst PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
+# Debug：保留调试信息（便于 gdb/调试器）；Release：不带 -g 且剥离符号，
+# 减小体积并提高逆向门槛（见 docs/issue-analysis.md 反逆向章节）。
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_compile_options(-g)
+endif()
 
 # ---- 平台目录：third_party/<PLATFORM_DIR> ----
 if(WIN32)
