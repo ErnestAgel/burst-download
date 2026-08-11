@@ -17,10 +17,46 @@
 #include <cstring>
 
 #ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00 /* Win10+：SetProcessMitigationPolicy 等 API 需要 */
+#endif
 #include <windows.h>
 #endif
 
+/* ---- Windows 进程级安全缓解（防 DLL 注入/劫持，best-effort，失败忽略） ----
+ * 1) SetDefaultDllDirectories：禁止从当前工作目录(CWD)加载 DLL，
+ *    防"下载目录放一个同名恶意 dll"的 DLL 搜索顺序劫持；
+ * 2) ImageLoadPolicy：禁止加载远程(SMB/UNC)来源与低完整性级别(Low IL)
+ *    的镜像，并优先 System32（防应用目录伪造系统 dll）。
+ * 刻意不启用"仅微软签名 DLL"策略：会误伤显卡驱动/输入法/杀软等
+ * 合法第三方模块。 */
+#ifdef _WIN32
+static void EnableWindowsSecurityMitigations() {
+  /* 1) 禁止从当前工作目录(CWD)加载 DLL（Win8+，防 DLL 搜索顺序劫持） */
+  SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+
+  /* 2) Win10+ 进程缓解：ImageLoadPolicy（动态加载规避头文件版本差异）——
+   *    禁止加载远程(SMB/UNC)与低完整性级别(Low IL)镜像，并优先 System32。 */
+  typedef BOOL(WINAPI* SetMitigationFn)(PROCESS_MITIGATION_POLICY, PVOID, SIZE_T);
+  HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+  if (k32 != nullptr) {
+    auto fn = (SetMitigationFn)GetProcAddress(k32, "SetProcessMitigationPolicy");
+    if (fn != nullptr) {
+      PROCESS_MITIGATION_IMAGE_LOAD_POLICY img{};
+      img.NoRemoteImages = 1;
+      img.NoLowMandatoryLabelImages = 1;
+      img.PreferSystem32Images = 1;
+      fn(ProcessImageLoadPolicy, &img, sizeof(img));
+    }
+  }
+}
+#endif
+
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  /* 必须在任何第三方 DLL 加载（Python/GLFW/OpenGL）之前调用 */
+  EnableWindowsSecurityMitigations();
+#endif
   /* 记录可执行文件路径，供运行时定位使用 */
   EmbedSetExePath(argc > 0 ? argv[0] : "");
   /* 显式 --gui / -g：无论是否带其它参数都打开图形界面 */
