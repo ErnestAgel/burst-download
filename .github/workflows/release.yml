@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.11 (runtime pyc bytecode)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -34,7 +34,7 @@ jobs:
         run: python scripts/package_release.py --platform linux-x86_64 --exe build/burst --runtime third_party/python/runtime --out burst-linux-x86_64
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: burst-linux-x86_64
           path: burst-linux-x86_64
@@ -45,10 +45,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.11 (runtime pyc bytecode)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -68,7 +68,7 @@ jobs:
         run: python scripts/package_release.py --platform linux-aarch64 --exe build/burst --runtime third_party/python/runtime --out burst-linux-aarch64
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: burst-linux-aarch64
           path: burst-linux-aarch64
@@ -82,10 +82,10 @@ jobs:
         shell: msys2 {0}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.11 (runtime pyc bytecode)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -109,7 +109,7 @@ jobs:
         run: python scripts/package_release.py --platform windows-x86_64 --exe build/burst.exe --runtime third_party/python/runtime --build-dir build --out burst-windows-x86_64.zip
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: burst-windows-x86_64.zip
           path: burst-windows-x86_64.zip
@@ -121,12 +121,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (full history for release notes)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: assets
           merge-multiple: true
@@ -157,7 +157,7 @@ jobs:
           } > release-body.md
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: assets/*
           body_path: release-body.md
