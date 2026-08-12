@@ -1,6 +1,7 @@
 # 构建产物
 build/
 build-tests/
+build-tests-rel/
 build-rel/
 build-release/
 .build-cache/
@@ -47,6 +48,7 @@ release-assets-test/
 
 # GUI Phase 0 临时构建目录
 build-gui-p0/
+build-wsl/
 
 # GUI 运行时生成（布局/设置持久化，不入库）
 imgui.ini

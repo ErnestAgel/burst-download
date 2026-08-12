@@ -604,6 +604,13 @@ void Ccurl::ConfigureEasyHandle(CURL* curl, st_EasyList* pInfo,
   /* Strict 206: track/abort a Range request answered with 200. */
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ChunkStatusHeader);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, pInfo);
+  /* P8-4: a chunk is a one-shot transfer.  Forbid connection reuse so the
+   * connection is closed when the chunk completes instead of lingering in
+   * the multi handle's keep-alive cache; otherwise a single-threaded
+   * keep-alive server blocks on the idle connection and stalls every other
+   * chunk (observed on CI).  This matches the legacy per-attempt easy
+   * handle semantics, where curl_easy_cleanup closed the connection. */
+  curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1L);
   curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
   curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progressFunc);
   curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, pInfo);

@@ -13,6 +13,10 @@ CTestReport::CTestReport()
 void CTestReport::BeginCase(const std::string& strName)
 {
     m_strCurrentCase = strName;
+    /* Case-level progress on stderr: when a test hangs, CI logs show the
+     * exact case that never finished instead of an empty "Run tests" step. */
+    std::fprintf(stderr, "[case] %s\n", strName.c_str());
+    std::fflush(stderr);
 }
 
 void CTestReport::ExpectTrue(BOOL32 bCondition, const char* pszExpr,

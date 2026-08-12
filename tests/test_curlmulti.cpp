@@ -28,6 +28,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -253,6 +254,27 @@ void CLocalHttpServer::AcceptLoop()
 {
     for (;;)
     {
+        /* Poll the listener with a bounded timeout so Stop() (which closes
+         * the socket) is observed promptly: on Linux, closing a listening
+         * socket does not wake a blocking accept(), while Windows'
+         * closesocket() does.  select() with a short timeout is portable. */
+        if (m_bStop.load() != FALSE)
+        {
+            break;
+        }
+        fd_set setRead;
+        FD_ZERO(&setRead);
+        FD_SET(m_sock, &setRead);
+        timeval tTimeout;
+        tTimeout.tv_sec = 0;
+        tTimeout.tv_usec = 200000;  /* 200 ms */
+        const int nReady = select(m_sock + 1, &setRead, nullptr, nullptr,
+                                  &tTimeout);
+        if (nReady <= 0)
+        {
+            continue;  /* timeout or listener closed: re-check the flag */
+        }
+
         sockaddr_in addrClient;
         std::memset(&addrClient, 0, sizeof(addrClient));
 #ifdef _WIN32
