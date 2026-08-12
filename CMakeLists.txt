@@ -244,8 +244,10 @@ function(burst_copy_mingw_runtime_dlls TARGET)
 endfunction()
 burst_copy_mingw_runtime_dlls(burst)
 
-# ==================== 单元测试（纯逻辑，无 curl/Python/FFmpeg 依赖） ====================
-# 覆盖 CLI 参数解析、URL 命名的纯函数；作为 P0 回归网，后续修复均需补充测试。
+# ==================== 单元测试（纯逻辑 + 离线回环网络，无 Python/FFmpeg 依赖） ====================
+# 覆盖 CLI 参数解析、URL 命名的纯函数；curl_multi 引擎测试使用本地 HTTP
+# 服务器（127.0.0.1，离线），因此测试目标需要链接 libcurl。作为回归网，
+# 后续修复均需补充测试。
 option(BURST_BUILD_TESTS "Build the unit test binary" ON)
 if(BURST_BUILD_TESTS)
   enable_testing()

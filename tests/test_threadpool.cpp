@@ -14,6 +14,27 @@
 #include "test_framework.h"
 #include "threadpool.h"
 
+/**
+ * @brief Wait (bounded) until the pool reports no outstanding work.
+ *
+ * The completion future becomes ready when a job body returns, while the
+ * worker still has to record the outstanding-count decrement afterwards;
+ * asserting PendingCount() == 0 immediately after future waits would be
+ * racy (observed on CI).  The pool's completion signal is the future, so
+ * tests settle the informational counter before checking it.
+ */
+static void WaitPoolDrained(CThreadPool& cPool)
+{
+    for (int nWait = 0; nWait < 200; ++nWait)
+    {
+        if (cPool.PendingCount() == 0u)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
 /** @brief Test: every submitted job runs exactly once. */
 static void TestPoolRunsAllJobs(CTestReport& cReport)
 {
@@ -35,6 +56,7 @@ static void TestPoolRunsAllJobs(CTestReport& cReport)
         fJob.wait();
     }
     BURST_EXPECT_TRUE(cReport, dwCount.load() == 64u);
+    WaitPoolDrained(cPool);
     BURST_EXPECT_TRUE(cReport, cPool.PendingCount() == 0u);
 }
 
@@ -195,6 +217,7 @@ static void TestPoolPendingCount(CTestReport& cReport)
     {
         fJob.wait();
     }
+    WaitPoolDrained(cPool);
     BURST_EXPECT_TRUE(cReport, cPool.PendingCount() == 0u);
 }
 
