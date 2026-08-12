@@ -74,7 +74,10 @@ Release signing key fingerprint: `1C5F F3B1 7A21 6A32 1AE1 7566 4A8E 6102 2774 8
 |---|---|
 | 🎬 **Video download** | `--video` mode: pass a video page URL, the built-in parser resolves the media stream (Bilibili / YouTube and more), then downloads with multi-threaded chunking; DASH streams are **auto-merged** into one file (MP4 / WebM containers) |
 | ⚡ **Multi-threaded** | `-t` 1–8 threads (default 2–4, adaptive to CPU cores), HTTP Range chunking, the last chunk absorbs the remainder |
+| 📚 **Multi-task & batch** | GUI task list with a 4-slot queue (add while downloading); CLI `-j N` runs multiple URLs as a concurrent batch |
+| ⚡ **Full-lane engine (P8-4)** | curl_multi non-blocking engine: every task can keep its full chunk count in flight while tasks share the same fixed lane count |
 | 📦 **Resume** | Automatically detects an existing local file and resumes; falls back to single-thread when the server lacks Range support |
+| 🔄 **Parser update** | yt-dlp is updated automatically only when parsing fails (update → retry once → real error); manual `--update-parser` stays |
 | ⏱ **Timeout & logging** | `--timeout` / `--no-timeout` control; timeouts and failure details are written to `download.log` |
 | 🍪 **Cookie support** | `--cookies-from-browser` reads browser login state (Bilibili 720p+ streams), `--cookie` for manual cookies |
 | 🛡 **Referer** | Automatically sends the video page Referer to avoid anti-hotlinking 403s |
@@ -151,6 +154,9 @@ One command for any supported site:
 ```bash
 # Download a file (8 threads, 30s no-progress timeout)
 ./burst https://example.com/file.iso -o file.iso -t 8 --timeout 30
+
+# Batch download 3 files with 2 concurrent tasks
+./burst https://a/file1.iso https://b/file2.iso https://c/file3.iso -j 2
 
 # Download a video
 ./burst --video "https://www.bilibili.com/video/BVxxxx" -o movie
@@ -229,7 +235,8 @@ cmake --build build --target burst      # produces burst
 - 🎨 **Atom One Dark theme**; Windows: frameless window with Mac-style buttons (minimize/maximize/close); Linux: native title bar
 - ⚡ Multi-threaded segmented download (1–8 threads selectable, default adaptive to CPU cores)
 - 🎬 **Video download** (Bilibili / YouTube etc.): parse → download video/audio tracks (parallel chunks) → auto-merge, with 4-stage status shown live (Parsing / Downloading video track / Downloading audio track / Merging)
-- ⏸️ **Pause / Resume / Stop** state machine: first "Cancel" click pauses (cache kept, **segmented resume** via `.curlbolt.part` metadata — only unfinished parts re-download); red "Stop" deletes cache and resets UI
+- 🗂️ **Task list with per-task controls**: **Stop** cancels and **keeps partials** (segmented resume via `.curlbolt.part` — only unfinished parts re-download), **Resume** re-queues and continues, **Delete** removes an incomplete task (cancels + deletes artifacts), **Remove** clears finished rows; URL input clears after a successful add
+- 📚 **Multi-task queue**: add tasks while downloads are running; 4 concurrent task slots share one engine (each task keeps its full chunk count in flight)
 - 📊 **3D cylinder progress bar** (battery-cell chunks): completed cells green, active cell growing, 5px separators, per-cell percentage, hover shows per-thread speed; overall % + speed bottom-right
 - 📁 Save to a directory only — filename is derived from the URL automatically; "Browse…": native folder dialog on Windows / built-in directory browser on Linux (zero deps)
 - ⚡ **Thunder links** (`thunder://`) decoded automatically
