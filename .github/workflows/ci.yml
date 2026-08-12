@@ -4,6 +4,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,6 +36,20 @@ jobs:
       - name: Smoke test — help
         run: ./build/burst --help | head -n 40
 
+      - name: Stage Linux artifact
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p burst-linux-x86_64
+          cp build/burst burst-linux-x86_64/
+          cp -r third_party/python/runtime burst-linux-x86_64/assets
+
+      - name: Upload Linux artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v8
+        with:
+          name: burst-linux-x86_64
+          path: burst-linux-x86_64
+
   linux-arm64:
     name: Linux ARM64 (Release CLI, cross-compile)
     runs-on: ubuntu-latest
@@ -59,6 +74,20 @@ jobs:
 
       - name: Smoke test — help (qemu)
         run: QEMU_LD_PREFIX=/usr/aarch64-linux-gnu qemu-aarch64-static ./build/burst --help | head -n 40
+
+      - name: Stage ARM64 artifact
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p burst-linux-aarch64
+          cp build/burst burst-linux-aarch64/
+          cp -r third_party/python/runtime burst-linux-aarch64/assets
+
+      - name: Upload ARM64 artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v8
+        with:
+          name: burst-linux-aarch64
+          path: burst-linux-aarch64
 
   windows:
     name: Windows x86_64 (Release CLI, MinGW)
@@ -91,6 +120,21 @@ jobs:
 
       - name: Smoke test — help
         run: ./build/burst.exe --help | head -n 40
+
+      - name: Stage Windows artifact
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p burst-win-x86_64
+          cp build/burst.exe burst-win-x86_64/
+          cp build/*.dll burst-win-x86_64/ 2>/dev/null || true
+          cp -r third_party/python/runtime burst-win-x86_64/assets
+
+      - name: Upload Windows artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v8
+        with:
+          name: burst-windows-x86_64
+          path: burst-win-x86_64
 
   tests:
     name: Unit tests (C++17, pure logic)
