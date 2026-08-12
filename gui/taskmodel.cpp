@@ -367,6 +367,26 @@ BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
         std::lock_guard<std::mutex> lock(m_mutex);
         tOpts.pChunkPool = m_pChunkPool.get();
     }
+    /* Fair chunk budget (2026-08-12): when several tasks are active, cap
+     * this task's chunks to pool_size / active_tasks (at least 1) so the
+     * shared download pool is not hogged by the first task and multiple
+     * files actually download concurrently. */
+    if (tOpts.pChunkPool != nullptr)
+    {
+        const u32 dwActive = m_cQueue.ActiveCount();
+        if (dwActive > 1u)
+        {
+            u32 dwBudget = tOpts.pChunkPool->ThreadCount() / dwActive;
+            if (dwBudget < 1u)
+            {
+                dwBudget = 1u;
+            }
+            if (tOpts.nThreads > static_cast<s32>(dwBudget))
+            {
+                tOpts.nThreads = static_cast<s32>(dwBudget);
+            }
+        }
+    }
 
     TTaskExecCallbacks tCb;
     tCb.fnOnStage = [this, pTask](int nStage) {

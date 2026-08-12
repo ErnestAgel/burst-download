@@ -422,9 +422,16 @@ int RunCli(int argc, char** argv)
     CThreadPool cChunkPool(
         static_cast<u32>(ClampThreads(tOpts.nThreads)));
     CTaskQueue cQueue(static_cast<u32>(tOpts.nJobs), cExecPool);
+    /* Fair chunk budget: each of the -j concurrent tasks gets at most
+     * (-t / -j) chunks from the shared pool so they download concurrently. */
+    s32 nPerTaskChunks = ClampThreads(tOpts.nThreads) / tOpts.nJobs;
+    if (nPerTaskChunks < 1)
+    {
+        nPerTaskChunks = 1;
+    }
     for (const std::string& strUrl : tOpts.vecUrls)
     {
-        cQueue.AddTask(strUrl, "", tOpts.nThreads, tOpts.nTimeout, FALSE);
+        cQueue.AddTask(strUrl, "", nPerTaskChunks, tOpts.nTimeout, FALSE);
     }
     cQueue.Start(
         [&tOpts, &cChunkPool](TDownloadTask& tTask,

@@ -65,7 +65,6 @@ const int kHardwareMax = BurstMaxThreads();
 char g_url[2048] = {0};
 char g_path[2048] = {0};
 int g_threads = BurstDefaultThreads();   /* default = sensible 2~4 */
-bool g_video_mode = false;
 
 /* Forward declarations (RenderAddForm is defined before AddTaskFromForm;
  * RenderTaskDetail needs the progress/log renderers). */
@@ -231,6 +230,32 @@ std::string UrlFileName(const std::string& url) {
     return SanitizeFileName(name);
 }
 
+/**
+ * @brief Heuristic: is this a video page URL (vs a direct file link)?
+ * @param strUrl Input URL.
+ * @return TRUE for known video page hosts/paths (Bilibili/YouTube etc.).
+ */
+bool IsVideoPageUrl(const std::string& strUrl) {
+    std::string u = strUrl;
+    for (char& c : u) {
+        if ((c >= 'A') && (c <= 'Z')) {
+            c += 32;  /* lowercase for matching */
+        }
+    }
+    const char* kPatterns[] = {
+        "bilibili.com/video", "bilibili.com/bangumi", "/bv",
+        "b23.tv/", "youtube.com/watch", "youtube.com/shorts",
+        "youtube.com/playlist", "youtu.be/", "v.qq.com/", "iqiyi.com/",
+        "youku.com/", "douyin.com/", "sohu.com/a/",
+    };
+    for (const char* pszPattern : kPatterns) {
+        if (u.find(pszPattern) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Whether the path should be treated as a directory: it exists and is a
  *  directory, or it ends with a separator. */
 bool IsDirectoryPath(const std::string& path) {
@@ -314,24 +339,16 @@ std::string ErrorGuide(const std::string& err) {
 /* ---- Add-task form (always usable; the queue decouples input from the
  *      running tasks, P5-4) ---- */
 void RenderAddForm(CTaskModel& cModel) {
-    const bool toggled = ToggleMode(i18n::T("mode.file"), i18n::T("mode.video"),
-                                    g_video_mode);
-
-    /* URL input (placeholder follows the mode). */
+    /* URL input: file/video is auto-detected (no mode switch). */
     ImGui::SetNextItemWidth(-1.0f);
-    if (toggled) {
-        ImGui::SetKeyboardFocusHere();
-    }
     ImGui::InputTextWithHint(
-        "##url", g_video_mode ? i18n::T("placeholder.url.video")
-                              : i18n::T("placeholder.url.file"),
+        "##url", i18n::T("placeholder.url.auto"),
         g_url, sizeof(g_url), ImGuiInputTextFlags_None);
 
     /* Save path + browse. */
     ImGui::SetNextItemWidth(-70.0f);
     ImGui::InputTextWithHint(
-        "##path", g_video_mode ? i18n::T("placeholder.path.video")
-                               : i18n::T("placeholder.path.file"),
+        "##path", i18n::T("placeholder.path.file"),
         g_path, sizeof(g_path), ImGuiInputTextFlags_None);
 #ifdef _WIN32
     ImGui::SameLine();
@@ -438,7 +455,9 @@ void AddTaskFromForm(CTaskModel& cModel) {
         return;
     }
 
-    if (g_video_mode) {
+    /* Auto-classify: video page URLs go to the video pipeline, everything
+     * else is a plain file download. */
+    if (IsVideoPageUrl(url)) {
         std::string base = UrlFileName(url);
         size_t dot = base.find_last_of('.');
         if (dot != std::string::npos) {
@@ -491,7 +510,23 @@ void RenderTaskList(CTaskModel& cModel) {
         ImGui::TextDisabled("(%s)", i18n::T("label.no_tasks"));
         return;
     }
-    ImGui::BeginChild("##tasklist", ImVec2(0, 0), true);
+    /* Auto-select a row so the cylinder detail stays visible. */
+    bool bSelFound = false;
+    for (const CTaskModel::TTaskRow& tRow : vecRows) {
+        if (tRow.dwModelId == g_selected_model_id) {
+            bSelFound = true;
+            break;
+        }
+    }
+    if (!bSelFound) {
+        g_selected_model_id = vecRows[0].dwModelId;
+    }
+    /* Bounded list height: the selected-task detail renders below. */
+    float fListH = ImGui::GetContentRegionAvail().y - 300.0f;
+    if (fListH < 120.0f) {
+        fListH = 120.0f;
+    }
+    ImGui::BeginChild("##tasklist", ImVec2(0, fListH), true);
     ImGui::BeginTable("##tasks", 6,
                       ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp);
     ImGui::TableSetupColumn(i18n::T("label.state"), 0, 90.0f);
@@ -523,8 +558,7 @@ void RenderTaskList(CTaskModel& cModel) {
         if (ImGui::Selectable(
                 tRow.strOutput.empty() ? tRow.strUrl.c_str()
                                        : tRow.strOutput.c_str(),
-                g_selected_model_id == tRow.dwModelId,
-                ImGuiSelectableFlags_SpanAllColumns)) {
+                g_selected_model_id == tRow.dwModelId)) {
             g_selected_model_id = tRow.dwModelId;
         }
         if (ImGui::IsItemHovered() && !tRow.strUrl.empty()) {
@@ -854,7 +888,10 @@ void RenderTitleBar() {
      * menu bar, see Render()). */
     ImGui::SetCursorPos(
         ImVec2(12, (kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f));
-    ImGui::Text("%s", i18n::T("window.title"));
+    char szTitle[128];
+    snprintf(szTitle, sizeof(szTitle), "%s %s", i18n::T("window.title"),
+             BURST_VERSION_STRING);
+    ImGui::Text("%s", szTitle);
 
     /* Right side: Mac-style three-color buttons (red=close at the far right,
      * green=maximize, yellow=minimize). */
