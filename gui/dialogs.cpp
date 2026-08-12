@@ -1,6 +1,6 @@
 /**
  * @file dialogs.cpp
- * @brief 模态弹窗实现（见 dialogs.h）
+ * @brief Modal dialog implementations (see dialogs.h).
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -18,19 +18,20 @@ namespace dialogs {
 
 namespace {
 
-/** @brief 每帧按 open 状态打开 popup，再渲染模态体（强制居中于窗口中心） */
-bool BeginModal(const char* id, bool& open) {
-    if (open) {
+/** @brief Open a popup every frame by its open flag, then render the modal
+ *         body (forced center of the window). */
+bool BeginModal(const char* id, bool& bOpen) {
+    if (bOpen) {
         ImGui::OpenPopup(id);
     }
-    /* 居中：每帧强制（Always）定位在窗口客户区中心。
-     * 注：此前用 ImGuiCond_Appearing 未生效——每帧 OpenPopup 导致条件判断
-     * 不可靠，弹窗仍出现在默认位置（UI 顶部附近） */
+    /* Center every frame (Always): previously ImGuiCond_Appearing did not
+     * work reliably because OpenPopup runs each frame, so the popup showed
+     * at the default position near the window top. */
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(
         ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
         ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (!ImGui::BeginPopupModal(id, &open,
+    if (!ImGui::BeginPopupModal(id, &bOpen,
                                 ImGuiWindowFlags_AlwaysAutoResize |
                                     ImGuiWindowFlags_NoSavedSettings)) {
         return false;
@@ -38,59 +39,69 @@ bool BeginModal(const char* id, bool& open) {
     return true;
 }
 
-void EndModal(bool& open) {
+void EndModal(bool& bOpen) {
     ImGui::EndPopup();
-    (void)open;
+    (void)bOpen;
 }
 
 }  // namespace
 
-void ShowError(const std::string& title, const std::string& message,
-               const std::string& guide, bool& open) {
-    if (!BeginModal("##err", open)) {
+void ShowError(const std::string& strTitle, const std::string& strMessage,
+               const std::string& strGuide, bool& bOpen,
+               const std::string& strPartialPath,
+               bool* pbDeleteRequested) {
+    if (!BeginModal("##err", bOpen)) {
         return;
     }
-    ImGui::TextWrapped("%s", title.c_str());
+    ImGui::TextWrapped("%s", strTitle.c_str());
     ImGui::Separator();
-    /* 可选中/复制：只读多行输入框（支持 Ctrl+C） */
+    /* Selectable/copyable: read-only multi-line input (supports Ctrl+C). */
     {
         char buf[8192];
-        std::strncpy(buf, message.c_str(), sizeof(buf) - 1);
+        std::strncpy(buf, strMessage.c_str(), sizeof(buf) - 1);
         buf[sizeof(buf) - 1] = '\0';
         ImGui::InputTextMultiline("##errmsg", buf, sizeof(buf),
                                   ImVec2(-FLT_MIN, 0.0f),
                                   ImGuiInputTextFlags_ReadOnly);
     }
-    if (!guide.empty()) {
-        ImGui::TextWrapped("%s", guide.c_str());
+    if (!strGuide.empty()) {
+        ImGui::TextWrapped("%s", strGuide.c_str());
     }
     ImGui::Separator();
     if (ImGui::Button(i18n::T("dialog.error.copy"))) {
-        ImGui::SetClipboardText(message.c_str());
+        ImGui::SetClipboardText(strMessage.c_str());
     }
     ImGui::SameLine();
+    if (!strPartialPath.empty() && pbDeleteRequested != nullptr) {
+        if (ImGui::Button(i18n::T("dialog.error.delete_partial"))) {
+            *pbDeleteRequested = true;
+            bOpen = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+    }
     if (ImGui::Button(i18n::T("dialog.error.ok"), ImVec2(120, 0))) {
-        open = false;
+        bOpen = false;
         ImGui::CloseCurrentPopup();
     }
-    EndModal(open);
+    EndModal(bOpen);
 }
 
-ExistsChoice ShowFileExists(const std::string& path, bool& open) {
+ExistsChoice ShowFileExists(const std::string& strPath, bool& bOpen) {
     ExistsChoice choice = ExistsChoice::None;
-    if (!BeginModal("##exists", open)) {
+    if (!BeginModal("##exists", bOpen)) {
         return choice;
     }
     ImGui::TextWrapped("%s", i18n::T("dialog.exists.title"));
     ImGui::Separator();
-    ImGui::TextWrapped("%s", path.c_str());
+    ImGui::TextWrapped("%s", strPath.c_str());
     ImGui::TextWrapped("%s", i18n::T("dialog.exists.prompt"));
     ImGui::Separator();
 
     auto Btn = [&](const char* key, ExistsChoice c) {
         if (ImGui::Button(i18n::T(key), ImVec2(110, 0))) {
             choice = c;
-            open = false;
+            bOpen = false;
             ImGui::CloseCurrentPopup();
         }
     };
@@ -102,32 +113,32 @@ ExistsChoice ShowFileExists(const std::string& path, bool& open) {
     ImGui::SameLine();
     Btn("dialog.exists.cancel", ExistsChoice::Cancel);
 
-    EndModal(open);
+    EndModal(bOpen);
     return choice;
 }
 
-void ShowDone(const std::string& path, bool& open) {
-    if (!BeginModal("##done", open)) {
+void ShowDone(const std::string& strPath, bool& bOpen) {
+    if (!BeginModal("##done", bOpen)) {
         return;
     }
     ImGui::TextWrapped("%s", i18n::T("dialog.done.title"));
     ImGui::Separator();
-    ImGui::TextWrapped("%s", path.c_str());
+    ImGui::TextWrapped("%s", strPath.c_str());
     ImGui::Separator();
     if (ImGui::Button(i18n::T("dialog.done.ok"), ImVec2(120, 0))) {
-        open = false;
+        bOpen = false;
         ImGui::CloseCurrentPopup();
     }
-    EndModal(open);
+    EndModal(bOpen);
 }
 
-void ShowAbout(const std::string& version, bool& open) {
-    if (!BeginModal("##about", open)) {
+void ShowAbout(const std::string& strVersion, bool& bOpen) {
+    if (!BeginModal("##about", bOpen)) {
         return;
     }
     ImGui::TextWrapped("%s", i18n::T("dialog.about.title"));
     ImGui::Separator();
-    ImGui::Text("burst %s (Burst Download)", version.c_str());
+    ImGui::Text("burst %s (Burst Download)", strVersion.c_str());
     ImGui::Text("%s:", i18n::T("dialog.about.platform"));
     ImGui::SameLine();
 #ifdef _WIN32
@@ -141,10 +152,10 @@ void ShowAbout(const std::string& version, bool& open) {
     ImGui::TextWrapped("Copyright (c) 2026 ErnestAgel");
     ImGui::Separator();
     if (ImGui::Button(i18n::T("dialog.about.ok"), ImVec2(120, 0))) {
-        open = false;
+        bOpen = false;
         ImGui::CloseCurrentPopup();
     }
-    EndModal(open);
+    EndModal(bOpen);
 }
 
 }  // namespace dialogs

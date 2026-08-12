@@ -1,8 +1,7 @@
 /**
  * @file dialogs.h
- * @brief 模态弹窗（§8.3/F11/F12/F13）：错误指引 / 文件已存在四选一 / 完成提示
- *
- * 全部文案走 i18n::T()；curl 原生错误串保留英文原文（§3.3）。
+ * @brief Modal dialogs (error guide / file-exists four-choice / done):
+ *        all text goes through i18n::T(); raw curl errors stay English.
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -14,45 +13,51 @@
 
 namespace dialogs {
 
-/** @brief 文件已存在弹窗的用户选择（F11） */
+/** @brief File-exists dialog user choice. */
 enum class ExistsChoice {
-    None = 0,      /**< 未选择（弹窗仍打开） */
-    Resume,        /**< 续传：断点续传（Ccurl 自动检测本地文件） */
-    Overwrite,     /**< 覆盖：删除本地文件重新下载 */
-    Rename,        /**< 改名：追加时间戳避让（调用方需用新路径重启任务） */
-    Cancel,        /**< 取消：不下载 */
+    None = 0,      /**< Nothing chosen yet (dialog still open) */
+    Resume,        /**< Resume: continue (Ccurl auto-detects the local file) */
+    Overwrite,     /**< Overwrite: delete the local file and redownload */
+    Rename,        /**< Rename: append a timestamp (caller restarts with the
+                    *  new path) */
+    Cancel,        /**< Cancel: do not download */
 };
 
 /**
- * @brief 错误弹窗（F12，模态）：标题 + 错误信息 + 分类指引 + "确定"
- * @param title 标题（i18n key 已翻译文本）
- * @param message 错误信息
- * @param guide 分类指引文本（§8.3 表格）
- * @param open 弹窗开关（打开时置 true；点"确定"后置 false）
+ * @brief Error dialog (modal): title + message + category guide + OK, plus
+ *        an optional "Delete Partial File" action (issue R9).
+ * @param strTitle Dialog title (already translated).
+ * @param strMessage Error message.
+ * @param strGuide Category guide text.
+ * @param bOpen Dialog open flag (set true to open; false after a button).
+ * @param strPartialPath Partial file path; non-empty shows the delete button.
+ * @param pbDeleteRequested Output: set true when the user clicks delete.
  */
-void ShowError(const std::string& title, const std::string& message,
-               const std::string& guide, bool& open);
+void ShowError(const std::string& strTitle, const std::string& strMessage,
+               const std::string& strGuide, bool& bOpen,
+               const std::string& strPartialPath = "",
+               bool* pbDeleteRequested = nullptr);
 
 /**
- * @brief 文件已存在四选一弹窗（F11，模态）
- * @param path 目标路径
- * @param open 弹窗开关（点任一按钮后置 false）
- * @return 用户选择（未点击时 ExistsChoice::None）
+ * @brief File-exists four-choice dialog.
+ * @param strPath Target path.
+ * @param bOpen Dialog open flag.
+ * @return User choice (ExistsChoice::None while open).
  */
-ExistsChoice ShowFileExists(const std::string& path, bool& open);
+ExistsChoice ShowFileExists(const std::string& strPath, bool& bOpen);
 
 /**
- * @brief 完成提示弹窗（F13，模态）：下载完成 + "确定"
- * @param path 输出文件路径
- * @param open 弹窗开关（点"确定"后置 false）
+ * @brief Done dialog (modal): download complete + OK.
+ * @param strPath Output file path.
+ * @param bOpen Dialog open flag.
  */
-void ShowDone(const std::string& path, bool& open);
+void ShowDone(const std::string& strPath, bool& bOpen);
 
 /**
- * @brief 关于弹窗：显示应用名称、版本、平台与开源协议
- * @param version 版本号字符串（如 "2.3.0"，来自 version.h）
- * @param open 弹窗开关（每帧传入）
+ * @brief About dialog: app name, version, platform and license.
+ * @param strVersion Version string (from version.h).
+ * @param bOpen Dialog open flag.
  */
-void ShowAbout(const std::string& version, bool& open);
+void ShowAbout(const std::string& strVersion, bool& bOpen);
 
 }  // namespace dialogs

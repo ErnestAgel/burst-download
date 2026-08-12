@@ -247,6 +247,20 @@ static void TestCliParseContinue(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, tOpts.bOutputSet == TRUE);
 }
 
+/** @brief Test: --delete-partial flag. */
+static void TestCliParseDeletePartial(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: --delete-partial");
+    std::vector<std::string> vecArgs = {"burst", "u", "-o", "f.bin",
+                                        "--delete-partial"};
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+    RunParse(vecArgs, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.bDeletePartial == TRUE);
+}
+
 /** @brief Test: unknown options and malformed value pairs. */
 static void TestCliParseErrors(CTestReport& cReport)
 {
@@ -307,6 +321,7 @@ void RunCliParseTests(CTestReport& cReport)
     TestCliParseUpdateParser(cReport);
     TestCliParseVerify(cReport);
     TestCliParseContinue(cReport);
+    TestCliParseDeletePartial(cReport);
     TestCliParseErrors(cReport);
     TestCliParseVersionMidList(cReport);
 }

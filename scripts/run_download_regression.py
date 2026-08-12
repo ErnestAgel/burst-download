@@ -210,6 +210,48 @@ def CaseRetryOffset(strBurst, strTmp):
         StopServer(tProc)
 
 
+def CaseDeletePartial(strBurst, strTmp):
+    """Issue R9: --delete-partial removes the partial file and resume meta
+    after a failed download."""
+    tProc, nPort, _ = StartServer(False, seed=DW_SEED, size=U64_SIZE,
+                                  truncate_total=U64_SIZE // 2)
+    try:
+        strUrl = "http://127.0.0.1:%d/file.bin" % nPort
+        r = RunOnce(strBurst, strTmp,
+                    [strUrl, "-o", "dp.bin", "-t", "2", "--delete-partial"])
+        strOut = os.path.join(strTmp, "dp.bin")
+        bOk = (r.returncode != 0) and \
+            (not os.path.exists(strOut)) and \
+            (not os.path.exists(strOut + ".curlbolt.part"))
+        print("PASS delete-partial" if bOk else "FAIL delete-partial")
+        return bOk
+    finally:
+        StopServer(tProc)
+
+
+def CaseConcurrent(strBurst, strTmp):
+    """Two simultaneous downloads (separate processes) must both complete
+    with correct hashes (engine instance isolation, issue R7 smoke)."""
+    tProc, nPort, _ = StartServer(False, seed=DW_SEED, size=U64_SIZE)
+    try:
+        strUrl = "http://127.0.0.1:%d/file.bin" % nPort
+        p1 = subprocess.Popen([strBurst, strUrl, "-o", "c1.bin", "-t", "2"],
+                              cwd=strTmp, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True)
+        p2 = subprocess.Popen([strBurst, strUrl, "-o", "c2.bin", "-t", "2"],
+                              cwd=strTmp, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True)
+        p1.communicate(timeout=120)
+        p2.communicate(timeout=120)
+        bOk = (p1.returncode == 0) and (p2.returncode == 0) and \
+            CheckHash(os.path.join(strTmp, "c1.bin"), DW_SEED, U64_SIZE) and \
+            CheckHash(os.path.join(strTmp, "c2.bin"), DW_SEED, U64_SIZE)
+        print("PASS concurrent" if bOk else "FAIL concurrent")
+        return bOk
+    finally:
+        StopServer(tProc)
+
+
 def main():
     tParser = argparse.ArgumentParser(description=__doc__)
     tParser.add_argument("--burst", required=True,
@@ -233,6 +275,8 @@ def main():
         bAllPass = CaseRangeIgnored(strBurst, strTmp) and bAllPass
         bAllPass = CaseResumeEtag(strBurst, strTmp) and bAllPass
         bAllPass = CaseRetryOffset(strBurst, strTmp) and bAllPass
+        bAllPass = CaseDeletePartial(strBurst, strTmp) and bAllPass
+        bAllPass = CaseConcurrent(strBurst, strTmp) and bAllPass
 
     if bAllPass:
         print("download regression: ALL PASS")

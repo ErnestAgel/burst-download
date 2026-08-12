@@ -26,9 +26,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <condition_variable>
+#include <deque>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <sys/stat.h>
 #include <vector>
 
@@ -41,6 +45,89 @@ namespace {
 std::mutex g_init_mutex;
 bool g_initialized = false;
 std::string g_python_home;
+
+/* ---- Python worker thread (issue R5): every PyRun_SimpleString call runs
+ * on one dedicated thread with PyGILState_Ensure/Release, serializing
+ * interpreter access from any calling thread. ---- */
+std::mutex g_py_mutex;
+std::condition_variable g_py_cv;
+std::deque<std::function<void()>> g_py_jobs;
+std::thread g_py_thread;
+bool g_py_thread_started = false;
+bool g_py_thread_stop = false;
+
+/** @brief Python worker loop: runs queued jobs until stopped. */
+void PythonWorkerLoop()
+{
+    for (;;)
+    {
+        std::function<void()> fnJob;
+        {
+            std::unique_lock<std::mutex> lock(g_py_mutex);
+            g_py_cv.wait(lock, [] { return g_py_thread_stop ||
+                                         !g_py_jobs.empty(); });
+            if (g_py_jobs.empty() && g_py_thread_stop)
+            {
+                break;
+            }
+            fnJob = std::move(g_py_jobs.front());
+            g_py_jobs.pop_front();
+        }
+        fnJob();
+    }
+}
+
+/** @brief Submit a job to the Python worker thread (starts it on demand). */
+void SubmitPythonJob(const std::function<void()>& fnJob)
+{
+    std::lock_guard<std::mutex> lock(g_py_mutex);
+    if (!g_py_thread_started)
+    {
+        g_py_thread_started = true;
+        g_py_thread = std::thread(PythonWorkerLoop);
+    }
+    g_py_jobs.push_back(fnJob);
+    g_py_cv.notify_one();
+}
+
+/** @brief Run fnJob on the Python worker thread with the GIL held; blocks
+ *         until it finishes. */
+void RunOnPythonThread(const std::function<void()>& fnJob)
+{
+    std::mutex mtxDone;
+    std::condition_variable cvDone;
+    bool bDone = false;
+    SubmitPythonJob([&fnJob, &mtxDone, &cvDone, &bDone] {
+        const PyGILState_STATE stGil = PyGILState_Ensure();
+        fnJob();
+        PyGILState_Release(stGil);
+        {
+            std::lock_guard<std::mutex> lock(mtxDone);
+            bDone = true;
+        }
+        cvDone.notify_one();
+    });
+    std::unique_lock<std::mutex> lock(mtxDone);
+    cvDone.wait(lock, [&bDone] { return bDone; });
+}
+
+/** @brief Stop the Python worker thread (called before Py_Finalize). */
+void StopPythonThread()
+{
+    {
+        std::lock_guard<std::mutex> lock(g_py_mutex);
+        if (!g_py_thread_started)
+        {
+            return;
+        }
+        g_py_thread_stop = true;
+    }
+    g_py_cv.notify_all();
+    if (g_py_thread.joinable())
+    {
+        g_py_thread.join();
+    }
+}
 
 /* Auto-update throttle: at most one GitHub check per 24h per runtime dir. */
 constexpr long kParserAutoUpdateIntervalSec = 24 * 3600;
@@ -382,7 +469,10 @@ bool UpdateParserAt(const std::string& strHome, std::string& strMsg)
         "json.dump(out, open(OUT, 'w', encoding='utf-8'), "
         "ensure_ascii=False)\n";
 
-    const int nRc = PyRun_SimpleString(strScript.c_str());
+  int nRc = 0;
+  RunOnPythonThread([&nRc, &strScript] {
+    nRc = PyRun_SimpleString(strScript.c_str());
+  });
     if (nRc != 0)
     {
         strMsg = "update script execution failed";
@@ -595,7 +685,10 @@ bool EmbedParseVideoUrls(const std::string& strUrl,
         B64Lit(strUrl).c_str(), B64Lit(strResultFile).c_str(),
         B64Lit(strResultFile).c_str());
 
-    const int nRc = PyRun_SimpleString(szScript);
+  int nRc = 0;
+  RunOnPythonThread([&nRc, &szScript] {
+    nRc = PyRun_SimpleString(szScript);
+  });
     if (nRc != 0)
     {
         strErr = "Python script execution failed";
@@ -713,6 +806,7 @@ void EmbedPythonShutdown()
     std::lock_guard<std::mutex> lock(g_init_mutex);
     if (g_initialized)
     {
+        StopPythonThread();
         Py_Finalize();
         g_initialized = false;
     }

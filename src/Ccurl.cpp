@@ -67,11 +67,6 @@ extern "C" {
   printf(__VA_ARGS__);
 }
 
-st_EasyList** g_pInfoTable;   /**< Global chunk table for progress
-                               * aggregation */
-double g_filelen;             /**< Total file size (bytes) */
-double g_resume_len;          /**< Resume base: bytes already on disk */
-
 /**
  * @brief Append a line to download.log (thread-safe): logs timeouts,
  *        failures and completions.
@@ -97,16 +92,6 @@ static void AppendLog(const char* fmt, ...) {
     fclose(f);
   }
 }
-
-/* Progress display state shared by the chunk callbacks (mutex protected). */
-static int g_print = 1;          /**< Next percent to print */
-static double g_last_total = 0;  /**< Accumulated bytes at the last print */
-static time_t g_last_t = 0;      /**< Last print time */
-static std::mutex g_progress_mutex;  /**< Progress callback mutex */
-static std::chrono::steady_clock::time_point g_last_cb_time; /**< GUI throttle
-                                                             *  (~200ms) */
-static std::chrono::steady_clock::time_point g_last_flush_time =
-    std::chrono::steady_clock::now(); /**< Periodic mmap flush (~10s) */
 
 extern "C" {
 
@@ -280,66 +265,78 @@ static size_t ChunkStatusHeader(char* buffer, size_t size, size_t nitems,
 }
 
 /**
- * @brief libcurl progress callback: aggregate per-thread bytes, print the
- *        overall percentage/speed/ETA, and periodically flush the mapping.
- * @return 0 to continue the download.
+ * @brief libcurl progress trampoline: delegates to the owning instance
+ *        (issue R7 - no process-global progress state).
+ * @return 0 to continue, 1 to abort (cancel).
  */
 size_t progressFunc(void* userdata,
                     double totalDownload,
                     double nowDownload,
                     double totalUpload,
                     double nowUpload) {
-  g_progress_mutex.lock();
+  (void)totalUpload;
+  (void)nowUpload;
   st_EasyList* info = (st_EasyList*)userdata;
-  info->download_len = nowDownload;
+  if (info->owner == nullptr) {
+    return 0;
+  }
+  return (size_t)info->owner->ProgressCallback(info, totalDownload,
+                                               nowDownload);
+}
+}  // extern "C"
+
+size_t Ccurl::ProgressCallback(st_EasyList* pInfo, double dTotalDownload,
+                               double dNowDownload) {
+  m_progressMutex.lock();
+  pInfo->download_len = dNowDownload;
 
   /* Cancellation checkpoint: return non-zero to abort the transfer. */
-  if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
-    g_progress_mutex.unlock();
+  if (pInfo->cancel_flag != nullptr && pInfo->cancel_flag->load()) {
+    m_progressMutex.unlock();
     return 1;
   }
 
   /* Periodic dirty-page flush (crash consistency, issue R4). */
   const auto nowFlush = std::chrono::steady_clock::now();
-  if (info->owner != nullptr &&
-      std::chrono::duration_cast<std::chrono::seconds>(
-          nowFlush - g_last_flush_time)
-              .count() >= 10) {
-    g_last_flush_time = nowFlush;
-    info->owner->FlushMapping();
+  if (std::chrono::duration_cast<std::chrono::seconds>(
+          nowFlush - m_lastFlushTime)
+          .count() >= 10) {
+    m_lastFlushTime = nowFlush;
+    FlushMapping();
   }
 
   int percent = 0;
-  double allDownload = g_resume_len;  /* resume base counts as downloaded */
-  if (totalDownload > 0) {
+  double allDownload = m_dResumeLen;  /* resume base counts as downloaded */
+  if (dTotalDownload > 0) {
     for (int i = 0; i < MaxThread + 1; i++) {
-      if (g_pInfoTable[i] != nullptr) {
-        allDownload += g_pInfoTable[i]->download_len;
+      if (m_pInfoTable[i] != nullptr) {
+        allDownload += m_pInfoTable[i]->download_len;
       }
     }
-    percent = (int)(allDownload / g_filelen * 100);
+    percent = (int)(allDownload / m_dFileLen * 100);
   }
 
   /* ---- GUI mode: ~200ms throttled callback ---- */
-  if (info->on_progress != nullptr && *info->on_progress) {
-    auto now_cb = std::chrono::steady_clock::now();
-    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       now_cb - g_last_cb_time)
-                       .count();
-    if (ms >= 200) {
-      g_last_cb_time = now_cb;
+  if (pInfo->on_progress != nullptr && *pInfo->on_progress) {
+    const auto nowCb = std::chrono::steady_clock::now();
+    const long long nMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            nowCb - m_lastCbTime)
+            .count();
+    if (nMs >= 200) {
+      m_lastCbTime = nowCb;
       time_t now = time(NULL);
       double speed = 0;
-      if (g_last_t > 0 && now > g_last_t) {
-        speed = (allDownload - g_last_total) / (now - g_last_t);
+      if (m_tLast > 0 && now > m_tLast) {
+        speed = (allDownload - m_dLastTotal) / (now - m_tLast);
       }
-      g_last_total = allDownload;
-      g_last_t = now;
+      m_dLastTotal = allDownload;
+      m_tLast = now;
 
       std::vector<ThreadProgress> tp;
       tp.reserve(MaxThread);
       for (int i = 0; i < MaxThread + 1; i++) {
-        st_EasyList* p = g_pInfoTable[i];
+        st_EasyList* p = m_pInfoTable[i];
         if (p == nullptr) {
           continue;
         }
@@ -350,9 +347,9 @@ size_t progressFunc(void* userdata,
         t.file_start = (long long)p->part_start;
         t.downloaded = (long long)p->part_start + (long long)p->download_len;
         t.total = (long long)p->end + 1;
-        t.file_total = (long long)g_filelen;
-        t.percent = (g_filelen > 0)
-                        ? (t.downloaded / (double)g_filelen * 100.0)
+        t.file_total = (long long)m_dFileLen;
+        t.percent = (m_dFileLen > 0)
+                        ? (t.downloaded / (double)m_dFileLen * 100.0)
                         : 0.0;
         /* Per-thread speed: increment inside the throttle window. */
         time_t dt = (p->last_t > 0) ? (now - p->last_t) : 0;
@@ -365,23 +362,23 @@ size_t progressFunc(void* userdata,
         p->last_t = now;
         tp.push_back(t);
       }
-      (*info->on_progress)(tp, (double)percent, speed);
+      (*pInfo->on_progress)(tp, (double)percent, speed);
     }
-    g_progress_mutex.unlock();
+    m_progressMutex.unlock();
     return 0;
   }
 
   /* ---- CLI mode: keep the original 1% gate printing ---- */
-  if (percent >= g_print) {
+  if (percent >= m_nPrint) {
     time_t now = time(NULL);
     double speed = 0;
-    if (g_last_t > 0 && now > g_last_t) {
-      speed = (allDownload - g_last_total) / (now - g_last_t);
+    if (m_tLast > 0 && now > m_tLast) {
+      speed = (allDownload - m_dLastTotal) / (now - m_tLast);
     }
-    g_last_total = allDownload;
-    g_last_t = now;
-    if (speed > 0 && g_filelen > allDownload) {
-      double remain_sec = (g_filelen - allDownload) / speed;
+    m_dLastTotal = allDownload;
+    m_tLast = now;
+    if (speed > 0 && m_dFileLen > allDownload) {
+      double remain_sec = (m_dFileLen - allDownload) / speed;
       int h = (int)(remain_sec / 3600);
       int m = (int)(remain_sec / 60) % 60;
       int s = (int)remain_sec % 60;
@@ -390,18 +387,18 @@ size_t progressFunc(void* userdata,
     } else {
       LOG_INFO("percent: %d%%\n", percent);
     }
-    g_print = percent + 1;
+    m_nPrint = percent + 1;
   }
-  g_progress_mutex.unlock();
+  m_progressMutex.unlock();
 
   return 0;
 }
-}  // extern "C"
 
 Ccurl::Ccurl() {
   for (int i = 0; i <= MaxThread; i++) {
     m_Easy_List[i] = nullptr;
   }
+  m_lastFlushTime = std::chrono::steady_clock::now();
   curl_version_info_data* ver = curl_version_info(CURLVERSION_NOW);
   LOG_INFO("libcurl version %u.%u.%u\n", (ver->version_num >> 16) & 0xff,
            (ver->version_num >> 8) & 0xff, ver->version_num & 0xff);
@@ -423,9 +420,9 @@ bool Ccurl::Init(const string url, string filename, int thread_num,
   m_range_denied.store(false);
   m_remote_etag.clear();
   m_remote_last_modified.clear();
-  g_print = 1;                  /* reset the CLI 1% progress printing */
-  g_last_total = 0;
-  g_last_t = 0;
+  m_nPrint = 1;                 /* reset the CLI 1% progress printing */
+  m_dLastTotal = 0;
+  m_tLast = 0;
   LOG_INFO(">>>>>\n");
   /* Order optimization (faster "Resume"): probe the size with HEAD first
    * (capturing Accept-Ranges inside), and only run the standalone Range
@@ -971,7 +968,9 @@ bool Ccurl::File_Init(const char* filename) {
 #ifdef _WIN32
   DWORD dwCreation = (open_flags & O_TRUNC) ? CREATE_ALWAYS : OPEN_ALWAYS;
   m_hFile = CreateFileW(wfile.c_str(), GENERIC_READ | GENERIC_WRITE,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE |
+                            FILE_SHARE_DELETE,
+                        NULL,
                         dwCreation, FILE_ATTRIBUTE_NORMAL, NULL);
   if (m_hFile == INVALID_HANDLE_VALUE) {
     LOG_ERR("CreateFile:%s failed\n", filename);
@@ -1095,8 +1094,9 @@ bool Ccurl::File_Init(const char* filename) {
     m_Easy_List[i]->range_denied = &m_range_denied;
     m_Easy_List[i]->owner = this;
   }
-  g_pInfoTable = m_Easy_List;
-  g_resume_len = (double)m_resume_len;
+  m_pInfoTable = m_Easy_List;
+  m_dResumeLen = (double)m_resume_len;
+  m_dFileLen = (double)m_fileLen;
   LOG_INFO("File Init success, threads: %d, resume: %lld bytes\n",
            m_thread_num, (long long)m_resume_len);
 
@@ -1222,7 +1222,7 @@ bool Ccurl::get_Download_FileSize() {
         m_remote_last_modified = ctxRange.strLastModified;
       }
       flag = true;
-      g_filelen = (double)m_fileLen;
+      m_dFileLen = (double)m_fileLen;
       return true;
     }
     LOG_INFO("Range GET not confirmed (code=%ld total=%lld), use HEAD "
@@ -1240,7 +1240,7 @@ bool Ccurl::get_Download_FileSize() {
       m_range_known = true;
     }
     flag = true;
-    g_filelen = (double)m_fileLen;
+    m_dFileLen = (double)m_fileLen;
     return true;
   }
 
@@ -1248,7 +1248,7 @@ bool Ccurl::get_Download_FileSize() {
   AppendLog("[ERROR] probe file size failed (HEAD + Range GET): url=%s",
             m_url.c_str());
   m_fileLen = -1;
-  g_filelen = -1;
+  m_dFileLen = -1;
   flag = false;
   return flag;
 }

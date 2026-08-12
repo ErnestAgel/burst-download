@@ -95,6 +95,8 @@ bool g_exists_open = false;
 bool g_error_open = false;
 bool g_done_open = false;
 std::string g_error_title, g_error_msg, g_error_guide;
+std::string g_error_partial_path;
+bool g_error_delete_requested = false;
 std::string g_done_path;
 bool g_about_open = false;
 
@@ -315,10 +317,13 @@ std::string StampName(const std::string& path) {
 
 /** Trigger the error popup (F12). */
 void ShowErrorPopup(const std::string& title, const std::string& msg,
-                    const std::string& guide = "") {
+                    const std::string& guide = "",
+                    const std::string& partial_path = "") {
     g_error_title = title;
     g_error_msg = msg;
     g_error_guide = guide;
+    g_error_partial_path = partial_path;
+    g_error_delete_requested = false;
     g_error_open = true;
 }
 
@@ -1165,7 +1170,7 @@ bool Render(DownloadWorker& worker) {
             g_paused = false;
         } else if (stage == STAGE_ERROR) {
             ShowErrorPopup(i18n::T("dialog.error.title"), snap.error,
-                           ErrorGuide(snap.error));
+                           ErrorGuide(snap.error), g_last_path);
             g_paused = false;
         } else if (stage == STAGE_CANCELED) {
             g_paused = true;
@@ -1220,7 +1225,17 @@ bool Render(DownloadWorker& worker) {
 
     /* Error popup (F12). */
     dialogs::ShowError(g_error_title, g_error_msg, g_error_guide,
-                       g_error_open);
+                       g_error_open, g_error_partial_path,
+                       &g_error_delete_requested);
+    if (g_error_delete_requested) {
+        g_error_delete_requested = false;
+        if (!g_error_partial_path.empty()) {
+            RemoveDownloadArtifacts(g_error_partial_path, g_last_video);
+            worker.AddLog("[INFO] partial file deleted: " +
+                          g_error_partial_path);
+        }
+        g_error_partial_path.clear();
+    }
 
     /* Done popup (F13). */
     dialogs::ShowDone(g_done_path, g_done_open);

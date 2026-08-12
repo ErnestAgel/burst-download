@@ -21,6 +21,7 @@
 #include <vector>
 #include <atomic>
 #include <functional>
+#include <chrono>
 #include <ctime>
 #include <thread>
 #include <algorithm>
@@ -166,6 +167,17 @@ public:
     static void* Downloading(void* arg);
 
     /**
+     * @brief Progress aggregation callback (called by the libcurl progress
+     *        trampoline on the chunk thread; issue R7 removes globals).
+     * @param pInfo Chunk task info.
+     * @param dTotalDownload Total bytes to download.
+     * @param dNowDownload Bytes downloaded for this chunk.
+     * @return 0 to continue, 1 to abort (cancel).
+     */
+    size_t ProgressCallback(st_EasyList* pInfo, double dTotalDownload,
+                            double dNowDownload);
+
+    /**
      * @brief Flush dirty mapped pages to disk (crash consistency, issue R4).
      * @note No locking: called from transfer threads via the owner pointer.
      */
@@ -232,6 +244,16 @@ private:
     std::string m_last_error;       /**< Most recent failure reason */
     bool m_range_known = false;     /**< Range confirmed via HEAD/
                                      *  Accept-Ranges */
+    /* ---- Per-instance progress state (issue R7, was process globals) ---- */
+    st_EasyList** m_pInfoTable = nullptr;  /**< Chunk table for aggregation */
+    double m_dFileLen = 0;                 /**< File size (double mirror) */
+    double m_dResumeLen = 0;               /**< Resume base (double mirror) */
+    std::mutex m_progressMutex;            /**< Progress aggregation mutex */
+    int m_nPrint = 1;                      /**< Next percent to print */
+    double m_dLastTotal = 0;               /**< Bytes at the last print */
+    time_t m_tLast = 0;                    /**< Last print time */
+    std::chrono::steady_clock::time_point m_lastCbTime;   /**< GUI throttle */
+    std::chrono::steady_clock::time_point m_lastFlushTime; /**< mmap flush */
     /* ---- P2: strict 206 + integrity ---- */
     std::atomic<bool> m_range_denied{false}; /**< Server answered 200 to
                                              *  Range */

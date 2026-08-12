@@ -4,20 +4,23 @@
 #include <string>
 
 /**
- * @brief 记录可执行文件路径（argv[0]），供运行时定位使用
+ * @brief Record the executable path for runtime asset location.
  */
 void EmbedSetExePath(const std::string& exe_path);
 
 /**
- * @brief 获取已记录的可执行文件路径
+ * @brief Get the recorded executable path.
  */
 std::string EmbedGetExePath();
 
 /**
- * @brief 确保运行时资源就绪，输出其根目录
- * @param home 输出：就绪后的运行时根目录（含 stdlib/）；不可用时为空串
- * @return 是否成功（不可用时返回 false，调用方继续回退链）
- * @note 缓存存在且版本标记匹配时直接复用；被清理后自动重建
+ * @brief Ensure the runtime assets are ready and output their root dir.
+ * @param home Output: ready runtime root (contains stdlib/); empty when
+ *             unavailable.
+ * @return TRUE on success (false means unavailable; the caller keeps
+ *         falling back).
+ * @note Reuses the cache when the version marker matches; rebuilds it
+ *       automatically after cleanup, guarded by a cross-process lock.
  */
 bool ExtractEmbeddedRuntime(std::string& home);
 

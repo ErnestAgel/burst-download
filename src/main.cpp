@@ -153,6 +153,8 @@ static void PrintUsage(const char* pszProg)
            "downloaded file after completion\n");
     printf("  --continue   resume an existing file instead of renaming it "
            "when the target already exists\n");
+    printf("  --delete-partial  delete the partial file and resume meta after "
+           "a failed download\n");
     printf("  -h, --help     show this help\n");
     printf("  -v, --version  show version\n");
     printf("Examples:\n");
@@ -340,6 +342,12 @@ int RunCli(int argc, char** argv)
     }
     if (!ptr->Download_Task())
     {
+        if (tOpts.bDeletePartial == TRUE)
+        {
+            std::remove(tOpts.strFilename.c_str());
+            std::remove((tOpts.strFilename + ".curlbolt.part").c_str());
+            printf("partial file deleted (--delete-partial)\n");
+        }
         printf("download failed: some chunks are incomplete "
                "(see download.log)\n");
         return 1;

@@ -46,6 +46,7 @@ static void InitDefaultOptions(TCliOptions& tOpts, s32 nDefaultThreads)
     tOpts.bOutputSet = FALSE;
     tOpts.bVerify = FALSE;
     tOpts.bContinue = FALSE;
+    tOpts.bDeletePartial = FALSE;
     tOpts.nThreads = nDefaultThreads;
     tOpts.nTimeout = 60;
     tOpts.bVideoMode = FALSE;
@@ -142,6 +143,10 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
         else if (std::strcmp(pszArg, "--continue") == 0)
         {
             tOpts.bContinue = TRUE;
+        }
+        else if (std::strcmp(pszArg, "--delete-partial") == 0)
+        {
+            tOpts.bDeletePartial = TRUE;
         }
         else if ((std::strcmp(pszArg, "--cookies-from-browser") == 0) &&
                  NextArgIsValue(nArgc, nIndex, ppszArgv))

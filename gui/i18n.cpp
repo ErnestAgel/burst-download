@@ -94,6 +94,7 @@ const Entry kStrings[] = {
     {"dialog.error.title", "下载失败", "Download Failed"},
     {"dialog.error.copy", "复制", "Copy"},
     {"dialog.error.ok", "确定", "OK"},
+    {"dialog.error.delete_partial", "删除半成品", "Delete Partial File"},
     {"dialog.exists.title", "文件已存在", "File Already Exists"},
     {"dialog.exists.prompt", "目标路径已存在，请选择操作：",
      "The target path already exists. Choose an action:"},

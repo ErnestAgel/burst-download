@@ -32,6 +32,7 @@ typedef struct tagCliOptions
     BOOL32      bOutputSet;
     BOOL32      bVerify;
     BOOL32      bContinue;
+    BOOL32      bDeletePartial;
     s32         nThreads;
     s32         nTimeout;
     BOOL32      bVideoMode;
