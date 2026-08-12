@@ -489,12 +489,13 @@ void RenderTaskList(CTaskModel& cModel) {
         return;
     }
     ImGui::BeginChild("##tasklist", ImVec2(0, 0), true);
-    ImGui::BeginTable("##tasks", 5,
+    ImGui::BeginTable("##tasks", 6,
                       ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp);
     ImGui::TableSetupColumn(i18n::T("label.state"), 0, 90.0f);
-    ImGui::TableSetupColumn(i18n::T("label.name"), 0, 220.0f);
-    ImGui::TableSetupColumn(i18n::T("label.progress"), 0, 140.0f);
-    ImGui::TableSetupColumn(i18n::T("label.speed"), 0, 80.0f);
+    ImGui::TableSetupColumn(i18n::T("label.type"), 0, 60.0f);
+    ImGui::TableSetupColumn(i18n::T("label.name"), 0, 210.0f);
+    ImGui::TableSetupColumn(i18n::T("label.progress"), 0, 130.0f);
+    ImGui::TableSetupColumn(i18n::T("label.speed"), 0, 70.0f);
     ImGui::TableSetupColumn(i18n::T("label.actions"), 0, 130.0f);
     ImGui::TableHeadersRow();
 
@@ -512,6 +513,10 @@ void RenderTaskList(CTaskModel& cModel) {
         }
         ImGui::Text("%s", pszState);
         ImGui::TableSetColumnIndex(1);
+        ImGui::Text("%s", tRow.bVideo != FALSE
+                              ? i18n::T("label.type_video")
+                              : i18n::T("label.type_file"));
+        ImGui::TableSetColumnIndex(2);
         if (ImGui::Selectable(
                 tRow.strOutput.empty() ? tRow.strUrl.c_str()
                                        : tRow.strOutput.c_str(),
@@ -522,19 +527,19 @@ void RenderTaskList(CTaskModel& cModel) {
         if (ImGui::IsItemHovered() && !tRow.strUrl.empty()) {
             ImGui::SetTooltip("%s", tRow.strUrl.c_str());
         }
-        ImGui::TableSetColumnIndex(2);
+        ImGui::TableSetColumnIndex(3);
         char szPct[32];
         snprintf(szPct, sizeof(szPct), "%.0f%%", tRow.dPercent);
         ImGui::ProgressBar(static_cast<float>(tRow.dPercent / 100.0),
                            ImVec2(-FLT_MIN, 0.0f), szPct);
-        ImGui::TableSetColumnIndex(3);
+        ImGui::TableSetColumnIndex(4);
         {
             char szSpeed[48];
             snprintf(szSpeed, sizeof(szSpeed), "%.2f MB/s",
                      tRow.dSpeed / (1024.0 * 1024.0));
             ImGui::Text("%s", tRow.dSpeed > 0.0 ? szSpeed : "--");
         }
-        ImGui::TableSetColumnIndex(4);
+        ImGui::TableSetColumnIndex(5);
         if ((tRow.emState == emTaskRunning) || (tRow.emState == emTaskPending)) {
             if (ImGui::SmallButton(i18n::T("button.pause"))) {
                 cModel.CancelTask(tRow.dwModelId);
