@@ -45,7 +45,7 @@ jobs:
 
       - name: Upload Linux artifact
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: burst-linux-x86_64
           path: burst-linux-x86_64
@@ -84,7 +84,7 @@ jobs:
 
       - name: Upload ARM64 artifact
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: burst-linux-aarch64
           path: burst-linux-aarch64
@@ -131,7 +131,7 @@ jobs:
 
       - name: Upload Windows artifact
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: burst-windows-x86_64
           path: burst-win-x86_64
