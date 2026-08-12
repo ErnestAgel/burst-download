@@ -28,6 +28,7 @@
 #include <string>
 #include <vector>
 
+#include "burst_types.h"
 #include "progress.h"
 
 class CThreadPool;
@@ -82,6 +83,9 @@ public:
     /** @brief Whether cancellation was requested. */
     bool IsCanceled() const;
 
+    /** @brief TRUE when URL parsing succeeded on the latest Run(). */
+    BOOL32 ParseOk() const;
+
     /**
      * @brief Attach the shared download pool (P8): each stream's Ccurl uses
      *        it for chunk jobs.
@@ -132,4 +136,5 @@ private:
     std::string m_last_error;           /**< Failure reason (LastError()) */
     std::string m_output_path;          /**< Final artifact path */
     CThreadPool* m_pChunkPool = nullptr; /**< Shared download pool (P8) */
+    BOOL32 m_bParseOk = FALSE;           /**< Latest parse succeeded */
 };

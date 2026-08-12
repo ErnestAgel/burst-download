@@ -12,6 +12,7 @@
 #include "Ccurl.h"
 #include "download_video.h"
 #include "embed_python.h"
+#include "embedded_runtime.h"
 #include "threadpool.h"
 
 namespace
@@ -198,11 +199,18 @@ BOOL32 RunVideoExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
         return FALSE;
     }
 
-    if (tCb.fnOnLog)
+    /* Parser update policy (2026-08-12):
+     * - check once per process launch (not per task);
+     * - if parsing fails, force an update and retry parsing once;
+     * - if it still fails, report the real error. */
+    static BOOL32 s_bCheckedOnce = FALSE;
+    if (s_bCheckedOnce == FALSE)
     {
-        tCb.fnOnLog("[INFO] checking parser update (10s budget)...");
-    }
-    {
+        s_bCheckedOnce = TRUE;
+        if (tCb.fnOnLog)
+        {
+            tCb.fnOnLog("[INFO] checking parser update (first launch)...");
+        }
         std::string strUpMsg;
         if (EmbedAutoUpdateParser(strUpMsg) && !strUpMsg.empty() &&
             tCb.fnOnLog)
@@ -210,53 +218,81 @@ BOOL32 RunVideoExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
             tCb.fnOnLog("[INFO] " + strUpMsg);
         }
     }
-    if (tCb.fnIsCanceled && (tCb.fnIsCanceled() == TRUE))
-    {
-        strError = "canceled";
+
+    auto fnRunOnce = [&](VideoResult& rOut, std::string& strOutPathOut,
+                         std::string& strLastErr, BOOL32& bParseOkOut) {
+        VideoDownloader vd;
+        vd.SetChunkPool(tOpts.pChunkPool);
         if (tCb.fnOnStage)
         {
-            tCb.fnOnStage(STAGE_CANCELED);
-        }
-        return FALSE;
-    }
-
-    VideoDownloader vd;
-    vd.SetChunkPool(tOpts.pChunkPool);
-    if (tCb.fnOnStage)
-    {
-        vd.onStage = [&tCb, vd_ptr = &vd](int nStage) {
-            if (tCb.fnIsCanceled && (tCb.fnIsCanceled() == TRUE))
-            {
-                vd_ptr->Cancel();
-            }
-            tCb.fnOnStage(nStage);
-        };
-    }
-    if (tCb.fnOnProgress)
-    {
-        vd.onProgress =
-            [&tCb, vd_ptr = &vd](const std::vector<ThreadProgress>& tp,
-                                 double dPercent, double dSpeed) {
+            vd.onStage = [&tCb, vd_ptr = &vd](int nStage) {
                 if (tCb.fnIsCanceled && (tCb.fnIsCanceled() == TRUE))
                 {
                     vd_ptr->Cancel();
                 }
-                tCb.fnOnProgress(tp, dPercent, dSpeed);
+                tCb.fnOnStage(nStage);
             };
-    }
-    if (tCb.fnOnLog)
+        }
+        if (tCb.fnOnProgress)
+        {
+            vd.onProgress =
+                [&tCb, vd_ptr = &vd](const std::vector<ThreadProgress>& tp,
+                                     double dPercent, double dSpeed) {
+                    if (tCb.fnIsCanceled && (tCb.fnIsCanceled() == TRUE))
+                    {
+                        vd_ptr->Cancel();
+                    }
+                    tCb.fnOnProgress(tp, dPercent, dSpeed);
+                };
+        }
+        if (tCb.fnOnLog)
+        {
+            vd.onLog = [&tCb](const std::string& strMsg) {
+                tCb.fnOnLog(strMsg);
+            };
+        }
+        rOut = vd.Run(tOpts.strUrl, tOpts.strOutput, tOpts.nThreads,
+                      tOpts.nTimeout, tOpts.strCookiesFromBrowser,
+                      tOpts.strCookie);
+        strOutPathOut = vd.OutputPath();
+        strLastErr = vd.LastError();
+        bParseOkOut = vd.ParseOk();
+    };
+
+    VideoResult r = VideoResult::Error;
+    BOOL32 bParseOk = FALSE;
+    fnRunOnce(r, strOutputPath, strError, bParseOk);
+    if ((r == VideoResult::Error) && (bParseOk == FALSE))
     {
-        vd.onLog = [&tCb](const std::string& strMsg) {
-            tCb.fnOnLog(strMsg);
-        };
+        /* Parse failed: force an update, then retry parsing once. */
+        if (tCb.fnOnLog)
+        {
+            tCb.fnOnLog("[INFO] parsing failed; updating parser and "
+                        "retrying...");
+        }
+        std::string strUpMsg;
+        EmbedUpdateParser(EmbedGetExePath(), strUpMsg);
+        if (!strUpMsg.empty() && tCb.fnOnLog)
+        {
+            tCb.fnOnLog("[INFO] " + strUpMsg);
+        }
+        if (tCb.fnIsCanceled && (tCb.fnIsCanceled() == TRUE))
+        {
+            strError = "canceled";
+            if (tCb.fnOnStage)
+            {
+                tCb.fnOnStage(STAGE_CANCELED);
+            }
+            return FALSE;
+        }
+        VideoResult r2 = VideoResult::Error;
+        BOOL32 bParseOk2 = FALSE;
+        fnRunOnce(r2, strOutputPath, strError, bParseOk2);
+        r = r2;
     }
 
-    const VideoResult r =
-        vd.Run(tOpts.strUrl, tOpts.strOutput, tOpts.nThreads, tOpts.nTimeout,
-               tOpts.strCookiesFromBrowser, tOpts.strCookie);
     if (r == VideoResult::Ok)
     {
-        strOutputPath = vd.OutputPath();
         if (tCb.fnOnLog)
         {
             tCb.fnOnLog("[INFO] video download complete: " + strOutputPath);
@@ -281,8 +317,10 @@ BOOL32 RunVideoExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
         }
         return FALSE;
     }
-    strError = vd.LastError().empty() ? "video download failed"
-                                      : vd.LastError();
+    if (strError.empty())
+    {
+        strError = "video download failed";
+    }
     if (tCb.fnOnLog)
     {
         tCb.fnOnLog("[ERROR] video download failed: " + tOpts.strUrl);
@@ -293,7 +331,6 @@ BOOL32 RunVideoExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
     }
     return FALSE;
 }
-
 }  // namespace
 
 BOOL32 TaskExecRun(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,

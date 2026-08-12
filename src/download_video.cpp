@@ -68,6 +68,7 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
                                  const std::atomic<bool>* pbCancel) {
     m_last_error.clear();
     m_output_path.clear();
+    m_bParseOk = FALSE;
 
     /* Effective cancel flag: the external one (worker) takes precedence so a
      * cancel aborts the in-flight parse immediately (issues R1/R6). */
@@ -104,6 +105,7 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
         Log("[ERROR] " + m_last_error);
         return VideoResult::Error;
     }
+    m_bParseOk = TRUE;
     Log("[INFO] parsing succeeded: " + std::to_string(vecStreams.size()) +
         " media streams");
 
@@ -251,4 +253,8 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
     }
 
     return VideoResult::Ok;
+}
+
+BOOL32 VideoDownloader::ParseOk() const {
+    return m_bParseOk;
 }
