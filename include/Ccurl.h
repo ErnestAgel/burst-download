@@ -29,6 +29,8 @@
 #include "../src/progress.h"
 #include "burst_types.h"
 
+class CThreadPool;
+
 #ifndef _WIN32
 #include <pthread.h>
 #endif
@@ -143,6 +145,14 @@ public:
     /** @brief Set the request Cookie. */
     void SetCookie(const string& cookie);
 
+    /**
+     * @brief Attach the shared download pool (P8): chunk jobs run on this
+     *        pool instead of creating a thread per chunk.
+     * @param pPool Shared download pool; null falls back to per-chunk
+     *              threads.
+     */
+    void SetChunkPool(CThreadPool* pPool);
+
     /** @brief Request cancellation (write/progress callback checkpoints). */
     void Cancel();
 
@@ -240,6 +250,7 @@ private:
     int m_timeout;                  /**< Low-speed timeout seconds */
     string m_referer;               /**< Anti-hotlink Referer */
     string m_cookie;                /**< Request Cookie */
+    CThreadPool* m_pChunkPool = nullptr;  /**< shared download pool (P8) */
     std::atomic<bool> m_cancel_flag{false};  /**< Cancellation flag */
     std::string m_last_error;       /**< Most recent failure reason */
     bool m_range_known = false;     /**< Range confirmed via HEAD/

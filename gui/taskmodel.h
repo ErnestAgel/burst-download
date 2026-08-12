@@ -76,6 +76,9 @@ public:
     /** @brief Remove every terminal task. */
     void ClearFinished();
 
+    /** @brief UI housekeeping: destroy the idle download pool (P8). */
+    void OnUiTick();
+
     /** @brief Cancel all running tasks (exit path). */
     void CancelAll();
 
@@ -107,15 +110,12 @@ private:
         std::vector<std::string> vecLog;
     } TModelTask;
 
-    /** @brief Queue executor: route to file/video body for the model task. */
+    /** @brief Queue executor: run the unified task executor for the task. */
     BOOL32 RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
                        CTaskContext& cCtx);
 
-    /** @brief File download executor body (pool thread). */
-    void RunFileTask(TModelTask& tTask, CTaskContext& cCtx);
-
-    /** @brief Video download executor body (pool thread). */
-    void RunVideoTask(TModelTask& tTask, CTaskContext& cCtx);
+    /** @brief Lazily create the shared download pool (size = thread setting). */
+    void EnsureChunkPool(int nThreads);
 
     /** @brief Append a timestamped log line (caller holds m_mutex). */
     void LogLocked(TModelTask& tTask, const std::string& strMsg);
@@ -130,8 +130,9 @@ private:
     /** @brief Format ETA text ("--" when speed is zero). */
     static std::string FormatEta(double dRemain, double dSpeed);
 
-    CThreadPool m_cPool{2};
+    CThreadPool m_cExecPool{2};               /**< task orchestration pool */
     CTaskQueue  m_cQueue;
+    std::unique_ptr<CThreadPool> m_pChunkPool; /**< shared download pool (P8) */
     mutable std::mutex m_mutex;
     std::map<u64, std::shared_ptr<TModelTask> > m_mapTasks;
     std::map<u64, u64> m_mapQueueToModel;

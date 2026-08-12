@@ -36,6 +36,10 @@ void VideoDownloader::Cancel() {
     m_cancel.store(true);
 }
 
+void VideoDownloader::SetChunkPool(CThreadPool* pPool) {
+    m_pChunkPool = pPool;
+}
+
 bool VideoDownloader::IsCanceled() const {
     return m_cancel.load();
 }
@@ -121,6 +125,7 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
 
         unique_ptr<Ccurl> cc = make_unique<Ccurl>();
         cc->SetReferer(strVideoUrl);  /* anti-hotlink: video page as Referer */
+        cc->SetChunkPool(m_pChunkPool);
         if (!strCookie.empty()) {
             cc->SetCookie(strCookie);  /* streams may need login state */
         }

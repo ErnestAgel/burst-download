@@ -381,7 +381,8 @@ void RenderAddForm(CTaskModel& cModel) {
     }
 #endif
 
-    /* Threads: combo 1..kHardwareMax. */
+    /* Threads: combo 1..kHardwareMax; locked while tasks are active (P8:
+     * the download pool size is fixed once the queue is running). */
     ImGui::Text("%s:", i18n::T("label.threads"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
@@ -391,9 +392,11 @@ void RenderAddForm(CTaskModel& cModel) {
         off += snprintf(items + off, sizeof(items) - off, "%d%c", i, '\0');
     }
     int idx = (g_threads >= 1 && g_threads <= kHardwareMax) ? g_threads - 1 : 0;
+    ImGui::BeginDisabled(cModel.ActiveCount() > 0u);
     if (ImGui::Combo("##threads", &idx, items, kHardwareMax)) {
         g_threads = idx + 1;
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
     {
         char buf[128];
@@ -1080,6 +1083,7 @@ bool Render(CTaskModel& cModel) {
     }
 
     /* Always-usable add form + multi-task list + selected task detail. */
+    cModel.OnUiTick();
     RenderAddForm(cModel);
     RenderTaskList(cModel);
     RenderTaskDetail(cModel);

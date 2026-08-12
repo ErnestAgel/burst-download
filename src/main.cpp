@@ -37,7 +37,9 @@
 #include "download_video.h"
 #include "embed_python.h"
 #include "pathutil.h"
+#include "taskexec.h"
 #include "taskqueue.h"
+#include "threadpool.h"
 #include "version.h"
 #include "video.h"
 
@@ -188,14 +190,26 @@ static bool DownloadVideo(const std::string& strVideoUrl,
                           const std::string& strBasename, s32 nThreads,
                           s32 nTimeout,
                           const std::string& strCookiesFromBrowser,
-                          const std::string& strCookie)
+                          const std::string& strCookie,
+                          CThreadPool* pChunkPool)
 {
-    /* Orchestration lives in src/download_video.* (shared with the GUI);
-     * the CLI sets no callbacks, so the default printf output is used. */
-    VideoDownloader vd;
-    const VideoResult r = vd.Run(strVideoUrl, strBasename, nThreads,
-                                 nTimeout, strCookiesFromBrowser, strCookie);
-    return r == VideoResult::Ok;
+    TTaskExecOptions tOpts;
+    tOpts.strUrl = strVideoUrl;
+    tOpts.strOutput = strBasename;
+    tOpts.nThreads = nThreads;
+    tOpts.nTimeout = nTimeout;
+    tOpts.bVideo = TRUE;
+    tOpts.strCookiesFromBrowser = strCookiesFromBrowser;
+    tOpts.strCookie = strCookie;
+    tOpts.pChunkPool = pChunkPool;
+
+    TTaskExecCallbacks tCb;
+    tCb.fnOnLog = [](const std::string& strMsg) {
+        printf("%s\n", strMsg.c_str());
+    };
+    std::string strOutPath;
+    std::string strError;
+    return TaskExecRun(tOpts, tCb, strOutPath, strError) == TRUE;
 }
 
 /**
@@ -207,7 +221,9 @@ static bool DownloadVideo(const std::string& strVideoUrl,
  */
 static BOOL32 ExecuteFileTask(const TCliOptions& tOpts,
                               const std::string& strUrl,
-                              std::string& strOutPath)
+                              std::string& strOutPath,
+                              CThreadPool* pChunkPool,
+                              std::string& strError)
 {
     std::string strFilename = tOpts.strFilename;
     if (tOpts.bOutputSet == FALSE)
@@ -227,38 +243,36 @@ static BOOL32 ExecuteFileTask(const TCliOptions& tOpts,
     }
     strOutPath = strFilename;
 
-    unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
-    if (!tOpts.strCookie.empty())
+    TTaskExecOptions tOptsExec;
+    tOptsExec.strUrl = strUrl;
+    tOptsExec.strOutput = strFilename;
+    tOptsExec.strCookie = tOpts.strCookie;
+    tOptsExec.nThreads = tOpts.nThreads;
+    tOptsExec.nTimeout = tOpts.nTimeout;
+    tOptsExec.bVideo = FALSE;
+    tOptsExec.bVerifySha256 = tOpts.bVerify;
+    tOptsExec.bDeletePartial = tOpts.bDeletePartial;
+    tOptsExec.pChunkPool = pChunkPool;
+
+    TTaskExecCallbacks tCb;
+    tCb.fnOnLog = [](const std::string& strMsg) {
+        printf("%s\n", strMsg.c_str());
+    };
+    return TaskExecRun(tOptsExec, tCb, strOutPath, strError);
+}
+
+/** @brief Clamp the chunk thread setting to the supported 1..8 range. */
+static s32 ClampThreads(s32 nThreads)
+{
+    if (nThreads < 1)
     {
-        ptr->SetCookie(tOpts.strCookie);
+        return 1;
     }
-    if (!ptr->Init(strUrl, strFilename, tOpts.nThreads, tOpts.nTimeout))
+    if (nThreads > 8)
     {
-        return FALSE;
+        return 8;
     }
-    if (!ptr->Download_Task())
-    {
-        if (tOpts.bDeletePartial == TRUE)
-        {
-            std::remove(strFilename.c_str());
-            std::remove((strFilename + ".curlbolt.part").c_str());
-            printf("partial file deleted (--delete-partial)\n");
-        }
-        printf("download failed: some chunks are incomplete "
-               "(see download.log)\n");
-        return FALSE;
-    }
-    if (tOpts.bVerify == TRUE)
-    {
-        std::string strDigest;
-        if (!ptr->VerifySha256(strDigest))
-        {
-            printf("sha256 verification failed\n");
-            return FALSE;
-        }
-        printf("sha256: %s\n", strDigest.c_str());
-    }
-    return TRUE;
+    return nThreads;
 }
 
 /**
@@ -362,9 +376,12 @@ int RunCli(int argc, char** argv)
                 printf("%s\n", strUpMsg.c_str());
             }
         }
+        CThreadPool cChunkPool(
+            static_cast<u32>(ClampThreads(tOpts.nThreads)));
         if (!DownloadVideo(tOpts.strVideoUrl, tOpts.strFilename,
                            tOpts.nThreads, tOpts.nTimeout,
-                           tOpts.strCookiesFromBrowser, tOpts.strCookie))
+                           tOpts.strCookiesFromBrowser, tOpts.strCookie,
+                           &cChunkPool))
         {
             printf("video download failed (see download.log)\n");
             return 1;
@@ -381,8 +398,14 @@ int RunCli(int argc, char** argv)
     /* Single URL keeps the historical behavior exactly. */
     if (tOpts.vecUrls.size() == 1u)
     {
+        CThreadPool cChunkPool(
+            static_cast<u32>(ClampThreads(tOpts.nThreads)));
         std::string strOutPath;
-        return ExecuteFileTask(tOpts, tOpts.vecUrls[0], strOutPath) ? 0 : 1;
+        std::string strError;
+        return ExecuteFileTask(tOpts, tOpts.vecUrls[0], strOutPath,
+                               &cChunkPool, strError)
+                   ? 0
+                   : 1;
     }
 
     /* Multiple URLs: run as a batch through the task queue (P5). */
@@ -395,16 +418,24 @@ int RunCli(int argc, char** argv)
     printf("batch download: %u URLs, %d concurrent\n",
            static_cast<unsigned>(tOpts.vecUrls.size()), tOpts.nJobs);
 
-    CThreadPool cPool(static_cast<u32>(tOpts.nJobs));
-    CTaskQueue cQueue(static_cast<u32>(tOpts.nJobs), cPool);
+    CThreadPool cExecPool(static_cast<u32>(tOpts.nJobs));
+    CThreadPool cChunkPool(
+        static_cast<u32>(ClampThreads(tOpts.nThreads)));
+    CTaskQueue cQueue(static_cast<u32>(tOpts.nJobs), cExecPool);
     for (const std::string& strUrl : tOpts.vecUrls)
     {
         cQueue.AddTask(strUrl, "", tOpts.nThreads, tOpts.nTimeout, FALSE);
     }
     cQueue.Start(
-        [&tOpts](TDownloadTask& tTask, CTaskContext& cCtx) -> BOOL32 {
+        [&tOpts, &cChunkPool](TDownloadTask& tTask,
+                              CTaskContext& cCtx) -> BOOL32 {
             (void)cCtx;
-            return ExecuteFileTask(tOpts, tTask.strUrl, tTask.strOutput);
+            std::string strError;
+            const BOOL32 bOk =
+                ExecuteFileTask(tOpts, tTask.strUrl, tTask.strOutput,
+                                &cChunkPool, strError);
+            tTask.strError = strError;
+            return bOk;
         });
     cQueue.WaitAll();
 

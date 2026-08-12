@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <cstring>
+#include <future>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -34,6 +35,7 @@
 
 #include "Ccurl.h"
 #include "curl/mprintf.h"
+#include "threadpool.h"
 #include "sha256.h"
 
 #ifdef _WIN32
@@ -461,6 +463,10 @@ void Ccurl::SetCookie(const string& cookie) {
   m_cookie = cookie;
 }
 
+void Ccurl::SetChunkPool(CThreadPool* pPool) {
+  m_pChunkPool = pPool;
+}
+
 void* Ccurl::Downloading(void* arg) {
   st_EasyList* info = (st_EasyList*)arg;
   const int max_retry = 3;
@@ -605,6 +611,38 @@ void* Ccurl::Downloading(void* arg) {
 
 bool Ccurl::RunChunks() {
   bool all_ok = true;
+
+  /* P8: with a shared download pool, each chunk is one pool job; chunks
+   * queue when the pool is saturated, and no per-chunk threads are created.
+   * The caller must not submit-and-wait on the same pool thread. */
+  if (m_pChunkPool != nullptr) {
+    std::vector<std::future<void>> vecFutures;
+    vecFutures.reserve(static_cast<size_t>(m_thread_num));
+    for (int i = 0; i < m_thread_num; i++) {
+      if (m_Easy_List[i]->success) {
+        continue;  /* chunk-level resume: already full, skip */
+      }
+      std::future<void> fJob;
+      if (!m_pChunkPool->Submit(
+              [this, i]() { Downloading(m_Easy_List[i]); }, &fJob)) {
+        LOG_ERR("chunk pool submit failed for chunk %d\n", i);
+        m_Easy_List[i]->success = false;
+        continue;
+      }
+      m_Easy_List[i]->thread_created = true;
+      vecFutures.push_back(std::move(fJob));
+    }
+    for (std::future<void>& fJob : vecFutures) {
+      fJob.wait();
+    }
+    for (int i = 0; i < m_thread_num; i++) {
+      if (!m_Easy_List[i]->success) {
+        all_ok = false;
+      }
+    }
+    return all_ok;
+  }
+
   for (int i = 0; i < m_thread_num; i++) {
     if (m_Easy_List[i]->success) {
       continue;  /* chunk-level resume: already full, skip */

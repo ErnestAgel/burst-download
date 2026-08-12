@@ -30,6 +30,8 @@
 
 #include "progress.h"
 
+class CThreadPool;
+
 /** @brief Video download result. */
 enum class VideoResult {
     Ok,       /**< All steps succeeded (merge included; a single stream has
@@ -81,6 +83,13 @@ public:
     bool IsCanceled() const;
 
     /**
+     * @brief Attach the shared download pool (P8): each stream's Ccurl uses
+     *        it for chunk jobs.
+     * @param pPool Shared download pool; may be null.
+     */
+    void SetChunkPool(CThreadPool* pPool);
+
+    /**
      * @brief Most recent failure reason (read after Result == Error).
      */
     std::string LastError() const;
@@ -122,4 +131,5 @@ private:
     std::atomic<bool> m_cancel{false};  /**< Cancellation flag */
     std::string m_last_error;           /**< Failure reason (LastError()) */
     std::string m_output_path;          /**< Final artifact path */
+    CThreadPool* m_pChunkPool = nullptr; /**< Shared download pool (P8) */
 };

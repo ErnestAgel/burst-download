@@ -15,9 +15,10 @@
 #include "Ccurl.h"
 #include "download_video.h"
 #include "embed_python.h"
+#include "taskexec.h"
 
 CTaskModel::CTaskModel()
-    : m_cQueue(m_cPool.ThreadCount(), m_cPool), m_dwNextModelId(1)
+    : m_cQueue(m_cExecPool.ThreadCount(), m_cExecPool), m_dwNextModelId(1)
 {
     m_cQueue.Start(
         [this](TDownloadTask& tTask, CTaskContext& cCtx) -> BOOL32 {
@@ -40,6 +41,7 @@ u64 CTaskModel::AddFileTask(const std::string& strUrl,
         return 0;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
+    EnsureChunkPool(nThreads);
     const u64 dwQueueId =
         m_cQueue.AddTask(strUrl, strPath, nThreads, nTimeout, FALSE);
     if (dwQueueId == 0)
@@ -70,6 +72,7 @@ u64 CTaskModel::AddVideoTask(const std::string& strUrl,
         return 0;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
+    EnsureChunkPool(nThreads);
     const u64 dwQueueId =
         m_cQueue.AddTask(strUrl, strBasename, nThreads, nTimeout, TRUE);
     if (dwQueueId == 0)
@@ -340,15 +343,99 @@ BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
         pTask = itTask->second;
     }
 
-    if (pTask->bVideo != FALSE)
     {
-        RunVideoTask(*pTask, cCtx);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (pTask->bPreserveSnapshot == FALSE)
+        {
+            pTask->tSnap = DownloadSnapshot();
+            pTask->vecLog.clear();
+        }
+        LogLocked(*pTask, pTask->bVideo != FALSE
+                              ? "[INFO] video task started: " + pTask->strUrl
+                              : "[INFO] task started: " + pTask->strUrl);
     }
-    else
+
+    TTaskExecOptions tOpts;
+    tOpts.strUrl = pTask->strUrl;
+    tOpts.strOutput = pTask->strOutput;
+    tOpts.nThreads = pTask->nThreads;
+    tOpts.nTimeout = pTask->nTimeout;
+    tOpts.bVideo = pTask->bVideo;
+    tOpts.bVerifySha256 = FALSE;
+    tOpts.bDeletePartial = FALSE;
     {
-        RunFileTask(*pTask, cCtx);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        tOpts.pChunkPool = m_pChunkPool.get();
     }
-    return (cCtx.IsCanceled() == TRUE) ? FALSE : TRUE;
+
+    TTaskExecCallbacks tCb;
+    tCb.fnOnStage = [this, pTask](int nStage) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        pTask->tSnap.stage = nStage;
+        if (nStage == STAGE_AUDIO_DL)
+        {
+            pTask->tSnap.totalPercent = 0.0;
+            pTask->tSnap.totalSpeed = 0.0;
+            pTask->tSnap.eta = "--";
+            pTask->tSnap.threads.clear();
+        }
+    };
+    tCb.fnOnProgress =
+        [this, pTask](const std::vector<ThreadProgress>& tp, double dPercent,
+                      double dSpeed) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            pTask->tSnap.totalPercent = dPercent;
+            pTask->tSnap.totalSpeed = dSpeed;
+            pTask->tSnap.threads.assign(tp.begin(), tp.end());
+            double dFileTotal = tp.empty() ? 0.0 : (double)tp[0].file_total;
+            double dRemain =
+                (dFileTotal > 0.0 && dPercent < 100.0)
+                    ? dFileTotal * (100.0 - dPercent) / 100.0
+                    : 0.0;
+            pTask->tSnap.eta = FormatEta(dRemain, dSpeed);
+        };
+    tCb.fnOnLog = [this, pTask](const std::string& strMsg) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        LogLocked(*pTask, strMsg);
+    };
+    tCb.fnIsCanceled = [&cCtx]() { return cCtx.IsCanceled(); };
+
+    std::string strOutput;
+    std::string strError;
+    const BOOL32 bOk = TaskExecRun(tOpts, tCb, strOutput, strError);
+
+    if (bOk != FALSE)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            pTask->tSnap.totalPercent = 100.0;
+            pTask->tSnap.totalSpeed = 0.0;
+            pTask->tSnap.eta = "--";
+            for (ThreadProgress& t : pTask->tSnap.threads)
+            {
+                t.downloaded = t.total;
+                t.percent = (t.file_total > 0)
+                                ? (t.total / (double)t.file_total * 100.0)
+                                : 100.0;
+                t.speed = 0.0;
+            }
+            pTask->strOutput = strOutput;
+        }
+        SetStage(*pTask, STAGE_DONE, strOutput);
+        return TRUE;
+    }
+
+    if (cCtx.IsCanceled() == TRUE)
+    {
+        SetStage(*pTask, STAGE_CANCELED, "canceled");
+        return FALSE;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        pTask->tSnap.error = strError.empty() ? "task failed" : strError;
+    }
+    SetStage(*pTask, STAGE_ERROR, "error");
+    return FALSE;
 }
 
 void CTaskModel::LogLocked(TModelTask& tTask, const std::string& strMsg)
@@ -405,242 +492,24 @@ std::string CTaskModel::FormatEta(double dRemain, double dSpeed)
     return std::string(szBuf);
 }
 
-void CTaskModel::RunFileTask(TModelTask& tTask, CTaskContext& cCtx)
+void CTaskModel::EnsureChunkPool(int nThreads)
 {
+    if (m_pChunkPool != nullptr)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (tTask.bPreserveSnapshot == FALSE)
-        {
-            tTask.tSnap = DownloadSnapshot();
-            tTask.vecLog.clear();
-        }
-        LogLocked(tTask, "[INFO] task started: " + tTask.strUrl);
-    }
-    SetStage(tTask, STAGE_DOWNLOADING, "downloading");
-
-    std::error_code ec;
-    std::filesystem::path fsPath(tTask.strOutput);
-    if (fsPath.has_parent_path() && !fsPath.parent_path().empty())
-    {
-        std::filesystem::create_directories(fsPath.parent_path(), ec);
-    }
-
-    std::unique_ptr<Ccurl> cc = std::make_unique<Ccurl>();
-    cc->onProgress =
-        [this, &tTask, &cCtx, cc_ptr = cc.get()](
-            const std::vector<ThreadProgress>& tp, double dPercent,
-            double dSpeed) {
-            if (cCtx.IsCanceled() == TRUE)
-            {
-                cc_ptr->Cancel();
-            }
-            std::lock_guard<std::mutex> lock(m_mutex);
-            tTask.tSnap.stage = STAGE_DOWNLOADING;
-            tTask.tSnap.totalPercent = dPercent;
-            tTask.tSnap.totalSpeed = dSpeed;
-            tTask.tSnap.threads.assign(tp.begin(), tp.end());
-            double dFileTotal = tp.empty() ? 0.0 : (double)tp[0].file_total;
-            double dRemain =
-                (dFileTotal > 0.0 && dPercent < 100.0)
-                    ? dFileTotal * (100.0 - dPercent) / 100.0
-                    : 0.0;
-            tTask.tSnap.eta = FormatEta(dRemain, dSpeed);
-        };
-
-    if (cCtx.IsCanceled() == TRUE)
-    {
-        SetStage(tTask, STAGE_CANCELED, "canceled");
         return;
     }
-
-    if (!cc->Init(tTask.strUrl, tTask.strOutput, tTask.nThreads,
-                  tTask.nTimeout))
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            tTask.tSnap.error = cc->LastError().empty()
-                                    ? "init failed"
-                                    : cc->LastError();
-            LogLocked(tTask, "[ERROR] init failed: " + tTask.strUrl);
-        }
-        SetStage(tTask, STAGE_ERROR, "error");
-        return;
-    }
-    {
-        const std::vector<ThreadProgress> vecParts = cc->SnapshotParts();
-        cc->onProgress(vecParts, 0.0, 0.0);
-    }
-
-    const bool bOk = cc->Download_Task();
-    if (bOk)
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            tTask.tSnap.totalPercent = 100.0;
-            tTask.tSnap.totalSpeed = 0.0;
-            tTask.tSnap.eta = "--";
-            for (ThreadProgress& t : tTask.tSnap.threads)
-            {
-                t.downloaded = t.total;
-                t.percent = (t.file_total > 0)
-                                ? (t.total / (double)t.file_total * 100.0)
-                                : 100.0;
-                t.speed = 0.0;
-            }
-            LogLocked(tTask, "[INFO] download complete: " + tTask.strOutput);
-        }
-        SetStage(tTask, STAGE_DONE, tTask.strOutput);
-    }
-    else if ((cCtx.IsCanceled() == TRUE) || cc->IsCanceled())
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            LogLocked(tTask, "[INFO] canceled, partial files kept for resume");
-        }
-        SetStage(tTask, STAGE_CANCELED, "canceled");
-    }
-    else
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            tTask.tSnap.error = "download failed, see download.log";
-            LogLocked(tTask, "[ERROR] download failed: " + tTask.strUrl);
-        }
-        SetStage(tTask, STAGE_ERROR, "error");
-    }
+    int n = nThreads < 1 ? 1 : (nThreads > 8 ? 8 : nThreads);
+    m_pChunkPool = std::make_unique<CThreadPool>(static_cast<u32>(n));
 }
 
-void CTaskModel::RunVideoTask(TModelTask& tTask, CTaskContext& cCtx)
+void CTaskModel::OnUiTick()
 {
+    if (m_cQueue.ActiveCount() == 0u)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (tTask.bPreserveSnapshot == FALSE)
-        {
-            tTask.tSnap = DownloadSnapshot();
-            tTask.vecLog.clear();
-        }
-        LogLocked(tTask, "[INFO] video task started: " + tTask.strUrl);
-    }
-
-    std::error_code ec;
-    std::filesystem::path fsPath(tTask.strOutput);
-    if (fsPath.has_parent_path() && !fsPath.parent_path().empty())
-    {
-        std::filesystem::create_directories(fsPath.parent_path(), ec);
-    }
-
-    if (cCtx.IsCanceled() == TRUE)
-    {
-        SetStage(tTask, STAGE_CANCELED, "canceled");
-        return;
-    }
-
-    if (!EmbedPythonInit())
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            tTask.tSnap.error =
-                "Python runtime init failed: assets/ (stdlib/yt_dlp) is "
-                "missing";
-            LogLocked(tTask,
-                      "[ERROR] video parsing failed: Python runtime");
-        }
-        SetStage(tTask, STAGE_ERROR, "error");
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        LogLocked(tTask, "[INFO] checking parser update (10s budget)...");
-    }
-    std::string strUpMsg;
-    if (EmbedAutoUpdateParser(strUpMsg) && !strUpMsg.empty())
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        LogLocked(tTask, "[INFO] " + strUpMsg);
-    }
-    if (cCtx.IsCanceled() == TRUE)
-    {
-        SetStage(tTask, STAGE_CANCELED, "canceled");
-        return;
-    }
-
-    VideoDownloader vd;
-    vd.onStage = [this, &tTask, &cCtx, vd_ptr = &vd](int nStage) {
-        if (cCtx.IsCanceled() == TRUE)
-        {
-            vd_ptr->Cancel();
-        }
-        std::lock_guard<std::mutex> lock(m_mutex);
-        tTask.tSnap.stage = nStage;
-        if (nStage == STAGE_AUDIO_DL)
-        {
-            tTask.tSnap.totalPercent = 0.0;
-            tTask.tSnap.totalSpeed = 0.0;
-            tTask.tSnap.eta = "--";
-            tTask.tSnap.threads.clear();
-        }
-    };
-    vd.onProgress =
-        [this, &tTask, &cCtx, vd_ptr = &vd](
-            const std::vector<ThreadProgress>& tp, double dPercent,
-            double dSpeed) {
-            if (cCtx.IsCanceled() == TRUE)
-            {
-                vd_ptr->Cancel();
-            }
-            std::lock_guard<std::mutex> lock(m_mutex);
-            tTask.tSnap.totalPercent = dPercent;
-            tTask.tSnap.totalSpeed = dSpeed;
-            tTask.tSnap.threads.assign(tp.begin(), tp.end());
-            double dFileTotal = tp.empty() ? 0.0 : (double)tp[0].file_total;
-            double dRemain =
-                (dFileTotal > 0.0 && dPercent < 100.0)
-                    ? dFileTotal * (100.0 - dPercent) / 100.0
-                    : 0.0;
-            tTask.tSnap.eta = FormatEta(dRemain, dSpeed);
-        };
-    vd.onLog = [this, &tTask](const std::string& strMsg) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        LogLocked(tTask, strMsg);
-    };
-
-    const VideoResult r = vd.Run(tTask.strUrl, tTask.strOutput,
-                                 tTask.nThreads, tTask.nTimeout);
-    if (r == VideoResult::Ok)
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            tTask.tSnap.totalPercent = 100.0;
-            tTask.tSnap.totalSpeed = 0.0;
-            tTask.tSnap.eta = "--";
-            LogLocked(tTask, "[INFO] video download complete: " +
-                                 vd.OutputPath());
-        }
-        SetStage(tTask, STAGE_DONE, vd.OutputPath());
-    }
-    else if ((r == VideoResult::Canceled) || (cCtx.IsCanceled() == TRUE))
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            LogLocked(tTask, "[INFO] canceled, partial files kept for resume");
-        }
-        SetStage(tTask, STAGE_CANCELED, "canceled");
-    }
-    else
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            tTask.tSnap.error = vd.LastError().empty()
-                                    ? "video download failed"
-                                    : vd.LastError();
-            LogLocked(tTask, "[ERROR] video download failed: " +
-                                 tTask.strUrl);
-        }
-        SetStage(tTask, STAGE_ERROR, "error");
+        m_pChunkPool.reset();
     }
 }
-
 void CTaskModel::DeleteArtifacts(const TModelTask& tTask) const
 {
     std::error_code ec;
