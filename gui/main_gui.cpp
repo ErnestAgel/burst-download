@@ -234,7 +234,7 @@ int RunGui(int argc, char** argv) {
     }
 
     /* ---- Main loop ---- */
-    DownloadWorker worker;
+    CDownloadWorker worker;
     ui::Init(window);
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();

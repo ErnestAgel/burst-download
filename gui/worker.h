@@ -1,127 +1,125 @@
 /**
  * @file worker.h
- * @brief 后台下载工作线程 + 进度快照 + 取消（GUI Phase 1，见 gui-design.md §4/§5.2）
+ * @brief Background download task runner: snapshot, cancel and reclamation
+ *        for the GUI (see multi-task-design.md; R12 thread model).
  *
- * 职责：
- * - 在独立 std::thread 中执行文件下载任务（Ccurl Init + Download_Task）；
- * - Ccurl::onProgress 回调每 ~200ms 写入快照（mutex 保护），UI 主线程每帧读取；
- * - Cancel() 从 UI 线程调用，置位后 Ccurl 在写回调/进度回调检查点中止；
- * - 退出流程：Join(超时) 等待工作线程结束，禁止 detach（§8.4 铁律）。
+ * Responsibilities:
+ * - Runs file/video download tasks on a reusable worker pool (CThreadPool)
+ *   instead of creating one std::thread per task;
+ * - Ccurl::onProgress callbacks write a snapshot (mutex protected) that the
+ *   UI thread reads every frame;
+ * - Cancel() is called from the UI thread and aborts via Ccurl write/progress
+ *   checkpoints;
+ * - Reclamation: Join(timeout) is bounded for the UI; the destructor waits
+ *   unbounded for the current job, so no thread is ever left joinable.
  *
- * 线程模型（R2）：工作线程绝不调用 ImGui API；UI 线程绝不直接操作 Ccurl。
- *
- * @author ErnestAgel
- * @date 2026-08-07
- * @license SPDX-License-Identifier: MIT
+ * Thread rules: the worker must never call ImGui; the UI thread must never
+ * touch Ccurl directly.
  */
+
 #pragma once
 
 #include <atomic>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "../src/progress.h"
+#include "threadpool.h"
 
 /**
- * @brief 后台下载工作线程（单任务串行，MVP 一次一个任务）
+ * @brief Background download task runner (single active task).
  */
-class DownloadWorker {
+class CDownloadWorker
+{
 public:
-    DownloadWorker();
-    ~DownloadWorker();
+    CDownloadWorker();
+    ~CDownloadWorker();
 
-    /** 禁止拷贝（含线程成员） */
-    DownloadWorker(const DownloadWorker&) = delete;
-    DownloadWorker& operator=(const DownloadWorker&) = delete;
+    /** @brief Non-copyable (owns a pool and a job handle). */
+    CDownloadWorker(const CDownloadWorker&) = delete;
+    CDownloadWorker& operator=(const CDownloadWorker&) = delete;
 
     /**
-     * @brief 启动一个文件下载任务（内部创建工作线程，立即返回）
-     * @param url 文件直链（http/https）
-     * @param path 保存路径（UTF-8；Windows 中文路径由 Ccurl 宽字符入口处理）
-     * @param threads 线程数（1~8，Ccurl 内部再钳位）
-     * @param timeout 低速超时秒数（0=不限，默认 60）
-     * @param preserve_snapshot true=保留上一任务快照/日志（断点续传"继续"场景：
-     *        不清零进度，Ccurl 首个进度回调含 resume 基数自动校准；新任务传 false）
-     * @return 是否成功启动（已在运行则返回 false）
+     * @brief Start a file download task on the worker pool.
+     * @param url Direct file URL (http/https).
+     * @param path Save path (UTF-8; Windows wide-char handled by Ccurl).
+     * @param threads Chunk threads (1-8; clamped inside Ccurl).
+     * @param timeout Low-speed timeout seconds (0 = unlimited).
+     * @param preserve_snapshot TRUE keeps the previous snapshot for resume.
+     * @return TRUE when the task was queued; FALSE when one is already running.
      */
     bool StartFileDownload(const std::string& url, const std::string& path,
                            int threads, int timeout = 60,
                            bool preserve_snapshot = false);
 
     /**
-     * @brief 启动一个视频下载任务（Phase 2：解析→下载视频轨/音频轨→自动合并）
-     * @param url 视频网页 URL（B站/YouTube 等，http/https）
-     * @param basename 输出基础名（不含扩展名；视频轨 .mp4 / 音频轨 .m4a / 合并产物 <base>_full.<ext>）
-     * @param threads 每流线程数（1~8，Ccurl 内部再钳位）
-     * @param timeout 低速超时秒数（0=不限，默认 60）
-     * @param preserve_snapshot true=保留上一任务快照/日志（"继续"断点续传场景）
-     * @return 是否成功启动（已在运行则返回 false）
-     * @note 阶段状态细分：解析中→下载视频轨→下载音频轨→合并中（F8）
+     * @brief Start a video download task (parse, tracks, merge).
+     * @param url Video page URL (Bilibili/YouTube etc.).
+     * @param basename Output base name (no extension).
+     * @param threads Per-stream chunk threads.
+     * @param timeout Low-speed timeout seconds.
+     * @param preserve_snapshot TRUE keeps the previous snapshot for resume.
+     * @return TRUE when the task was queued; FALSE when one is running.
      */
     bool StartVideoDownload(const std::string& url, const std::string& basename,
                             int threads, int timeout = 60,
                             bool preserve_snapshot = false);
 
-    /**
-     * @brief 请求取消（线程安全，UI 线程可调）；取消后部分文件保留可续传
-     */
+    /** @brief Request cancellation (thread-safe); partial files are kept. */
     void Cancel();
 
-    /**
-     * @brief 是否正在运行（工作线程存活）
-     */
+    /** @brief TRUE while a task job is still running. */
     bool IsRunning() const;
 
     /**
-     * @brief 读取当前快照（锁内拷贝标量 + 分片表 + 环形日志）
-     * @param out 输出快照
-     * @return 当前 stage（DownloadStage）
+     * @brief Read the current snapshot (scalars + parts + ring log).
+     * @param out Receives the snapshot copy.
+     * @return Current DownloadStage.
      */
     int GetSnapshot(DownloadSnapshot& out);
 
     /**
-     * @brief 等待工作线程结束（退出流程用，§8.4）
-     * @param timeout_sec 超时秒数（0=不限；超时仅告警不强杀）
-     * @return 线程是否已结束（false 表示超时）
+     * @brief Wait for the current job to finish.
+     * @param timeout_sec Bounded wait seconds (0 = unlimited).
+     * @return TRUE when the job finished; FALSE on timeout (warn only).
      */
     bool Join(int timeout_sec);
 
-    /**
-     * @brief 追加一条日志（环形缓冲，线程安全）
-     * @param msg 日志文本
-     */
+    /** @brief Append a ring-buffer log line (thread-safe). */
     void AddLog(const std::string& msg);
 
     /**
-     * @brief 重置快照与日志到初始空闲态（停止任务后刷新 UI 用；须线程已结束）
+     * @brief Clear snapshot and log back to idle (call after the job ended).
      */
     void Reset();
 
 private:
-    /** @brief 工作线程入口：执行下载任务编排 */
+    /** @brief Job body for file downloads. */
     void WorkerFunc(const std::string& url, const std::string& path,
                     int threads, int timeout);
 
-    /** @brief 视频工作线程入口：解析→下载视频轨/音频轨→自动合并（Phase 2） */
+    /** @brief Job body for video downloads. */
     void VideoWorkerFunc(const std::string& url, const std::string& basename,
                          int threads, int timeout);
 
-    /** @brief 锁内更新阶段状态并写日志 */
-    void SetStage(int stage, const std::string& status, const std::string& logmsg);
+    /** @brief Update stage under lock and append a log line. */
+    void SetStage(int stage, const std::string& status,
+                  const std::string& logmsg);
 
-    /** @brief 计算 ETA 文本（速率为 0 时 "--"） */
+    /** @brief Format the ETA text ("--" when speed is zero). */
     static std::string FormatEta(double remain_bytes, double speed);
 
-    std::thread m_thread;               /**< 工作线程 */
-    std::atomic<bool> m_running{false}; /**< 工作线程是否存活 */
-    std::atomic<bool> m_cancel{false};  /**< 取消请求标志 */
-    std::atomic<bool> m_joined{false};  /**< Join 已调用过（防重复 join） */
+    std::future<void>       m_futJob;      /**< Current job completion handle */
+    std::atomic<bool>       m_running{false}; /**< Task job is running */
+    std::atomic<bool>       m_cancel{false};  /**< Cancellation request flag */
 
-    mutable std::mutex m_mutex;         /**< 保护快照与日志 */
-    DownloadSnapshot m_snapshot;        /**< 进度快照（stage/percent/threads 等） */
-    std::vector<std::string> m_log;     /**< 环形日志（上限 kMaxLog 条） */
-    static const size_t kMaxLog = 300;
+    mutable std::mutex      m_mutex;       /**< Guards snapshot and log */
+    DownloadSnapshot        m_snapshot;    /**< Progress snapshot */
+    std::vector<std::string> m_log;        /**< Ring log (kMaxLog entries) */
+    static const size_t     kMaxLog = 300;
+
+    CThreadPool             m_cPool{2};    /**< Reusable worker pool (R12) */
 };

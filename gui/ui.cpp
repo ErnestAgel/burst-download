@@ -81,14 +81,14 @@ bool g_last_video = false; /* whether the last task was video mode */
 
 /* Forward declarations (RenderForm is defined before OnStartClicked /
  * StartDownload). */
-void OnStartClicked(DownloadWorker& worker);
-void StartDownload(DownloadWorker& worker, const std::string& url,
+void OnStartClicked(CDownloadWorker& worker);
+void StartDownload(CDownloadWorker& worker, const std::string& url,
                    const std::string& path, int threads,
                    bool preserve_snapshot = false);
-void StartVideoDownload(DownloadWorker& worker, const std::string& url,
+void StartVideoDownload(CDownloadWorker& worker, const std::string& url,
                         const std::string& basename, int threads,
                         bool preserve_snapshot = false);
-void StopAndClear(DownloadWorker& worker);
+void StopAndClear(CDownloadWorker& worker);
 
 /* Popup state */
 bool g_exists_open = false;
@@ -342,7 +342,7 @@ std::string ErrorGuide(const std::string& err) {
 }
 
 /* ---- Form rendering ---- */
-void RenderForm(DownloadWorker& worker) {
+void RenderForm(CDownloadWorker& worker) {
     bool running = worker.IsRunning();
 
     /* Mode toggle (F1): the URL placeholder follows the mode. */
@@ -486,7 +486,7 @@ void RenderForm(DownloadWorker& worker) {
     }
 }
 
-void OnStartClicked(DownloadWorker& worker) {
+void OnStartClicked(CDownloadWorker& worker) {
     std::string url(g_url);
     std::string path(g_path);
 
@@ -595,7 +595,7 @@ void OnStartClicked(DownloadWorker& worker) {
     StartDownload(worker, url, path, g_threads);
 }
 
-void StartDownload(DownloadWorker& worker, const std::string& url,
+void StartDownload(CDownloadWorker& worker, const std::string& url,
                    const std::string& path, int threads,
                    bool preserve_snapshot) {
     worker.AddLog(std::string("[INFO] URL: ") + url);
@@ -612,7 +612,7 @@ void StartDownload(DownloadWorker& worker, const std::string& url,
     }
 }
 
-void StartVideoDownload(DownloadWorker& worker, const std::string& url,
+void StartVideoDownload(CDownloadWorker& worker, const std::string& url,
                         const std::string& basename, int threads,
                         bool preserve_snapshot) {
     worker.AddLog(std::string("[INFO] video URL: ") + url);
@@ -650,7 +650,7 @@ void RemoveDownloadArtifacts(const std::string& base, bool video) {
 
 /** Stop the task (red button): delete cache files, reset the worker and
  *  refresh the UI to its initial state. */
-void StopAndClear(DownloadWorker& worker) {
+void StopAndClear(CDownloadWorker& worker) {
     worker.AddLog("[INFO] task stopped, deleted cache files: " + g_last_path);
     RemoveDownloadArtifacts(g_last_path, g_last_video);
     /* Reset worker cache and snapshot/log (worker is idle now). */
@@ -1113,7 +1113,7 @@ void Init(GLFWwindow* window) {
     g_window = window;
 }
 
-bool Render(DownloadWorker& worker) {
+bool Render(CDownloadWorker& worker) {
 #ifdef _WIN32
     /* Custom title bar (Windows borderless window; Linux uses the system
      * title bar). */

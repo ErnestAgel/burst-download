@@ -18,7 +18,7 @@
 #include "embed_python.h"
 #include "i18n.h"
 
-DownloadWorker::DownloadWorker() {
+CDownloadWorker::CDownloadWorker() {
     m_snapshot.stage = STAGE_IDLE;
     m_snapshot.status = "";
     m_snapshot.totalPercent = 0;
@@ -26,32 +26,31 @@ DownloadWorker::DownloadWorker() {
     m_snapshot.eta = "--";
 }
 
-DownloadWorker::~DownloadWorker() {
-    /* Exit rule: cancel first, then join; detach is forbidden. */
-    if (m_thread.joinable()) {
-        if (m_running.load()) {
-            Cancel();
-        }
-        Join(5);
+CDownloadWorker::~CDownloadWorker() {
+    /* Reclamation rule: cancel first, then wait for guaranteed completion
+     * before any member is destroyed (final join; no std::terminate path). */
+    if (m_running.load()) {
+        Cancel();
+    }
+    if (m_futJob.valid()) {
+        m_futJob.wait();
     }
 }
 
-bool DownloadWorker::StartFileDownload(const std::string& url,
-                                       const std::string& path, int threads,
-                                       int timeout, bool preserve_snapshot) {
+bool CDownloadWorker::StartFileDownload(const std::string& url,
+                                        const std::string& path, int threads,
+                                        int timeout, bool preserve_snapshot) {
     if (m_running.load()) {
         return false;  /* single-task serial: a task is already running */
     }
     if (url.empty() || path.empty()) {
         return false;
     }
-    /* A previous task may have finished but was never joined (assigning a
-     * joinable thread would terminate). */
-    if (m_thread.joinable()) {
-        m_thread.join();
+    /* Release the previous (finished) job handle before reuse. */
+    if (m_futJob.valid()) {
+        m_futJob = std::future<void>();
     }
     m_cancel.store(false);
-    m_joined.store(false);
     /* A new task clears the previous snapshot/log; "Resume" keeps them so
      * the UI continues from the paused progress (the first Ccurl progress
      * callback recalibrates with the resume base). */
@@ -64,28 +63,32 @@ bool DownloadWorker::StartFileDownload(const std::string& url,
     }
     AddLog("[INFO] task started: " + url);
 
-    m_thread = std::thread(&DownloadWorker::WorkerFunc, this, url, path,
-                           threads, timeout);
     m_running.store(true);
+    if (!m_cPool.Submit(
+            [this, url, path, threads, timeout]() {
+                WorkerFunc(url, path, threads, timeout);
+            },
+            &m_futJob)) {
+        m_running.store(false);
+        return false;
+    }
     return true;
 }
 
-bool DownloadWorker::StartVideoDownload(const std::string& url,
-                                        const std::string& basename,
-                                        int threads, int timeout,
-                                        bool preserve_snapshot) {
+bool CDownloadWorker::StartVideoDownload(const std::string& url,
+                                         const std::string& basename,
+                                         int threads, int timeout,
+                                         bool preserve_snapshot) {
     if (m_running.load()) {
         return false;  /* single-task serial: a task is already running */
     }
     if (url.empty() || basename.empty()) {
         return false;
     }
-    /* A previous task may have finished but was never joined. */
-    if (m_thread.joinable()) {
-        m_thread.join();
+    if (m_futJob.valid()) {
+        m_futJob = std::future<void>();
     }
     m_cancel.store(false);
-    m_joined.store(false);
     /* Same as StartFileDownload: Resume keeps the snapshot. */
     if (!preserve_snapshot) {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -96,57 +99,47 @@ bool DownloadWorker::StartVideoDownload(const std::string& url,
     }
     AddLog("[INFO] task started: " + url);
 
-    m_thread = std::thread(&DownloadWorker::VideoWorkerFunc, this, url,
-                           basename, threads, timeout);
     m_running.store(true);
+    if (!m_cPool.Submit(
+            [this, url, basename, threads, timeout]() {
+                VideoWorkerFunc(url, basename, threads, timeout);
+            },
+            &m_futJob)) {
+        m_running.store(false);
+        return false;
+    }
     return true;
 }
 
-void DownloadWorker::Cancel() {
+void CDownloadWorker::Cancel() {
     m_cancel.store(true);
     AddLog("[INFO] cancel requested");
 }
 
-bool DownloadWorker::IsRunning() const {
+bool CDownloadWorker::IsRunning() const {
     return m_running.load();
 }
 
-int DownloadWorker::GetSnapshot(DownloadSnapshot& out) {
+int CDownloadWorker::GetSnapshot(DownloadSnapshot& out) {
     std::lock_guard<std::mutex> lock(m_mutex);
     out = m_snapshot;
     out.log = m_log;  /* the ring log travels with the snapshot */
     return out.stage;
 }
 
-bool DownloadWorker::Join(int timeout_sec) {
-    if (!m_thread.joinable()) {
-        m_joined.store(true);
+bool CDownloadWorker::Join(int timeout_sec) {
+    if (!m_futJob.valid()) {
         return true;
     }
-    if (m_joined.exchange(true)) {
-        return !m_thread.joinable();
-    }
     if (timeout_sec <= 0) {
-        m_thread.join();
-    } else {
-        /* Bounded wait: poll the thread-end flag (std::thread has no
-         * timed_join). */
-        auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::seconds(timeout_sec);
-        while (m_running.load() &&
-               std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        if (m_running.load()) {
-            return false;  /* timeout: warn only, do not force-kill */
-        }
-        m_thread.join();
+        m_futJob.wait();
+        return true;
     }
-    m_joined.store(true);
-    return true;
+    return m_futJob.wait_for(std::chrono::seconds(timeout_sec)) ==
+           std::future_status::ready;
 }
 
-void DownloadWorker::AddLog(const std::string& msg) {
+void CDownloadWorker::AddLog(const std::string& msg) {
     std::lock_guard<std::mutex> lock(m_mutex);
     char ts[32] = {0};
     time_t now = time(nullptr);
@@ -164,11 +157,11 @@ void DownloadWorker::AddLog(const std::string& msg) {
     }
 }
 
-void DownloadWorker::Reset() {
+void CDownloadWorker::Reset() {
     /* Called after Stop: clear the snapshot and log back to idle (the
-     * caller must ensure the worker thread has ended). */
-    if (m_thread.joinable()) {
-        m_thread.join();
+     * caller must ensure the job has ended). */
+    if (m_futJob.valid()) {
+        m_futJob.wait();
     }
     m_cancel.store(false);
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -178,8 +171,8 @@ void DownloadWorker::Reset() {
     m_log.clear();
 }
 
-void DownloadWorker::SetStage(int stage, const std::string& status,
-                              const std::string& logmsg) {
+void CDownloadWorker::SetStage(int stage, const std::string& status,
+                               const std::string& logmsg) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_snapshot.stage = stage;
     m_snapshot.status = status;
@@ -192,7 +185,7 @@ void DownloadWorker::SetStage(int stage, const std::string& status,
     }
 }
 
-std::string DownloadWorker::FormatEta(double remain_bytes, double speed) {
+std::string CDownloadWorker::FormatEta(double remain_bytes, double speed) {
     if (speed <= 0 || remain_bytes <= 0) {
         return "--";
     }
@@ -208,8 +201,9 @@ std::string DownloadWorker::FormatEta(double remain_bytes, double speed) {
     return buf;
 }
 
-void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
-                                int threads, int timeout) {
+void CDownloadWorker::WorkerFunc(const std::string& url,
+                                 const std::string& path, int threads,
+                                 int timeout) {
     SetStage(STAGE_DOWNLOADING, "downloading", "[INFO] start downloading: " +
                                                     url);
 
@@ -311,9 +305,9 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
     m_running.store(false);
 }
 
-void DownloadWorker::VideoWorkerFunc(const std::string& url,
-                                     const std::string& basename,
-                                     int threads, int timeout) {
+void CDownloadWorker::VideoWorkerFunc(const std::string& url,
+                                      const std::string& basename,
+                                      int threads, int timeout) {
     /* Create the parent directory before starting (the basename's parent,
      * e.g. the user's save directory; Ccurl only writes the file). */
     std::error_code ec;
