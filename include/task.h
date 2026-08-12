@@ -49,16 +49,23 @@ public:
     CTaskContext() = default;
 
     /** @brief Request cancellation (thread-safe). */
-    void Cancel() { m_bCancel.store(TRUE); }
+    void Cancel() { m_bCancel.store(true); }
 
     /** @brief TRUE after Cancel() was called. */
-    BOOL32 IsCanceled() const { return m_bCancel.load(); }
+    BOOL32 IsCanceled() const { return m_bCancel.load() ? TRUE : FALSE; }
 
     /** @brief Clear the flag (retry/reuse). */
-    void Reset() { m_bCancel.store(FALSE); }
+    void Reset() { m_bCancel.store(false); }
+
+    /**
+     * @brief The shared cancel flag (P8-4): download engines poll this
+     *        directly so a canceled task is aborted promptly even when a
+     *        stalled transfer produces no progress callbacks.
+     */
+    std::atomic<bool>* CancelFlagPtr() { return &m_bCancel; }
 
 private:
-    std::atomic<BOOL32> m_bCancel{FALSE};
+    std::atomic<bool> m_bCancel{false};
 };
 
 /** @brief TRUE when the task may move from Pending to Running. */

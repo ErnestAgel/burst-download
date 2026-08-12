@@ -51,7 +51,6 @@ static void InitDefaultOptions(TCliOptions& tOpts, s32 nDefaultThreads)
     tOpts.nTimeout = 60;
     tOpts.nJobs = 2;
     tOpts.bVideoMode = FALSE;
-    tOpts.bAutoUpdateParser = TRUE;
     tOpts.strCookiesFromBrowser = "";
     tOpts.strCookie = "";
 }
@@ -152,10 +151,6 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
         {
             tOpts.emAction = emCliActionUpdateParser;
             return TRUE;
-        }
-        else if (std::strcmp(pszArg, "--no-auto-update") == 0)
-        {
-            tOpts.bAutoUpdateParser = FALSE;
         }
         else if (std::strcmp(pszArg, "--verify") == 0)
         {

@@ -144,7 +144,7 @@ void CTaskModel::ResumeTask(u64 dwModelId)
     m_mapQueueToModel.emplace(dwQueueId, dwModelId);
 }
 
-void CTaskModel::StopTask(u64 dwModelId)
+void CTaskModel::DeleteTask(u64 dwModelId)
 {
     std::shared_ptr<TModelTask> pTask;
     u64 dwQueueId = 0;
@@ -377,6 +377,7 @@ BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
         std::lock_guard<std::mutex> lock(m_mutex);
         tOpts.pChunkEngine = m_pChunkEngine.get();
     }
+    tOpts.pCancelFlag = cCtx.CancelFlagPtr();
     /* P8-4: no fair-split budget.  Every task keeps its full chunk count
      * in flight; the shared engine's lanes advance all tasks concurrently. */
 

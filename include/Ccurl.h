@@ -167,6 +167,15 @@ public:
      */
     void SetChunkEngine(CCurlMultiEngine* pEngine);
 
+    /**
+     * @brief Attach an external task cancel flag (P8-4): the multi engine
+     *        polls this flag directly on every driver cycle, so a canceled
+     *        task is aborted promptly even when a stalled transfer never
+     *        reaches the progress/write callback checkpoints.
+     * @param pFlag Shared flag; null keeps the instance's own flag.
+     */
+    void SetExternalCancel(std::atomic<bool>* pFlag);
+
     /** @brief Request cancellation (write/progress callback checkpoints). */
     void Cancel();
 
@@ -283,6 +292,7 @@ private:
     string m_cookie;                /**< Request Cookie */
     CThreadPool* m_pChunkPool = nullptr;  /**< shared download pool (P8) */
     CCurlMultiEngine* m_pChunkEngine = nullptr;  /**< shared multi engine */
+    std::atomic<bool>* m_pExternalCancel = nullptr;  /**< task cancel flag */
     std::atomic<bool> m_cancel_flag{false};  /**< Cancellation flag */
     std::atomic<int> m_nChunksLeft{0};   /**< Chunks awaiting completion */
     std::mutex m_waitMutex;              /**< Protects the chunk wait */

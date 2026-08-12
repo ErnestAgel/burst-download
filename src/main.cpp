@@ -153,8 +153,6 @@ static void PrintUsage(const char* pszProg)
            "0)\n");
     printf("  --update-parser  update the built-in video parser to the latest "
            "version (needs network)\n");
-    printf("  --no-auto-update  video mode: disable automatic parser update "
-           "checks (default on, throttled to once per 24h)\n");
     printf("  --verify [sha256] compute and print the SHA-256 digest of the "
            "downloaded file after completion\n");
     printf("  --continue   resume an existing file instead of renaming it "
@@ -224,6 +222,7 @@ static BOOL32 ExecuteFileTask(const TCliOptions& tOpts,
                               const std::string& strUrl,
                               std::string& strOutPath,
                               CCurlMultiEngine* pChunkEngine,
+                              std::atomic<bool>* pCancelFlag,
                               std::string& strError)
 {
     std::string strFilename = tOpts.strFilename;
@@ -254,6 +253,7 @@ static BOOL32 ExecuteFileTask(const TCliOptions& tOpts,
     tOptsExec.bVerifySha256 = tOpts.bVerify;
     tOptsExec.bDeletePartial = tOpts.bDeletePartial;
     tOptsExec.pChunkEngine = pChunkEngine;
+    tOptsExec.pCancelFlag = pCancelFlag;
 
     TTaskExecCallbacks tCb;
     tCb.fnOnLog = [](const std::string& strMsg) {
@@ -367,16 +367,6 @@ int RunCli(int argc, char** argv)
             printf("output already exists, using: %s\n",
                    tOpts.strFilename.c_str());
         }
-        /* Auto-update the parser (24h throttle; failures are silent and do
-         * not block parsing). */
-        if (tOpts.bAutoUpdateParser == TRUE)
-        {
-            std::string strUpMsg;
-            if (EmbedAutoUpdateParser(strUpMsg) && !strUpMsg.empty())
-            {
-                printf("%s\n", strUpMsg.c_str());
-            }
-        }
         CCurlMultiEngine cChunkEngine(
             static_cast<u32>(ClampThreads(tOpts.nThreads)));
         if (!DownloadVideo(tOpts.strVideoUrl, tOpts.strFilename,
@@ -404,7 +394,7 @@ int RunCli(int argc, char** argv)
         std::string strOutPath;
         std::string strError;
         return ExecuteFileTask(tOpts, tOpts.vecUrls[0], strOutPath,
-                               &cChunkEngine, strError)
+                               &cChunkEngine, nullptr, strError)
                    ? 0
                    : 1;
     }
@@ -432,11 +422,11 @@ int RunCli(int argc, char** argv)
     cQueue.Start(
         [&tOpts, &cChunkEngine](TDownloadTask& tTask,
                               CTaskContext& cCtx) -> BOOL32 {
-            (void)cCtx;
             std::string strError;
             const BOOL32 bOk =
                 ExecuteFileTask(tOpts, tTask.strUrl, tTask.strOutput,
-                                &cChunkEngine, strError);
+                                &cChunkEngine, cCtx.CancelFlagPtr(),
+                                strError);
             tTask.strError = strError;
             return bOk;
         });

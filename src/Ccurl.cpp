@@ -472,6 +472,10 @@ void Ccurl::SetChunkEngine(CCurlMultiEngine* pEngine) {
   m_pChunkEngine = pEngine;
 }
 
+void Ccurl::SetExternalCancel(std::atomic<bool>* pFlag) {
+  m_pExternalCancel = pFlag;
+}
+
 void* Ccurl::Downloading(void* arg) {
   st_EasyList* info = (st_EasyList*)arg;
   const int max_retry = 3;
@@ -678,7 +682,11 @@ void Ccurl::SubmitChunkAttempt(st_EasyList* pInfo, BOOL32 bDelayed) {
   TChunkJob tJob;
   tJob.pUserData = pInfo;
   tJob.dwLane = pInfo->dwLane;
-  tJob.pCancelFlag = &m_cancel_flag;
+  /* The engine polls the task-level cancel flag directly (P8-4) so a
+   * canceled task is removed within one driver cycle even when a stalled
+   * transfer never fires the progress callback that sets m_cancel_flag. */
+  tJob.pCancelFlag = (m_pExternalCancel != nullptr) ? m_pExternalCancel
+                                                    : &m_cancel_flag;
   const std::string strRange = pInfo->use_range ? range : "";
   tJob.fnCreateEasy = [this, pInfo, strRange]() -> CURL* {
     if (pInfo->cancel_flag != nullptr && pInfo->cancel_flag->load()) {
@@ -1094,6 +1102,9 @@ void Ccurl::ClearPartMeta() {
 
 bool Ccurl::File_Init(const char* filename) {
   LOG_INFO(">>>>>\n");
+  if (m_cancel_flag.load()) {
+    return false;
+  }
 
   /* The file size was probed by Init -> get_Download_FileSize(). */
   if (m_fileLen <= 0) {
@@ -1333,6 +1344,12 @@ bool Ccurl::Uploading_Task(const char* server_url) {
 bool Ccurl::get_Download_FileSize() {
   LOG_INFO(">>>>>\n");
 
+  /* Cancellation checkpoint: stop during the probe phase returns promptly
+   * instead of waiting out connect/low-speed timeouts. */
+  if (m_cancel_flag.load()) {
+    return false;
+  }
+
   bool flag = false;
   m_easyHandle = curl_easy_init();
   if (m_easyHandle == nullptr) {
@@ -1395,6 +1412,9 @@ bool Ccurl::get_Download_FileSize() {
   }
   curl_easy_cleanup(m_easyHandle);
   m_easyHandle = nullptr;
+  if (m_cancel_flag.load()) {
+    return false;
+  }
 
   /* Attempt 2: Range GET bytes=0-0 - authoritative size probe (based on the
    * actual response, avoids HEAD false values). */
@@ -1450,6 +1470,9 @@ bool Ccurl::get_Download_FileSize() {
              "candidate\n",
              http_code, (long long)ctxRange.nTotal);
   }
+  if (m_cancel_flag.load()) {
+    return false;
+  }
 
   /* Fallback: when GET did not confirm, use the HEAD candidate. */
   if (head_len > 0) {
@@ -1475,6 +1498,10 @@ bool Ccurl::get_Download_FileSize() {
 }
 
 bool Ccurl::Check_Range_Support() {
+  if (m_cancel_flag.load()) {
+    m_range_supported = false;
+    return false;
+  }
   CURL* curl = curl_easy_init();
   if (curl == nullptr) {
     m_range_supported = false;
@@ -1505,6 +1532,10 @@ bool Ccurl::Check_Range_Support() {
       "like Gecko) Chrome/115.0.0.0 Safari/537.36");
   CURLcode res = curl_easy_perform(curl);
   curl_easy_cleanup(curl);
+  if (m_cancel_flag.load()) {
+    m_range_supported = false;
+    return false;
+  }
 
   m_range_supported = (res == CURLE_OK && ctx.bStatus206);
   if (!ctx.strEtag.empty()) {

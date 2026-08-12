@@ -61,6 +61,7 @@ const Entry kStrings[] = {
     {"button.downloading", "下载中…", "Downloading..."},
     {"button.resume", "继续", "Resume"},
     {"button.stop", "停止", "Stop"},
+    {"button.delete", "删除", "Delete"},
     {"button.cancel", "取消", "Cancel"},
     {"button.add", "添加任务", "Add Task"},
     {"button.pause", "暂停", "Pause"},

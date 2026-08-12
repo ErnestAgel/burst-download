@@ -582,7 +582,8 @@ void RenderTaskList(CTaskModel& cModel) {
         }
         ImGui::TableSetColumnIndex(5);
         if ((tRow.emState == emTaskRunning) || (tRow.emState == emTaskPending)) {
-            if (ImGui::SmallButton(i18n::T("button.pause"))) {
+            /* 停止 = cancel and keep partials so 继续 can resume. */
+            if (ImGui::SmallButton(i18n::T("button.stop"))) {
                 cModel.CancelTask(tRow.dwModelId);
             }
         }
@@ -596,8 +597,10 @@ void RenderTaskList(CTaskModel& cModel) {
             (tRow.emState == emTaskPending) ||
             (tRow.emState == emTaskCanceled)) {
             ImGui::SameLine();
-            if (ImGui::SmallButton(i18n::T("button.stop"))) {
-                cModel.StopTask(tRow.dwModelId);
+            /* 删除 = hard delete: cancel, remove artifacts, drop the row
+             * (running tasks finish their executor first). */
+            if (ImGui::SmallButton(i18n::T("button.delete"))) {
+                cModel.DeleteTask(tRow.dwModelId);
                 if (g_selected_model_id == tRow.dwModelId) {
                     g_selected_model_id = 0;
                 }

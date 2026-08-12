@@ -100,7 +100,6 @@ static void TestCliParseDownloadDefaults(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, tOpts.nThreads == 4);
     BURST_EXPECT_TRUE(cReport, tOpts.nTimeout == 60);
     BURST_EXPECT_TRUE(cReport, tOpts.bVideoMode == FALSE);
-    BURST_EXPECT_TRUE(cReport, tOpts.bAutoUpdateParser == TRUE);
 }
 
 /** @brief Test: -o marks the output as explicitly set (issue R11). */
@@ -173,14 +172,13 @@ static void TestCliParseTimeout(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, tOpts.nTimeout == 0);
 }
 
-/** @brief Test: --video, cookies, and --no-auto-update options. */
+/** @brief Test: --video and cookie options. */
 static void TestCliParseVideoOptions(CTestReport& cReport)
 {
     cReport.BeginCase("cli_parse: video options");
     std::vector<std::string> vecArgs =
         {"burst", "--video", "https://bili/BV1", "-o", "movie",
-         "--cookies-from-browser", "chrome", "--cookie", "SESSDATA=x",
-         "--no-auto-update"};
+         "--cookies-from-browser", "chrome", "--cookie", "SESSDATA=x"};
     TCliOptions tOpts = {};
     std::string strError;
     BOOL32 bOk = FALSE;
@@ -192,7 +190,6 @@ static void TestCliParseVideoOptions(CTestReport& cReport)
     BURST_EXPECT_STR_EQ(cReport, "movie", tOpts.strFilename);
     BURST_EXPECT_STR_EQ(cReport, "chrome", tOpts.strCookiesFromBrowser);
     BURST_EXPECT_STR_EQ(cReport, "SESSDATA=x", tOpts.strCookie);
-    BURST_EXPECT_TRUE(cReport, tOpts.bAutoUpdateParser == FALSE);
 }
 
 /** @brief Test: --update-parser action. */

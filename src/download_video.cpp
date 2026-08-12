@@ -40,6 +40,10 @@ void VideoDownloader::SetChunkEngine(CCurlMultiEngine* pEngine) {
     m_pChunkEngine = pEngine;
 }
 
+void VideoDownloader::SetExternalCancel(std::atomic<bool>* pFlag) {
+    m_pExternalCancel = pFlag;
+}
+
 bool VideoDownloader::IsCanceled() const {
     return m_cancel.load();
 }
@@ -128,6 +132,7 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
         unique_ptr<Ccurl> cc = make_unique<Ccurl>();
         cc->SetReferer(strVideoUrl);  /* anti-hotlink: video page as Referer */
         cc->SetChunkEngine(m_pChunkEngine);
+        cc->SetExternalCancel(m_pExternalCancel);
         if (!strCookie.empty()) {
             cc->SetCookie(strCookie);  /* streams may need login state */
         }

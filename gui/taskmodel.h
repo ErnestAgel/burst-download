@@ -69,7 +69,7 @@ public:
     void ResumeTask(u64 dwModelId);
 
     /** @brief Cancel and remove a task, deleting its artifacts. */
-    void StopTask(u64 dwModelId);
+    void DeleteTask(u64 dwModelId);
 
     /** @brief Remove a terminal task from the list. */
     void RemoveTask(u64 dwModelId);

@@ -12,6 +12,7 @@
  * callbacks and returns a boolean plus an error string.
  */
 
+#include <atomic>
 #include <functional>
 #include <string>
 #include <vector>
@@ -35,6 +36,8 @@ typedef struct tagTaskExecOptions
     BOOL32        bVerifySha256;
     BOOL32        bDeletePartial;
     CCurlMultiEngine* pChunkEngine; /**< shared curl_multi engine (P8-4) */
+    std::atomic<bool>* pCancelFlag; /**< task cancel flag polled by the
+                                     *   engine (may be null) */
 } TTaskExecOptions;
 
 /** @brief Callbacks used by the executor to report progress and events. */

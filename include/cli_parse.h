@@ -38,7 +38,6 @@ typedef struct tagCliOptions
     s32         nTimeout;
     s32         nJobs;
     BOOL32      bVideoMode;
-    BOOL32      bAutoUpdateParser;
     std::string strCookiesFromBrowser;
     std::string strCookie;
 } TCliOptions;

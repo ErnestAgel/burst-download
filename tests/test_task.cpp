@@ -37,8 +37,30 @@ static void TestTaskStateMachine(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, tTask.emState == emTaskCanceled);
 }
 
+/** @brief Test: the cancel flag can be polled through CancelFlagPtr (the
+ *         shared flag the download engines poll, P8-4). */
+static void TestTaskCancelFlagPtr(CTestReport& cReport)
+{
+    cReport.BeginCase("task: cancel flag pointer");
+    CTaskContext cCtx;
+    BURST_EXPECT_TRUE(cReport, cCtx.IsCanceled() == FALSE);
+
+    std::atomic<bool>* pFlag = cCtx.CancelFlagPtr();
+    BURST_EXPECT_TRUE(cReport, pFlag != nullptr);
+    BURST_EXPECT_TRUE(cReport, pFlag->load() == false);
+
+    cCtx.Cancel();
+    BURST_EXPECT_TRUE(cReport, pFlag->load() == true);
+    BURST_EXPECT_TRUE(cReport, cCtx.IsCanceled() == TRUE);
+
+    cCtx.Reset();
+    BURST_EXPECT_TRUE(cReport, pFlag->load() == false);
+    BURST_EXPECT_TRUE(cReport, cCtx.IsCanceled() == FALSE);
+}
+
 /** @brief Run all task state-machine tests. */
 void RunTaskTests(CTestReport& cReport)
 {
     TestTaskStateMachine(cReport);
+    TestTaskCancelFlagPtr(cReport);
 }

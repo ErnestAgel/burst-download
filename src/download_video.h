@@ -94,6 +94,13 @@ public:
     void SetChunkEngine(CCurlMultiEngine* pEngine);
 
     /**
+     * @brief Attach an external task cancel flag (P8-4): each stream's
+     *        Ccurl passes it to the multi engine for prompt cancellation.
+     * @param pFlag Shared flag; may be null.
+     */
+    void SetExternalCancel(std::atomic<bool>* pFlag);
+
+    /**
      * @brief Most recent failure reason (read after Result == Error).
      */
     std::string LastError() const;
@@ -136,5 +143,6 @@ private:
     std::string m_last_error;           /**< Failure reason (LastError()) */
     std::string m_output_path;          /**< Final artifact path */
     CCurlMultiEngine* m_pChunkEngine = nullptr; /**< Shared multi engine */
+    std::atomic<bool>* m_pExternalCancel = nullptr; /**< Task cancel flag */
     BOOL32 m_bParseOk = FALSE;           /**< Latest parse succeeded */
 };

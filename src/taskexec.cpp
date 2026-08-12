@@ -44,6 +44,7 @@ BOOL32 RunFileExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
     {
         cc->SetChunkEngine(tOpts.pChunkEngine);
     }
+    cc->SetExternalCancel(tOpts.pCancelFlag);
     if (!tOpts.strCookie.empty())
     {
         cc->SetCookie(tOpts.strCookie);
@@ -199,30 +200,11 @@ BOOL32 RunVideoExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
         return FALSE;
     }
 
-    /* Parser update policy (2026-08-12):
-     * - check once per process launch (not per task);
-     * - if parsing fails, force an update and retry parsing once;
-     * - if it still fails, report the real error. */
-    static BOOL32 s_bCheckedOnce = FALSE;
-    if (s_bCheckedOnce == FALSE)
-    {
-        s_bCheckedOnce = TRUE;
-        if (tCb.fnOnLog)
-        {
-            tCb.fnOnLog("[INFO] checking parser update (first launch)...");
-        }
-        std::string strUpMsg;
-        if (EmbedAutoUpdateParser(strUpMsg) && !strUpMsg.empty() &&
-            tCb.fnOnLog)
-        {
-            tCb.fnOnLog("[INFO] " + strUpMsg);
-        }
-    }
-
     auto fnRunOnce = [&](VideoResult& rOut, std::string& strOutPathOut,
                          std::string& strLastErr, BOOL32& bParseOkOut) {
         VideoDownloader vd;
         vd.SetChunkEngine(tOpts.pChunkEngine);
+        vd.SetExternalCancel(tOpts.pCancelFlag);
         if (tCb.fnOnStage)
         {
             vd.onStage = [&tCb, vd_ptr = &vd](int nStage) {
