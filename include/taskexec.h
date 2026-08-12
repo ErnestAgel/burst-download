@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "burst_types.h"
-#include "progress.h"
+#include "../src/progress.h"
 
 class CThreadPool;
 
