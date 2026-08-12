@@ -1,6 +1,6 @@
 /**
  * @file worker.cpp
- * @brief 后台下载工作线程实现（见 worker.h）
+ * @brief Background download worker thread implementation (see worker.h).
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -27,7 +27,7 @@ DownloadWorker::DownloadWorker() {
 }
 
 DownloadWorker::~DownloadWorker() {
-    /* 退出铁律（§8.4）：先置取消，再 join，禁止 detach 后退出 */
+    /* Exit rule: cancel first, then join; detach is forbidden. */
     if (m_thread.joinable()) {
         if (m_running.load()) {
             Cancel();
@@ -40,19 +40,21 @@ bool DownloadWorker::StartFileDownload(const std::string& url,
                                        const std::string& path, int threads,
                                        int timeout, bool preserve_snapshot) {
     if (m_running.load()) {
-        return false;  /* 单任务串行：已有一个任务在跑 */
+        return false;  /* single-task serial: a task is already running */
     }
     if (url.empty() || path.empty()) {
         return false;
     }
-    /* 前一个任务可能已自然结束但线程未 join（joinable 的 thread 重新赋值会 terminate） */
+    /* A previous task may have finished but was never joined (assigning a
+     * joinable thread would terminate). */
     if (m_thread.joinable()) {
         m_thread.join();
     }
     m_cancel.store(false);
     m_joined.store(false);
-    /* 新任务清空上一任务快照与日志；"继续"（断点续传）保留快照，
-     * 让 UI 从暂停时进度续走（Ccurl 首个进度回调含 resume 基数自动校准） */
+    /* A new task clears the previous snapshot/log; "Resume" keeps them so
+     * the UI continues from the paused progress (the first Ccurl progress
+     * callback recalibrates with the resume base). */
     if (!preserve_snapshot) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot = DownloadSnapshot();
@@ -60,7 +62,7 @@ bool DownloadWorker::StartFileDownload(const std::string& url,
         m_snapshot.eta = "--";
         m_log.clear();
     }
-    AddLog("[INFO] 开始任务: " + url);
+    AddLog("[INFO] task started: " + url);
 
     m_thread = std::thread(&DownloadWorker::WorkerFunc, this, url, path,
                            threads, timeout);
@@ -73,18 +75,18 @@ bool DownloadWorker::StartVideoDownload(const std::string& url,
                                         int threads, int timeout,
                                         bool preserve_snapshot) {
     if (m_running.load()) {
-        return false;  /* 单任务串行：已有一个任务在跑 */
+        return false;  /* single-task serial: a task is already running */
     }
     if (url.empty() || basename.empty()) {
         return false;
     }
-    /* 前一个任务可能已自然结束但线程未 join（joinable 的 thread 重新赋值会 terminate） */
+    /* A previous task may have finished but was never joined. */
     if (m_thread.joinable()) {
         m_thread.join();
     }
     m_cancel.store(false);
     m_joined.store(false);
-    /* 同 StartFileDownload：继续（续传）保留快照 */
+    /* Same as StartFileDownload: Resume keeps the snapshot. */
     if (!preserve_snapshot) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot = DownloadSnapshot();
@@ -92,7 +94,7 @@ bool DownloadWorker::StartVideoDownload(const std::string& url,
         m_snapshot.eta = "--";
         m_log.clear();
     }
-    AddLog("[INFO] 开始任务: " + url);
+    AddLog("[INFO] task started: " + url);
 
     m_thread = std::thread(&DownloadWorker::VideoWorkerFunc, this, url,
                            basename, threads, timeout);
@@ -102,7 +104,7 @@ bool DownloadWorker::StartVideoDownload(const std::string& url,
 
 void DownloadWorker::Cancel() {
     m_cancel.store(true);
-    AddLog("[INFO] 已请求取消");
+    AddLog("[INFO] cancel requested");
 }
 
 bool DownloadWorker::IsRunning() const {
@@ -112,7 +114,7 @@ bool DownloadWorker::IsRunning() const {
 int DownloadWorker::GetSnapshot(DownloadSnapshot& out) {
     std::lock_guard<std::mutex> lock(m_mutex);
     out = m_snapshot;
-    out.log = m_log;  /* 环形日志随快照带出（UI 日志区渲染） */
+    out.log = m_log;  /* the ring log travels with the snapshot */
     return out.stage;
 }
 
@@ -127,7 +129,8 @@ bool DownloadWorker::Join(int timeout_sec) {
     if (timeout_sec <= 0) {
         m_thread.join();
     } else {
-        /* 有限等待：轮询线程结束标志（std::thread 无 timed_join，轮询实现） */
+        /* Bounded wait: poll the thread-end flag (std::thread has no
+         * timed_join). */
         auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::seconds(timeout_sec);
         while (m_running.load() &&
@@ -135,7 +138,7 @@ bool DownloadWorker::Join(int timeout_sec) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
         if (m_running.load()) {
-            return false;  /* 超时：仅告警不强杀（§8.4） */
+            return false;  /* timeout: warn only, do not force-kill */
         }
         m_thread.join();
     }
@@ -162,7 +165,8 @@ void DownloadWorker::AddLog(const std::string& msg) {
 }
 
 void DownloadWorker::Reset() {
-    /* 停止任务后调用：清空快照与日志回初始空闲态（调用方须确保工作线程已结束） */
+    /* Called after Stop: clear the snapshot and log back to idle (the
+     * caller must ensure the worker thread has ended). */
     if (m_thread.joinable()) {
         m_thread.join();
     }
@@ -206,9 +210,11 @@ std::string DownloadWorker::FormatEta(double remain_bytes, double speed) {
 
 void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
                                 int threads, int timeout) {
-    SetStage(STAGE_DOWNLOADING, "downloading", "[INFO] 开始下载: " + url);
+    SetStage(STAGE_DOWNLOADING, "downloading", "[INFO] start downloading: " +
+                                                    url);
 
-    /* 启动前创建父目录（Ccurl 只写文件不建目录；失败留给 Init 报错，见注意事项 5） */
+    /* Create the parent directory before starting (Ccurl only writes the
+     * file; failures are left to Init to report). */
     std::error_code ec;
     std::filesystem::path fs_path(path);
     if (fs_path.has_parent_path() && !fs_path.parent_path().empty()) {
@@ -219,8 +225,9 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
     cc->onProgress = [this, cc_ptr = cc.get()](
                          const std::vector<ThreadProgress>& tp,
                          double totalPercent, double totalSpeed) {
-        /* 取消传导（Phase 1 遗漏接线，Phase 2 修复）：worker.Cancel() 只置标志，
-         * 必须在此转调 Ccurl::Cancel() 置 m_cancel_flag，写回调检查点才能中止传输 */
+        /* Cancel propagation: worker.Cancel() only sets the flag, so forward
+         * it to Ccurl::Cancel() here to set m_cancel_flag; the write-callback
+         * checkpoint then aborts the transfer. */
         if (m_cancel.load()) {
             cc_ptr->Cancel();
         }
@@ -228,8 +235,9 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
         m_snapshot.stage = STAGE_DOWNLOADING;
         m_snapshot.totalPercent = totalPercent;
         m_snapshot.totalSpeed = totalSpeed;
-        m_snapshot.threads.assign(tp.begin(), tp.end()); /* 复用已分配容量 */
-        /* 剩余字节 = 文件总大小 × (100 - 总进度)（threads 为文件内位置语义，不可累加） */
+        m_snapshot.threads.assign(tp.begin(), tp.end());
+        /* Remaining bytes = file total x (100 - total percent) (threads use
+         * in-file positions and cannot be summed). */
         double file_total = tp.empty() ? 0.0 : (double)tp[0].file_total;
         double remain = (file_total > 0 && totalPercent < 100)
                             ? file_total * (100.0 - totalPercent) / 100.0
@@ -237,9 +245,11 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
         m_snapshot.eta = FormatEta(remain, totalSpeed);
     };
 
-    /* 取消检查点（解析/探测阶段取消：置位后不再启动传输） */
+    /* Cancellation checkpoint (parse/probe stage: do not start the transfer
+     * when canceled). */
     if (m_cancel.load()) {
-        SetStage(STAGE_CANCELED, "canceled", "[INFO] 已取消（未开始传输）");
+        SetStage(STAGE_CANCELED, "canceled",
+                 "[INFO] canceled (transfer not started)");
         m_running.store(false);
         return;
     }
@@ -247,20 +257,21 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
     bool init_ok = cc->Init(url, path, threads, timeout);
     if (!init_ok) {
         if (m_cancel.load()) {
-            SetStage(STAGE_CANCELED, "canceled", "[INFO] 已取消");
+            SetStage(STAGE_CANCELED, "canceled", "[INFO] canceled");
         } else {
             std::string detail = cc->LastError();
             if (detail.empty()) {
                 detail = i18n::T("err.guide.init");
             }
-            std::string err = "[ERROR] 初始化失败: " + url;
+            std::string err = "[ERROR] init failed: " + url;
             SetStage(STAGE_ERROR, "error", err);
-            m_snapshot.error = detail;  /* 具体原因（供 F12 弹窗） */
+            m_snapshot.error = detail;  /* specific reason (F12 popup) */
         }
         m_running.store(false);
         return;
     }
-    /* 立即推送一次 0 进度快照：UI 在首个 XFERINFO 回调前就绘制电池格分隔线 */
+    /* Push an immediate 0-progress snapshot so the UI draws the battery-cell
+     * separators before the first XFERINFO callback. */
     {
         auto parts = cc->SnapshotParts();
         cc->onProgress(parts, 0.0, 0.0);
@@ -268,15 +279,17 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
 
     bool ok = cc->Download_Task();
     if (ok) {
-        /* 下载完成：修正快照，总进度与各线程进度均置 100%
-         * （最后一次进度回调可能停在 <100%，且完成后不再有回调更新 UI）
-         * 完成优先判定：取消/完成竞态（Run 已返回后才点取消）不误报已取消 */
+        /* Done: fix the snapshot so the total and per-thread progress are
+         * 100% (the last progress callback may have stopped below 100% and
+         * no further callback arrives).  Done wins over cancel races: a
+         * cancel arriving after Run returned must not misreport. */
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_snapshot.totalPercent = 100.0;
             m_snapshot.totalSpeed = 0;
             m_snapshot.eta = "--";
-            /* 完成：每线程 downloaded=分片终点（文件内位置），percent=其文件内终点百分比 */
+            /* Done: each thread's downloaded = chunk end (in-file position),
+             * percent = its in-file end percentage. */
             for (auto& t : m_snapshot.threads) {
                 t.downloaded = t.total;
                 t.percent =
@@ -286,14 +299,14 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
                 t.speed = 0;
             }
         }
-        SetStage(STAGE_DONE, path, "[INFO] 下载完成: " + path);
+        SetStage(STAGE_DONE, path, "[INFO] download complete: " + path);
     } else if (m_cancel.load() || cc->IsCanceled()) {
         SetStage(STAGE_CANCELED, "canceled",
-                 "[INFO] 已取消，部分文件保留可续传");
+                 "[INFO] canceled, partial files kept for resume");
     } else {
-        m_snapshot.error = "下载失败（部分线程未完成），详见 download.log";
-        SetStage(STAGE_ERROR, "error",
-                 "[ERROR] 下载失败: " + url);
+        m_snapshot.error =
+            "download failed (some threads incomplete), see download.log";
+        SetStage(STAGE_ERROR, "error", "[ERROR] download failed: " + url);
     }
     m_running.store(false);
 }
@@ -301,38 +314,44 @@ void DownloadWorker::WorkerFunc(const std::string& url, const std::string& path,
 void DownloadWorker::VideoWorkerFunc(const std::string& url,
                                      const std::string& basename,
                                      int threads, int timeout) {
-    /* 启动前创建父目录（basename 的父目录，如用户填的保存目录；Ccurl 只写文件不建目录） */
+    /* Create the parent directory before starting (the basename's parent,
+     * e.g. the user's save directory; Ccurl only writes the file). */
     std::error_code ec;
     std::filesystem::path fs_path(basename);
     if (fs_path.has_parent_path() && !fs_path.parent_path().empty()) {
         std::filesystem::create_directories(fs_path.parent_path(), ec);
     }
 
-    /* 取消检查点（解析前）：置位则不再启动传输 */
+    /* Cancellation checkpoint (before parsing): do not start when canceled. */
     if (m_cancel.load()) {
-        SetStage(STAGE_CANCELED, "", "[INFO] 已取消（未开始传输）");
+        SetStage(STAGE_CANCELED, "", "[INFO] canceled (transfer not started)");
         m_running.store(false);
         return;
     }
 
-    /* 确保嵌入的 Python 运行时已初始化（幂等；main_gui 启动时已尝试 exe 同目录路径，
-     * 此处兜底再试一次——开发构建可回退编译期宏 third_party/python/runtime）。
-     * 初始化失败：明确报错指引，不继续解析 */
+    /* Ensure the embedded Python runtime is initialized (idempotent;
+     * main_gui already tried the exe-adjacent path at startup, this is a
+     * fallback - the dev build can fall back to the compile-time macro
+     * third_party/python/runtime).  On failure report a clear error and do
+     * not parse. */
     if (!EmbedPythonInit()) {
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_snapshot.error =
-                "Python 运行时初始化失败：缺少运行时资源目录 assets/（stdlib/yt_dlp）。\n"
-                "开发构建使用仓库 third_party/python/runtime；发布物需将 assets/ "
-                "随 exe 同目录分发。";
+                "Python runtime init failed: the assets/ runtime directory "
+                "(stdlib/yt_dlp) is missing.\n"
+                "Dev builds use the repository third_party/python/runtime; "
+                "releases must ship assets/ next to the executable.";
         }
         SetStage(STAGE_ERROR, "",
-                 "[ERROR] 视频解析失败: Python 运行时未初始化");
+                 "[ERROR] video parsing failed: Python runtime is not "
+                 "initialized");
         m_running.store(false);
         return;
     }
 
-    /* 自动更新视频解析组件（24h 节流一次；失败静默，不阻塞解析） */
+    /* Auto-update the video parser (24h throttle; failures are silent and do
+     * not block parsing). */
     {
         std::string up_msg;
         if (EmbedAutoUpdateParser(up_msg) && !up_msg.empty()) {
@@ -341,17 +360,20 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
     }
 
     VideoDownloader vd;
-    /* 阶段回调（F8）：解析中→下载视频轨→下载音频轨→合并中；
-     * 进度回调不覆盖 stage，保持细分阶段显示 */
+    /* Stage callback (F8): parsing -> downloading video track -> downloading
+     * audio track -> merging; progress callbacks do not overwrite the stage
+     * so the fine-grained stage text stays visible. */
     vd.onStage = [this, vd_ptr = &vd](int stage) {
-        /* 取消传导：worker.Cancel() → VideoDownloader::Cancel()
-         * （解析前/每流下载前/合并前检查点依赖 vd.m_cancel 生效） */
+        /* Cancel propagation: worker.Cancel() -> VideoDownloader::Cancel()
+         * (the before-parse / before-stream / before-merge checkpoints rely
+         * on vd.m_cancel). */
         if (m_cancel.load()) {
             vd_ptr->Cancel();
         }
         std::lock_guard<std::mutex> lock(m_mutex);
         m_snapshot.stage = stage;
-        /* 流切换（视频轨→音频轨）：上一流进度 100% 需重置，避免总进度条倒跳 */
+        /* Stream switch (video -> audio): reset the previous stream's 100%
+         * progress so the total bar does not jump backwards. */
         if (stage == STAGE_AUDIO_DL) {
             m_snapshot.totalPercent = 0;
             m_snapshot.totalSpeed = 0;
@@ -359,11 +381,13 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
             m_snapshot.threads.clear();
         }
     };
-    /* 单流下载进度回调：与文件模式相同的快照更新（每 ~200ms，锁内拷贝标量） */
+    /* Per-stream progress callback: same snapshot updates as file mode
+     * (~200ms, scalars copied under lock). */
     vd.onProgress = [this, vd_ptr = &vd](
                         const std::vector<ThreadProgress>& tp,
                         double totalPercent, double totalSpeed) {
-        /* 下载中取消传导：置位后 Ccurl 写回调检查点中止当前流（<1s） */
+        /* Cancel propagation during a download: the Ccurl write-callback
+         * checkpoint aborts the current stream (<1s). */
         if (m_cancel.load()) {
             vd_ptr->Cancel();
         }
@@ -371,7 +395,7 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
         m_snapshot.totalPercent = totalPercent;
         m_snapshot.totalSpeed = totalSpeed;
         m_snapshot.threads.assign(tp.begin(), tp.end());
-        /* 剩余字节 = 文件总大小 × (100 - 总进度)（threads 为文件内位置语义，不可累加） */
+        /* Remaining bytes = file total x (100 - total percent). */
         double file_total = tp.empty() ? 0.0 : (double)tp[0].file_total;
         double remain = (file_total > 0 && totalPercent < 100)
                             ? file_total * (100.0 - totalPercent) / 100.0
@@ -382,7 +406,8 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
 
     VideoResult result = vd.Run(url, basename, threads, timeout);
     if (result == VideoResult::Ok) {
-        /* 完成优先判定：取消/完成竞态（Run 已返回后才点取消）不误报已取消 */
+        /* Done wins over cancel races (a cancel arriving after Run returned
+         * must not misreport). */
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_snapshot.totalPercent = 100.0;
@@ -398,18 +423,20 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
             }
         }
         SetStage(STAGE_DONE, vd.OutputPath(),
-                 "[INFO] 视频下载完成: " + vd.OutputPath());
+                 "[INFO] video download complete: " + vd.OutputPath());
     } else if (result == VideoResult::Canceled || m_cancel.load()) {
-        SetStage(STAGE_CANCELED, "", "[INFO] 已取消，部分文件保留可续传");
+        SetStage(STAGE_CANCELED, "", "[INFO] canceled, partial files kept "
+                                     "for resume");
     } else {
-        /* 解析/下载/合并失败：具体原因传至 F12 弹窗（锁保护，UI 每帧读取） */
+        /* Parse/download/merge failure: the specific reason goes to the F12
+         * popup (lock-protected, read by the UI every frame). */
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_snapshot.error = vd.LastError().empty()
-                                   ? "视频下载失败"
+                                   ? "video download failed"
                                    : vd.LastError();
         }
-        SetStage(STAGE_ERROR, "", "[ERROR] 视频下载失败: " + url);
+        SetStage(STAGE_ERROR, "", "[ERROR] video download failed: " + url);
     }
     m_running.store(false);
 }

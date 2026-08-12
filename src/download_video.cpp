@@ -1,12 +1,16 @@
 /**
  * @file download_video.cpp
- * @brief 视频下载编排实现（见 download_video.h）
+ * @brief Video download orchestration implementation (see download_video.h).
  *
- * 逻辑源自 main.cpp 的 DownloadVideo（CLI），抽取为 CLI/GUI 共用：
- *   - 阶段回调 onStage 供 GUI 显示"解析中/下载视频轨/下载音频轨/合并中"（F8）；
- *   - 每流使用独立 Ccurl 实例（SetReferer 防盗链 + 可选 Cookie），onProgress 透传；
- *   - 取消检查点：解析前、每流下载前、合并前（§5.2）；下载中经 Ccurl 写回调中止；
- *   - 合并成功后清理音视频中间文件（与 CLI 一致）；合并失败保留两轨供手动合并。
+ * Logic extracted from main.cpp DownloadVideo (CLI) and shared by CLI/GUI:
+ *   - onStage callbacks drive the GUI stage text (parsing / downloading the
+ *     video track / downloading the audio track / merging);
+ *   - each stream uses its own Ccurl instance (SetReferer anti-hotlink +
+ *     optional cookie); progress is forwarded via onProgress;
+ *   - cancellation checkpoints: before parsing, before each stream, before
+ *     merging; during downloads the Ccurl write callback aborts;
+ *   - on success the intermediate audio/video files are cleaned up (same as
+ *     CLI); on merge failure both tracks are kept for manual merging.
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -44,175 +48,185 @@ std::string VideoDownloader::OutputPath() const {
     return m_output_path;
 }
 
-void VideoDownloader::Log(const std::string& msg) {
+void VideoDownloader::Log(const std::string& strMsg) {
     if (onLog) {
-        onLog(msg);
+        onLog(strMsg);
     } else {
-        printf("%s\n", msg.c_str());
+        printf("%s\n", strMsg.c_str());
     }
 }
 
-VideoResult VideoDownloader::Run(const std::string& video_url,
-                                 const std::string& basename, int threads,
-                                 int timeout,
-                                 const std::string& cookies_from_browser,
-                                 const std::string& cookie) {
+VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
+                                 const std::string& strBasename, int nThreads,
+                                 int nTimeout,
+                                 const std::string& strCookiesFromBrowser,
+                                 const std::string& strCookie) {
     m_last_error.clear();
     m_output_path.clear();
 
-    /* 取消检查点：解析前（§5.2） */
+    /* Cancellation checkpoint: before parsing. */
     if (m_cancel.load()) {
         return VideoResult::Canceled;
     }
 
-    /* ---- 阶段 1：解析（同步阻塞，无进度，仅阶段状态） ---- */
+    /* ---- Stage 1: parse (synchronous, no progress, stage text only) ---- */
     if (onStage) {
         onStage(STAGE_PARSING);
     }
-    Log("[INFO] 开始解析视频: " + video_url);
-    vector<string> streams;
-    string parse_err;
-    if (!ParseVideoUrls(video_url, streams, cookies_from_browser, cookie,
-                        &parse_err)) {
+    Log("[INFO] start parsing video: " + strVideoUrl);
+    vector<string> vecStreams;
+    string strParseErr;
+    if (!ParseVideoUrls(strVideoUrl, vecStreams, strCookiesFromBrowser,
+                        strCookie, &strParseErr)) {
         m_last_error =
-            "视频解析失败：请确认 URL 有效/可访问，且 Python 运行时资源完整";
-        if (parse_err.empty()) {
-            parse_err = "未获取到可下载的媒体流（无详细错误信息）";
+            "video parsing failed: verify the URL is valid/reachable and "
+            "the Python runtime assets are intact";
+        if (strParseErr.empty()) {
+            strParseErr = "no downloadable media stream obtained "
+                          "(no detailed error available)";
         }
-        if (!parse_err.empty()) {
-            m_last_error += "\n[详细原因] " + parse_err;
+        if (!strParseErr.empty()) {
+            m_last_error += "\n[detail] " + strParseErr;
         }
         Log("[ERROR] " + m_last_error);
         return VideoResult::Error;
     }
-    Log("[INFO] 解析成功: 共 " + std::to_string(streams.size()) +
-        " 个媒体流");
+    Log("[INFO] parsing succeeded: " + std::to_string(vecStreams.size()) +
+        " media streams");
 
-    /* ---- 阶段 2：逐流下载（DASH 分离时最多视频轨 + 音频轨 2 个流） ---- */
-    const size_t stream_count = streams.size() < 2 ? streams.size() : 2;
-    for (size_t i = 0; i < stream_count; i++) {
-        /* 取消检查点：每流下载前 */
+    /* ---- Stage 2: download each stream (DASH: video + audio, max 2) ---- */
+    const size_t nStreamCount =
+        vecStreams.size() < 2 ? vecStreams.size() : 2;
+    for (size_t nIndex = 0; nIndex < nStreamCount; nIndex++) {
+        /* Cancellation checkpoint: before each stream. */
         if (m_cancel.load()) {
             return VideoResult::Canceled;
         }
-        const string out =
-            (i == 0) ? basename + ".mp4" : basename + ".m4a";
+        const string strOut =
+            (nIndex == 0) ? strBasename + ".mp4" : strBasename + ".m4a";
         if (onStage) {
-            onStage(i == 0 ? STAGE_VIDEO_DL : STAGE_AUDIO_DL);
+            onStage(nIndex == 0 ? STAGE_VIDEO_DL : STAGE_AUDIO_DL);
         }
-        Log("[INFO] 正在下载第 " + std::to_string(i + 1) + " 个流 -> " + out);
+        Log("[INFO] downloading stream " + std::to_string(nIndex + 1) +
+            " -> " + strOut);
 
         unique_ptr<Ccurl> cc = make_unique<Ccurl>();
-        cc->SetReferer(video_url); /* 防盗链：以视频页 URL 作为 Referer（如 B站视频流） */
-        if (!cookie.empty()) {
-            cc->SetCookie(cookie); /* 下载流时携带 Cookie（高清流需登录态） */
+        cc->SetReferer(strVideoUrl);  /* anti-hotlink: video page as Referer */
+        if (!strCookie.empty()) {
+            cc->SetCookie(strCookie);  /* streams may need login state */
         }
-        /* 包装进度回调：先检查本编排器取消标志 → 置位则 Cancel 当前流
-         * （Ccurl 写回调检查点秒级中止），再转发给调用方回调。
-         * 此前直接透传导致 GUI 取消只置 vd.m_cancel、当前流不中断（问题 2） */
+        /* Wrapped progress callback: check the orchestrator cancel flag
+         * first, cancel the current stream on cancel (the Ccurl write
+         * callback aborts within seconds), then forward to the caller. */
         {
             Ccurl* cc_ptr = cc.get();
             auto user_cb = onProgress;
             cc->onProgress =
                 [this, cc_ptr, user_cb](const std::vector<ThreadProgress>& tp,
-                                        double totalPercent,
-                                        double totalSpeed) {
+                                        double dTotalPercent,
+                                        double dTotalSpeed) {
                     if (m_cancel.load()) {
                         cc_ptr->Cancel();
                     }
                     if (user_cb) {
-                        user_cb(tp, totalPercent, totalSpeed);
+                        user_cb(tp, dTotalPercent, dTotalSpeed);
                     }
                 };
         }
 
-        if (!cc->Init(streams[i], out, threads, timeout)) {
+        if (!cc->Init(vecStreams[nIndex], strOut, nThreads, nTimeout)) {
             m_last_error = cc->LastError().empty()
-                               ? ("初始化失败: " + out)
+                               ? ("init failed: " + strOut)
                                : cc->LastError();
-            Log("[ERROR] 初始化失败: " + out + " - " + m_last_error);
+            Log("[ERROR] init failed: " + strOut + " - " + m_last_error);
             return VideoResult::Error;
         }
-        /* 立即推送 0 进度快照：UI 在首个回调前绘制电池格分隔线（本流） */
+        /* Push an immediate 0-progress snapshot so the UI can draw the
+         * battery-cell separators before the first callback. */
         if (onProgress) {
             auto parts = cc->SnapshotParts();
             onProgress(parts, 0.0, 0.0);
         }
         if (!cc->Download_Task()) {
             if (m_cancel.load() || cc->IsCanceled()) {
-                Log("[INFO] 已取消");
+                Log("[INFO] canceled");
                 return VideoResult::Canceled;
             }
-            m_last_error = "第 " + std::to_string(i + 1) + " 个流下载失败: " +
-                           out;
+            m_last_error = "stream " + std::to_string(nIndex + 1) +
+                           " download failed: " + strOut;
             Log("[ERROR] " + m_last_error);
             return VideoResult::Error;
         }
     }
 
-    /* ---- 阶段 3：合并（音视频分离流 DASH；单流跳过） ---- */
-    if (stream_count > 1) {
-        /* 取消检查点：合并前 */
+    /* ---- Stage 3: merge (DASH separated tracks; single stream skips) ---- */
+    if (nStreamCount > 1) {
+        /* Cancellation checkpoint: before merging. */
         if (m_cancel.load()) {
             return VideoResult::Canceled;
         }
         if (onStage) {
             onStage(STAGE_MERGING);
         }
-        Log("[INFO] 开始合并音视频轨...");
-        const string vfile = basename + ".mp4";
-        const string afile = basename + ".m4a";
-        /* 输出容器按视频轨编码自动选择：VP9/AV1 -> .mkv，其余 -> .mp4 */
-        const string merged = basename + "_full" + SuggestMergeExt(vfile);
-        string merr;
-        string merged_used = merged;
-        if (!MergeMp4(vfile, afile, merged, merr)) {
-            /* 通用兜底：mp4 容器无法写入某些编码（如 Opus 音频/HEVC 标签缺失）时，
-             * 回退 Matroska（.mkv，兼容几乎所有编码），不依赖具体视频 URL */
-            if (merged.size() > 4 &&
-                merged.compare(merged.size() - 4, 4, ".mp4") == 0) {
-                const string merged_mkv =
-                    merged.substr(0, merged.size() - 4) + ".mkv";
-                string merr2;
-                if (MergeMp4(vfile, afile, merged_mkv, merr2)) {
-                    Log("[INFO] mp4 容器不兼容，已改用 mkv 合并 -> " +
-                        merged_mkv);
-                    merged_used = merged_mkv;
-                    merr.clear();
+        Log("[INFO] start merging audio/video tracks...");
+        const string strVFile = strBasename + ".mp4";
+        const string strAFile = strBasename + ".m4a";
+        /* Container chosen by the video codec: VP9/AV1 -> .mkv, else .mp4. */
+        const string strMerged =
+            strBasename + "_full" + SuggestMergeExt(strVFile);
+        string strMerr;
+        string strMergedUsed = strMerged;
+        if (!MergeMp4(strVFile, strAFile, strMerged, strMerr)) {
+            /* Generic fallback: when the mp4 container rejects some codecs
+             * (e.g. Opus audio / missing HEVC tags), retry with Matroska
+             * (.mkv, compatible with almost all codecs). */
+            if (strMerged.size() > 4 &&
+                strMerged.compare(strMerged.size() - 4, 4, ".mp4") == 0) {
+                const string strMergedMkv =
+                    strMerged.substr(0, strMerged.size() - 4) + ".mkv";
+                string strMerr2;
+                if (MergeMp4(strVFile, strAFile, strMergedMkv, strMerr2)) {
+                    Log("[INFO] mp4 container incompatible, merged to mkv "
+                        "instead -> " + strMergedMkv);
+                    strMergedUsed = strMergedMkv;
+                    strMerr.clear();
                 } else {
-                    merr += "（mp4 失败）；mkv 回退也失败: " + merr2;
+                    strMerr += " (mp4 failed); mkv fallback also failed: " +
+                               strMerr2;
                 }
             }
         }
-        if (merr.empty()) {
-            Log("[INFO] 已自动合并音视频轨 -> " + merged_used);
-            m_output_path = merged_used;
-            /* 合并成功：删除音视频中间文件与分片续传元数据，仅保留合并产物
-             * （std::filesystem::remove 跨平台，Windows 中文路径无乱码） */
-            std::error_code rm_ec;
-            bool v_ok = std::filesystem::remove(vfile, rm_ec);
-            rm_ec.clear();
-            bool a_ok = std::filesystem::remove(afile, rm_ec);
-            std::filesystem::remove(vfile + ".curlbolt.part", rm_ec);
-            rm_ec.clear();
-            std::filesystem::remove(afile + ".curlbolt.part", rm_ec);
-            if (v_ok && a_ok) {
-                Log("[INFO] 已清理中间文件: " + vfile + ", " + afile);
+        if (strMerr.empty()) {
+            Log("[INFO] auto-merged audio/video tracks -> " + strMergedUsed);
+            m_output_path = strMergedUsed;
+            /* On success delete the intermediate track files and chunk
+             * resume metadata, keeping only the merged output. */
+            std::error_code ec;
+            const bool bVOk = std::filesystem::remove(strVFile, ec);
+            ec.clear();
+            const bool bAOk = std::filesystem::remove(strAFile, ec);
+            std::filesystem::remove(strVFile + ".curlbolt.part", ec);
+            ec.clear();
+            std::filesystem::remove(strAFile + ".curlbolt.part", ec);
+            if (bVOk && bAOk) {
+                Log("[INFO] cleaned up intermediate files: " + strVFile +
+                    ", " + strAFile);
             } else {
-                Log("[WARN] 中间文件清理失败，可手动删除 " + vfile + " 和 " +
-                    afile);
+                Log("[WARN] failed to clean up intermediate files, delete "
+                    "manually: " + strVFile + " and " + strAFile);
             }
         } else {
-            m_last_error = "自动合并失败: " + merr;
+            m_last_error = "auto merge failed: " + strMerr;
             Log("[ERROR] " + m_last_error);
-            Log("[INFO] 提示: 可保留两轨文件，用外部工具手动合并: "
-                "ffmpeg -i " + vfile + " -i " + afile + " -c copy " +
-                merged_used);
-            return VideoResult::Error; /* 两轨已下载，但用户期望单文件 → 报错指引 */
+            Log("[INFO] hint: keep both track files and merge manually with "
+                "an external tool: ffmpeg -i " + strVFile + " -i " +
+                strAFile + " -c copy " + strMergedUsed);
+            return VideoResult::Error;
         }
     } else {
-        /* 单流（如纯音频视频页）：无合并，产物即视频轨文件 */
-        m_output_path = basename + ".mp4";
+        /* Single stream (e.g. audio-only page): no merge, the output is the
+         * video track file. */
+        m_output_path = strBasename + ".mp4";
     }
 
     return VideoResult::Ok;

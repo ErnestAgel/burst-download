@@ -1,11 +1,13 @@
 /**
  * @file video.cpp
- * @brief 视频直链解析模块实现：进程内嵌入 CPython + yt_dlp 解析视频网页 URL
+ * @brief Video URL parsing module implementation: in-process embedded
+ *        CPython + yt_dlp parses video page URLs.
  *
- * 设计：运行时资源（stdlib/、yt_dlp/）由 embed_python 模块从 assets/
- * 目录加载，纯进程内代码调用，不依赖任何外部程序。解析得到媒体流直链后
- * 交由本项目多线程分片下载器下载。高清流解析可携带浏览器登录 Cookie
- * （--cookies-from-browser 或 --cookie），如 B站 720p+ 需要登录态。
+ * Design: runtime assets (stdlib/, yt_dlp/) are loaded by the embed_python
+ * module from the assets/ directory; pure in-process calls, no external
+ * programs.  Parsed media stream URLs are downloaded by the project's
+ * multi-threaded chunked downloader.  HD streams may carry browser login
+ * cookies (--cookies-from-browser or --cookie), e.g. Bilibili 720p+.
  *
  * @author ErnestAgel
  * @date 2026-08-06
@@ -16,20 +18,23 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+
 #include "embed_python.h"
 #include "video.h"
 
 using namespace std;
 
-bool ParseVideoUrls(const string& url, vector<string>& urls,
-                    const string& cookies_from_browser,
-                    const string& cookie,
-                    string* err) {
-  string detail;
-  if (!EmbedParseVideoUrls(url, urls, cookies_from_browser, cookie, detail)) {
-    fprintf(stderr, "[video] 解析失败: %s\n", detail.c_str());
-    if (err) *err = detail;
-    return false;
-  }
-  return true;
+bool ParseVideoUrls(const string& strUrl, vector<string>& vecUrls,
+                    const string& strCookiesFromBrowser,
+                    const string& strCookie, string* pstrErr) {
+    string strDetail;
+    if (!EmbedParseVideoUrls(strUrl, vecUrls, strCookiesFromBrowser,
+                             strCookie, strDetail)) {
+        fprintf(stderr, "[video] parsing failed: %s\n", strDetail.c_str());
+        if (pstrErr) {
+            *pstrErr = strDetail;
+        }
+        return false;
+    }
+    return true;
 }

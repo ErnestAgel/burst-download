@@ -42,7 +42,8 @@ static void InitDefaultOptions(TCliOptions& tOpts, s32 nDefaultThreads)
     tOpts.emAction = emCliActionNone;
     tOpts.strUrl = "";
     tOpts.strVideoUrl = "";
-    tOpts.strFilename = BURST_CLI_DEFAULT_FILENAME;
+    tOpts.strFilename = "";
+    tOpts.bOutputSet = FALSE;
     tOpts.nThreads = nDefaultThreads;
     tOpts.nTimeout = 60;
     tOpts.bVideoMode = FALSE;
@@ -90,6 +91,7 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
                  NextArgIsValue(nArgc, nIndex, ppszArgv))
         {
             tOpts.strFilename = ppszArgv[nIndex + 1];
+            tOpts.bOutputSet = TRUE;
             ++nIndex;
         }
         else if ((std::strcmp(pszArg, "-t") == 0) &&
@@ -149,7 +151,7 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
         }
         else
         {
-            strError = "未知参数: ";
+            strError = "unknown argument: ";
             strError += pszArg;
             return FALSE;
         }

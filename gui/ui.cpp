@@ -1,6 +1,6 @@
 /**
  * @file ui.cpp
- * @brief 主界面渲染实现（见 ui.h）
+ * @brief Main UI rendering implementation (see ui.h).
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -27,15 +27,16 @@
 #include "imgui.h"
 #include "toggle.h"
 #include "Ccurl.h"  /* MaxThread */
+#include "pathutil.h"
 #include "version.h"
 
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>
-#include <shobjidl.h>  /* IFileDialog 目录选择 */
+#include <shobjidl.h>  /* IFileDialog folder picker */
 #else
 #include <sys/stat.h>
-#include <filesystem>  /* Linux 目录浏览器初始目录 */
+#include <filesystem>  /* Linux directory browser initial directory */
 #include "dirbrowser.h"
 #endif
 
@@ -43,34 +44,43 @@ namespace ui {
 
 namespace {
 
-/* 自绘标题栏高度（无边框窗口，替代系统标题栏） */
+/* Custom title bar height (borderless window, replaces the system title
+ * bar). */
 #ifdef _WIN32
-const float kTitleBarH = 36.0f; /* Windows 自绘标题栏高度 */
+const float kTitleBarH = 36.0f; /* Windows custom title bar height */
 #else
-const float kTitleBarH = 0.0f; /* Linux 用系统标题栏，内容区从窗口顶部开始 */
+const float kTitleBarH = 0.0f;  /* Linux uses the system title bar; the
+                                 * content area starts at the window top */
 #endif
 
-/* GLFW 窗口指针（ui::Init 注入，标题栏按钮/拖动/resize 用） */
+/* GLFW window pointer (injected by ui::Init; used by the title bar buttons,
+ * drag and resize). */
 GLFWwindow* g_window = nullptr;
 
-/* ---- 表单状态（UI 主线程独占，工作线程不触碰） ---- */
-/* 本机可用线程上限：随核数自适应 4~8（F4，见 Ccurl.h BurstMaxThreads） */
+/* ---- Form state (UI thread only; worker threads never touch) ---- */
+/* Machine thread cap: adapts 4~8 to the CPU core count (see
+ * BurstMaxThreads). */
 const int kHardwareMax = BurstMaxThreads();
 
 char g_url[2048] = {0};
 char g_path[2048] = {0};
-int g_threads = BurstDefaultThreads();   /* 默认 = 合理值 2~4 */
+int g_threads = BurstDefaultThreads();   /* default = sensible 2~4 */
 bool g_video_mode = false;
 
-/* 下载控制状态机（F9/F10）：IDLE → RUNNING → PAUSED → IDLE
- *  - 下载中第一次点"取消" = 暂停意图（中止传输，保留缓存文件，可断点续传）
- *  - 暂停后按钮1 = "继续"（续传），按钮2 = "停止"（红色，删除缓存并刷新 UI）
- *  - g_paused=true 表示处于暂停态；g_last_path/g_last_video 供停止时删除缓存用 */
+/* Download control state machine (F9/F10): IDLE -> RUNNING -> PAUSED -> IDLE
+ *  - the first Cancel while downloading = pause intent (abort the transfer,
+ *    keep the cache file for resume)
+ *  - when paused, button 1 = Resume (resume), button 2 = Stop (red, deletes
+ *    the cache and refreshes the UI)
+ *  - g_paused=true means paused; g_last_path/g_last_video are used by Stop
+ *    to delete the cache */
 bool g_paused = false;
-std::string g_last_path;   /* 最近任务目标路径/基础名（停止时删除缓存） */
-bool g_last_video = false; /* 最近任务是否视频模式 */
+std::string g_last_path;   /* last task target path/base name (Stop deletes
+                            * its cache) */
+bool g_last_video = false; /* whether the last task was video mode */
 
-/* 前向声明（RenderForm 在 OnStartClicked/StartDownload 之前定义） */
+/* Forward declarations (RenderForm is defined before OnStartClicked /
+ * StartDownload). */
 void OnStartClicked(DownloadWorker& worker);
 void StartDownload(DownloadWorker& worker, const std::string& url,
                    const std::string& path, int threads,
@@ -80,7 +90,7 @@ void StartVideoDownload(DownloadWorker& worker, const std::string& url,
                         bool preserve_snapshot = false);
 void StopAndClear(DownloadWorker& worker);
 
-/* 弹窗状态 */
+/* Popup state */
 bool g_exists_open = false;
 bool g_error_open = false;
 bool g_done_open = false;
@@ -89,28 +99,32 @@ std::string g_done_path;
 bool g_about_open = false;
 
 #ifndef _WIN32
-/* Linux 内置目录浏览器状态（Windows 用原生 IFileDialog，见 RenderForm） */
+/* Linux built-in directory browser state (Windows uses the native
+ * IFileDialog, see RenderForm). */
 bool g_dirbrowse_open = false;
 std::string g_dirbrowse_dir;
 #endif
 
-/* 上次快照 stage（检测完成/取消/错误的边沿，避免重复弹窗） */
+/* Last snapshot stage (edge detection for done/canceled/error, avoids
+ * duplicate popups). */
 int g_last_stage = STAGE_IDLE;
-bool g_started = false;   /* 本会话是否启动过任务（边沿检测使能） */
+bool g_started = false;   /* whether a task started this session (enables
+                           * edge detection) */
 
-/* 待启动任务（文件已存在弹窗选择后执行） */
+/* Pending task (executed after the file-exists choice). */
 struct Pending {
     bool active = false;
     std::string url, path;
     int threads = 1;
-    int exist_choice = 0;  /* 0 等待选择；1 Resume；2 Overwrite；3 Rename；4 Cancel */
+    int exist_choice = 0;  /* 0 waiting; 1 Resume; 2 Overwrite; 3 Rename;
+                            * 4 Cancel */
 } g_pending;
 
-/* 日志自动滚动 */
+/* Log auto-scroll */
 bool g_log_autoscroll = true;
 
 #ifdef _WIN32
-/** UTF-16 → UTF-8 */
+/** UTF-16 -> UTF-8. */
 std::string WideToUtf8(const std::wstring& w) {
     if (w.empty()) return std::string();
     int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0,
@@ -121,7 +135,7 @@ std::string WideToUtf8(const std::wstring& w) {
     return s;
 }
 
-/** UTF-8 → UTF-16 */
+/** UTF-8 -> UTF-16. */
 std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return std::wstring();
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
@@ -131,13 +145,14 @@ std::wstring Utf8ToWide(const std::string& s) {
 }
 #endif
 
-/** URL scheme 预检（R11）：http/https */
+/** URL scheme pre-check (http/https). */
 bool UrlSchemeOk(const std::string& url) {
     return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
 }
 
-/** Base64 解码（迅雷链接解码用，不含第三方库）
- * 算法：每 4 个 base64 字符 → 3 字节（逐组移位，尾部不足 4 字符按 1~2 字节处理） */
+/** Base64 decode (used for thunder links; no third-party dependency).
+ * Algorithm: every 4 base64 chars -> 3 bytes (shifted in groups; a trailing
+ * group of 2 chars -> 1 byte, 3 chars -> 2 bytes). */
 std::string Base64Decode(const std::string& in) {
     static const char tbl[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -146,7 +161,7 @@ std::string Base64Decode(const std::string& in) {
     int n = 0;
     for (char c : in) {
         if (c == '=') {
-            break;  /* padding：结束 */
+            break;  /* padding: stop */
         }
         if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
             continue;
@@ -163,7 +178,7 @@ std::string Base64Decode(const std::string& in) {
             n = 0;
         }
     }
-    /* 尾部不足 4 字符（剩 2 字符 → 1 字节；剩 3 字符 → 2 字节） */
+    /* Trailing group < 4 chars (2 chars -> 1 byte; 3 chars -> 2 bytes). */
     if (n == 2) {
         out.push_back((char)((buf[0] << 2) | (buf[1] >> 4)));
     } else if (n == 3) {
@@ -174,8 +189,9 @@ std::string Base64Decode(const std::string& in) {
 }
 
 /**
- * @brief 迅雷专用链接解码：thunder:// + Base64("AA" + 真实URL + "ZZ")
- * @return 解码后的真实 URL；非 thunder:// 前缀则原样返回
+ * @brief Decode a thunder:// link: thunder:// + Base64("AA" + real URL + "ZZ").
+ * @param url Link to decode.
+ * @return The decoded real URL; non-thunder:// inputs are unchanged.
  */
 std::string ThunderDecode(const std::string& url) {
     const char* prefix = "thunder://";
@@ -183,14 +199,14 @@ std::string ThunderDecode(const std::string& url) {
         return url;
     }
     std::string dec = Base64Decode(url.substr(strlen(prefix)));
-    /* 去掉头 2 字节 "AA" 与尾 2 字节 "ZZ" */
+    /* Strip the leading "AA" and the trailing "ZZ". */
     if (dec.size() >= 4) {
         dec = dec.substr(2, dec.size() - 4);
     }
     return dec;
 }
 
-/** 目标路径是否存在（F11 触发条件） */
+/** Whether the target path exists (F11 trigger). */
 bool PathExists(const std::string& path) {
 #ifdef _WIN32
     DWORD attr = GetFileAttributesW(Utf8ToWide(path).c_str());
@@ -205,7 +221,7 @@ bool PathExists(const std::string& path) {
 #endif
 }
 
-/** 删除本地文件（覆盖选择用） */
+/** Delete a local file (overwrite choice). */
 void RemoveFile(const std::string& path) {
 #ifdef _WIN32
     DeleteFileW(Utf8ToWide(path).c_str());
@@ -214,7 +230,7 @@ void RemoveFile(const std::string& path) {
 #endif
 }
 
-/** 当前时间戳（YYYYMMDD_HHMMSS，改名用） */
+/** Current timestamp (YYYYMMDD_HHMMSS, used for renaming). */
 std::string CurrentTimeStamp() {
     char buf[32];
     time_t t = time(nullptr);
@@ -227,7 +243,8 @@ std::string CurrentTimeStamp() {
     return std::string(buf);
 }
 
-/** 从 URL 推断文件名：去查询串/片段/尾部斜杠，取最后路径段（如 …/node.tar.gz → node.tar.gz） */
+/** Derive a file name from a URL (query/fragment/trailing slashes stripped)
+ *  and sanitize it for safe local storage (issue S3). */
 std::string UrlFileName(const std::string& url) {
     std::string u = url;
     size_t q = u.find_first_of("?#");
@@ -238,10 +255,12 @@ std::string UrlFileName(const std::string& url) {
         u.pop_back();
     }
     size_t slash = u.find_last_of("/\\");
-    return (slash != std::string::npos) ? u.substr(slash + 1) : u;
+    std::string name = (slash != std::string::npos) ? u.substr(slash + 1) : u;
+    return SanitizeFileName(name);
 }
 
-/** 路径是否应视为"目录"：已存在且是目录，或以分隔符结尾 */
+/** Whether the path should be treated as a directory: it exists and is a
+ *  directory, or it ends with a separator. */
 bool IsDirectoryPath(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -264,7 +283,7 @@ bool IsDirectoryPath(const std::string& path) {
     return false;
 }
 
-/** 拼接目录与文件名（补平台分隔符） */
+/** Join a directory and a file name (adds the platform separator). */
 std::string JoinPath(const std::string& dir, const std::string& name) {
     if (dir.empty()) {
         return name;
@@ -280,19 +299,21 @@ std::string JoinPath(const std::string& dir, const std::string& name) {
 #endif
 }
 
-/** 时间戳改名：file.zip -> file_20260807_123000.zip（F11 改名语义，与 CLI 一致） */
+/** Timestamp rename: file.zip -> file_ts.zip (F11 rename semantics, same as
+ *  the CLI). */
 std::string StampName(const std::string& path) {
     std::string base = path;
     std::string ts = CurrentTimeStamp();
     size_t dot = base.find_last_of('.');
     size_t slash = base.find_last_of("/\\");
-    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+    if (dot != std::string::npos &&
+        (slash == std::string::npos || dot > slash)) {
         return base.substr(0, dot) + "_" + ts + base.substr(dot);
     }
     return base + "_" + ts;
 }
 
-/** 触发错误弹窗（F12） */
+/** Trigger the error popup (F12). */
 void ShowErrorPopup(const std::string& title, const std::string& msg,
                     const std::string& guide = "") {
     g_error_title = title;
@@ -301,29 +322,29 @@ void ShowErrorPopup(const std::string& title, const std::string& msg,
     g_error_open = true;
 }
 
-/** 按 §8.3 表格对错误分类并给出指引 */
+/** Classify an error by its message and return the matching guide. */
 std::string ErrorGuide(const std::string& err) {
-    if (err.find("解析失败") != std::string::npos) {
+    if (err.find("parsing failed") != std::string::npos) {
         return i18n::T("err.guide.parse");
     }
-    if (err.find("合并失败") != std::string::npos) {
+    if (err.find("merge failed") != std::string::npos) {
         return i18n::T("err.guide.merge");
     }
-    if (err.find("初始化失败") != std::string::npos) {
+    if (err.find("init failed") != std::string::npos) {
         return i18n::T("err.guide.init");
     }
     return i18n::T("err.guide.generic");
 }
 
-/* ---- 表单渲染 ---- */
+/* ---- Form rendering ---- */
 void RenderForm(DownloadWorker& worker) {
     bool running = worker.IsRunning();
 
-    /* 模式拨动开关（F1）：切换时 URL 占位联动 */
+    /* Mode toggle (F1): the URL placeholder follows the mode. */
     bool toggled = ToggleMode(i18n::T("mode.file"), i18n::T("mode.video"),
                               g_video_mode);
 
-    /* URL 输入（占位提示随模式联动） */
+    /* URL input (placeholder follows the mode). */
     ImGui::SetNextItemWidth(-1.0f);
     if (toggled) {
         ImGui::SetKeyboardFocusHere();
@@ -334,8 +355,9 @@ void RenderForm(DownloadWorker& worker) {
         g_url, sizeof(g_url),
         running ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None);
 
-    /* 保存路径 + 浏览（Windows 原生 GetSaveFileName，§3）
-     * 视频模式路径语义 = 保存目录（输出名由 URL 自动推断 + 时间戳防覆盖） */
+    /* Save path + browse (Windows native GetSaveFileName).
+     * Video-mode path semantics = save directory (the output name is derived
+     * from the URL plus a timestamp). */
     ImGui::SetNextItemWidth(-70.0f);
     ImGui::InputTextWithHint(
         "##path", g_video_mode ? i18n::T("placeholder.path.video")
@@ -345,7 +367,8 @@ void RenderForm(DownloadWorker& worker) {
 #ifdef _WIN32
     ImGui::SameLine();
     if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0)) && !running) {
-        /* 目录选择对话框（IFileDialog FOS_PICKFOLDERS）：返回目录路径，文件名由 URL 自动拼接 */
+        /* Folder picker (IFileDialog FOS_PICKFOLDERS): returns a directory;
+         * the file name is appended from the URL. */
         HRESULT hrCo = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         IFileDialog* pfd = nullptr;
         HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, NULL,
@@ -355,7 +378,7 @@ void RenderForm(DownloadWorker& worker) {
             DWORD opts = 0;
             pfd->GetOptions(&opts);
             pfd->SetOptions(opts | FOS_PICKFOLDERS);
-            pfd->SetTitle(L"选择保存目录");
+            pfd->SetTitle(L"Select Save Folder");
             if (SUCCEEDED(pfd->Show(NULL))) {
                 IShellItem* psi = nullptr;
                 if (SUCCEEDED(pfd->GetResult(&psi))) {
@@ -378,7 +401,8 @@ void RenderForm(DownloadWorker& worker) {
 #else
     ImGui::SameLine();
     if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0)) && !running) {
-        /* Linux 内置目录浏览器（零外部依赖，见 dirbrowser.h） */
+        /* Linux built-in directory browser (zero external deps, see
+         * dirbrowser.h). */
         g_dirbrowse_open = true;
         g_dirbrowse_dir = (g_path[0] != '\0' && PathExists(g_path))
                               ? g_path
@@ -392,7 +416,7 @@ void RenderForm(DownloadWorker& worker) {
     }
 #endif
 
-    /* 线程数：下拉框选择 1..kHardwareMax（F4，上限 = 4~8 随核数自适应） */
+    /* Threads: combo 1..kHardwareMax (the cap adapts 4~8 to CPU cores). */
     ImGui::Text("%s:", i18n::T("label.threads"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
@@ -412,17 +436,17 @@ void RenderForm(DownloadWorker& worker) {
         ImGui::TextDisabled("%s", buf);
     }
 
-    /* 下载 / 取消按钮（F9/F10）+ 暂停/继续/停止状态机：
-     *   IDLE:    [开始下载]         [取消(禁用)]
-     *   RUNNING: [下载中…(禁用)]    [取消 = 暂停意图]
-     *   PAUSED:  [继续(断点续传)]   [停止(红色, 删除缓存, 刷新初始)] */
+    /* Download / cancel buttons (F9/F10) + pause/resume/stop state machine:
+     *   IDLE:    [Start Download]        [Cancel(disabled)]
+     *   RUNNING: [Downloading...(disabled)] [Cancel = pause intent]
+     *   PAUSED:  [Resume]  [Stop(red, deletes cache, refreshes)] */
     ImGui::Separator();
     float avail = ImGui::GetContentRegionAvail().x;
     if (g_paused) {
-        /* 暂停态：继续 / 停止 */
+        /* Paused: resume / stop. */
         if (ImGui::Button(i18n::T("button.resume"),
                           ImVec2(avail * 0.5f - 4.0f, 0))) {
-            OnStartClicked(worker); /* 继续分支（g_paused=true 时走续传） */
+            OnStartClicked(worker); /* resume branch (resume when paused) */
         }
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0xC0, 0x3A, 0x3A, 255));
@@ -447,10 +471,10 @@ void RenderForm(DownloadWorker& worker) {
         ImGui::BeginDisabled(!running);
         if (ImGui::Button(i18n::T("button.cancel"),
                           ImVec2(avail * 0.5f - 4.0f, 0))) {
-            worker.Cancel();  /* 第一次取消 = 暂停意图（保留缓存，可续传） */
-            g_paused = true;  /* 乐观置位：按钮即切换为 继续/停止 */
-            worker.AddLog("[INFO] 已请求暂停：可点击『继续』断点续传，"
-                          "或『停止』删除缓存");
+            worker.Cancel();  /* first cancel = pause intent (cache kept) */
+            g_paused = true;  /* optimistic: buttons switch to resume/stop */
+            worker.AddLog("[INFO] pause requested: click Resume to continue "
+                          "or Stop to delete the cache");
         }
         ImGui::EndDisabled();
     }
@@ -460,8 +484,9 @@ void OnStartClicked(DownloadWorker& worker) {
     std::string url(g_url);
     std::string path(g_path);
 
-    /* 暂停态点击 → 继续（断点续传）：跳过已存在检测与视频重命名，
-     * 视频模式必须沿用原 basename（g_last_path）才能续传原文件 */
+    /* Clicked while paused -> resume: skip the existence check and the video
+     * rename; video mode must reuse the original basename (g_last_path) so
+     * the same file is resumed. */
     if (g_paused) {
         if (url.empty() || !UrlSchemeOk(url)) {
             ShowErrorPopup(i18n::T("dialog.error.title"),
@@ -470,14 +495,15 @@ void OnStartClicked(DownloadWorker& worker) {
         }
         if (g_last_video) {
             StartVideoDownload(worker, url, g_last_path, g_threads,
-                               true /* 继续：保留进度快照 */);
+                               true /* resume: keep progress snapshot */);
         } else {
             if (path.empty()) {
                 ShowErrorPopup(i18n::T("dialog.error.title"),
                                i18n::T("err.path.empty"));
                 return;
             }
-            /* 目录 → 拼文件名（URL 未变则同名，命中本地残留 → 断点续传） */
+            /* Directory -> append the file name (same name when the URL is
+             * unchanged; local residue resumes). */
             if (IsDirectoryPath(path)) {
                 std::string name = UrlFileName(url);
                 if (name.empty()) {
@@ -486,13 +512,13 @@ void OnStartClicked(DownloadWorker& worker) {
                 path = JoinPath(path, name);
             }
             StartDownload(worker, url, path, g_threads,
-                          true /* 继续：保留进度快照 */);
+                          true /* resume: keep progress snapshot */);
         }
         g_paused = false;
         return;
     }
 
-    /* 迅雷专用链接（thunder://）解码为真实 URL */
+    /* Decode thunder:// links to real URLs. */
     if (url.rfind("thunder://", 0) == 0) {
         std::string decoded = ThunderDecode(url);
         if (decoded.empty() || !UrlSchemeOk(decoded)) {
@@ -500,29 +526,31 @@ void OnStartClicked(DownloadWorker& worker) {
                            i18n::T("err.thunder.invalid"));
             return;
         }
-        worker.AddLog("[INFO] 检测到迅雷链接，已解码为: " + decoded);
+        worker.AddLog("[INFO] detected a thunder link, decoded to: " +
+                      decoded);
         snprintf(g_url, sizeof(g_url), "%s", decoded.c_str());
         url = decoded;
     }
 
-    /* URL 预检（R11） */
+    /* URL pre-check (http/https). */
     if (url.empty() || !UrlSchemeOk(url)) {
         ShowErrorPopup(i18n::T("dialog.error.title"),
                        i18n::T("err.url.invalid"));
         return;
     }
-    /* 视频模式（Phase 2）：路径 = 保存目录，输出基础名 = 目录 + URL 名 + 时间戳
-     * （时间戳命名天然防覆盖，与 CLI 未指定 -o 语义一致，无需 F11 四选一） */
+    /* Video mode: the path is a save directory; the output base name is
+     * directory + URL name + timestamp (timestamp naming prevents
+     * overwrites, same semantics as the CLI without -o). */
     if (g_video_mode) {
         if (path.empty()) {
             ShowErrorPopup(i18n::T("dialog.error.title"),
                            i18n::T("err.path.empty"));
             return;
         }
-        std::string base = UrlFileName(url); /* 去查询串/取最后路径段 */
+        std::string base = UrlFileName(url);
         size_t dot = base.find_last_of('.');
         if (dot != std::string::npos) {
-            base = base.substr(0, dot); /* 基础名不带扩展名 */
+            base = base.substr(0, dot);  /* base name without extension */
         }
         if (base.empty()) {
             base = "video";
@@ -533,20 +561,22 @@ void OnStartClicked(DownloadWorker& worker) {
         return;
     }
     if (path.empty()) {
-        ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.path.empty"));
+        ShowErrorPopup(i18n::T("dialog.error.title"),
+                       i18n::T("err.path.empty"));
         return;
     }
 
-    /* 保存路径若为目录：自动拼 URL 文件名+后缀（用户只需填目录，§4 增强） */
+    /* When the save path is a directory, append the URL-derived file name
+     * (the user only needs to pick a folder). */
     if (IsDirectoryPath(path)) {
         std::string name = UrlFileName(url);
         if (name.empty()) {
-            name = CurrentTimeStamp() + ".download";  /* URL 无文件名时用时间戳兜底 */
+            name = CurrentTimeStamp() + ".download";  /* timestamp fallback */
         }
         path = JoinPath(path, name);
     }
 
-    /* 文件已存在（F11）：弹四选一，选择后启动 */
+    /* File exists (F11): show the four-choice dialog, then start. */
     if (PathExists(path)) {
         g_pending.active = true;
         g_pending.url = url;
@@ -563,9 +593,9 @@ void StartDownload(DownloadWorker& worker, const std::string& url,
                    const std::string& path, int threads,
                    bool preserve_snapshot) {
     worker.AddLog(std::string("[INFO] URL: ") + url);
-    worker.AddLog(std::string("[INFO] 保存到: ") + path);
+    worker.AddLog(std::string("[INFO] saving to: ") + path);
     if (preserve_snapshot) {
-        worker.AddLog("[INFO] 断点续传：从已下载进度继续");
+        worker.AddLog("[INFO] resuming from the existing download progress");
     }
     g_last_path = path;
     g_last_video = false;
@@ -579,10 +609,10 @@ void StartDownload(DownloadWorker& worker, const std::string& url,
 void StartVideoDownload(DownloadWorker& worker, const std::string& url,
                         const std::string& basename, int threads,
                         bool preserve_snapshot) {
-    worker.AddLog(std::string("[INFO] 视频 URL: ") + url);
-    worker.AddLog(std::string("[INFO] 输出基础名: ") + basename);
+    worker.AddLog(std::string("[INFO] video URL: ") + url);
+    worker.AddLog(std::string("[INFO] output base name: ") + basename);
     if (preserve_snapshot) {
-        worker.AddLog("[INFO] 断点续传：从已下载进度继续");
+        worker.AddLog("[INFO] resuming from the existing download progress");
     }
     g_last_path = basename;
     g_last_video = true;
@@ -593,8 +623,8 @@ void StartVideoDownload(DownloadWorker& worker, const std::string& url,
     }
 }
 
-/** 删除下载缓存文件（停止任务用）：
- * 文件模式 = 目标文件；视频模式 = basename 的音视频轨与合并产物 */
+/** Delete download cache files (used by Stop): file mode = the target file;
+ *  video mode = the basename's audio/video tracks and merged output. */
 void RemoveDownloadArtifacts(const std::string& base, bool video) {
     if (base.empty()) {
         return;
@@ -612,13 +642,14 @@ void RemoveDownloadArtifacts(const std::string& base, bool video) {
     }
 }
 
-/** 停止任务（红色按钮）：删除缓存文件、清理线程缓存、刷新 UI 至初始状态 */
+/** Stop the task (red button): delete cache files, reset the worker and
+ *  refresh the UI to its initial state. */
 void StopAndClear(DownloadWorker& worker) {
-    worker.AddLog("[INFO] 已停止任务，删除缓存文件: " + g_last_path);
+    worker.AddLog("[INFO] task stopped, deleted cache files: " + g_last_path);
     RemoveDownloadArtifacts(g_last_path, g_last_video);
-    /* 清理线程缓存与快照/日志（worker 已 idle） */
+    /* Reset worker cache and snapshot/log (worker is idle now). */
     worker.Reset();
-    /* 刷新 UI 至初始状态：清空表单、进度、暂停态 */
+    /* Refresh the UI to its initial state: clear form, progress and pause. */
     g_paused = false;
     g_last_path.clear();
     g_last_video = false;
@@ -627,31 +658,35 @@ void StopAndClear(DownloadWorker& worker) {
     g_url[0] = '\0';
     g_path[0] = '\0';
     g_threads = kHardwareMax;
-    worker.AddLog("[INFO] 已清空任务，可重新开始下载");
+    worker.AddLog("[INFO] task cleared, ready to start a new download");
 }
 
-/* ---- 进度区渲染（F5/F6/F8） ---- */
+/* ---- Progress area rendering (F5/F6/F8) ---- */
 void RenderProgress(const DownloadSnapshot& snap) {
     ImGui::Separator();
     ImGui::Text("%s", i18n::T("label.total"));
-    /* 总进度条（F6）：3D 圆柱体风格 —— 底槽/填充均为胶囊形（radius=高/2）+ 垂直渐变
-     * （AddRectFilledMultiColor 顶部亮→底部暗，模拟圆柱曲面），分片效果：
-     * 全部填充为绿色（用户需求，不再用蓝色），段间深色分隔线，未下载区留暗色底槽。
-     * 填充圆角与底槽边缘完全贴合（首段左圆、末段右圆、单段全圆）。 */
+    /* Total progress bar (F6): 3D cylinder style - track/fill are
+     * capsule-shaped (radius = height/2) with a vertical gradient (top bright
+     * -> bottom dark, simulated with AddRectFilledMultiColor).  Chunk effect:
+     * full fill in green, dark separators between chunks, dark track for
+     * unwritten areas.  The fill corners hug the track edges exactly (first
+     * chunk left-rounded, last chunk right-rounded, single chunk fully
+     * rounded). */
     {
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const float bar_w = ImGui::GetContentRegionAvail().x;
-        const float bar_h = 30.0f; /* 1.5 倍宽，容纳段内文字（用户需求） */
+        const float bar_h = 30.0f; /* 1.5x wide, fits per-chunk text */
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        const float radius = bar_h * 0.5f; /* 胶囊圆角 = 圆柱端面 */
-        /* 圆柱体：统一色 + 顶部高光(亮) + 底部阴影(暗)（1.93 渐变 API 无圆角，改用分层绘制） */
+        const float radius = bar_h * 0.5f; /* capsule corner = cylinder end */
+        /* Cylinder: uniform color + top highlight + bottom shadow (layered
+         * draws, the gradient API has no rounded corners). */
         const ImU32 bg_mid = IM_COL32(0x3A, 0x3A, 0x3A, 255);
-        const ImU32 gn_mid = IM_COL32(0x5E, 0xA8, 0x4E, 255); /* 绿色填充（不再用蓝色） */
-        const ImU32 gn_hi  = IM_COL32(255, 255, 255, 40);    /* 填充高光 */
-        const ImU32 gn_lo  = IM_COL32(0, 0, 0, 52);          /* 填充阴影 */
-        const ImU32 sep = IM_COL32(0x0A, 0x0A, 0x0A, 230);   /* 电池格分隔线（明显） */
+        const ImU32 gn_mid = IM_COL32(0x5E, 0xA8, 0x4E, 255); /* green fill */
+        const ImU32 gn_hi  = IM_COL32(255, 255, 255, 40);     /* highlight */
+        const ImU32 gn_lo  = IM_COL32(0, 0, 0, 52);           /* shadow */
+        const ImU32 sep = IM_COL32(0x0A, 0x0A, 0x0A, 230);    /* separator */
         const ImU32 border = IM_COL32(0x6A, 0x6A, 0x6A, 255);
-        /* 底槽（胶囊 + 高光/阴影） */
+        /* Track (capsule + highlight/shadow). */
         draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h),
                             bg_mid, radius);
         draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.32f),
@@ -671,7 +706,7 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 if (s > 1.0f) s = 1.0f;
                 if (e > 1.0f) e = 1.0f;
                 if (cur > e) cur = e;
-                /* 分片完成度（段内文字用 + hover 提示用） */
+                /* Chunk completion (for in-chunk text + hover tooltip). */
                 double seg_done = (double)(t.downloaded - t.file_start);
                 double seg_total = (double)(t.total - t.file_start);
                 int seg_pct = (seg_total > 0)
@@ -679,7 +714,7 @@ void RenderProgress(const DownloadSnapshot& snap) {
                                   : 0;
                 if (seg_pct < 0) seg_pct = 0;
                 if (seg_pct > 100) seg_pct = 100;
-                /* hover：显示该分片 进度 + 速度 */
+                /* Hover: show this chunk's progress + speed. */
                 {
                     const ImVec2 m = ImGui::GetIO().MousePos;
                     if (m.x >= pos.x + bar_w * s && m.x <= pos.x + bar_w * e &&
@@ -693,11 +728,14 @@ void RenderProgress(const DownloadSnapshot& snap) {
                     }
                 }
                 if (t.downloaded <= t.file_start) {
-                    continue; /* 未开始分片：留暗色底槽（电池未充电格） */
+                    continue; /* not started: keep the dark track */
                 }
-                /* 圆角只给物理首尾分片（首左圆/尾右圆/单片全圆），中间分片用
-                 * RoundCornersNone 明确直角 —— flags=0 在 ImGui 中是"四角全圆"！
-                 * （此前中间分片 flags=0 → 每片都是胶囊圆角，圆角间留出底槽间隙） */
+                /* Corner rounding only for the physical first/last chunk
+                 * (first left-rounded, last right-rounded, single chunk fully
+                 * rounded); middle chunks use RoundCornersNone for sharp
+                 * corners - flags=0 in ImGui means all four corners rounded!
+                 * (Previously middle chunks with flags=0 became capsule
+                 * shaped and left track gaps between them.) */
                 const int nseg = (int)snap.threads.size();
                 ImDrawFlags flags = ImDrawFlags_RoundCornersNone;
                 if (nseg == 1) {
@@ -707,12 +745,14 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 } else if (i == nseg - 1) {
                     flags = ImDrawFlags_RoundCornersRight;
                 }
-                /* 绿色填充（纯色直角方柱；高光/阴影改为整体胶囊绘制，见下方） */
+                /* Green fill (solid sharp-corner bar; the highlight/shadow
+                 * is drawn as one capsule below). */
                 draw->AddRectFilled(
                     ImVec2(pos.x + bar_w * s, pos.y),
                     ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_mid,
                     radius, flags);
-                /* 段内文字：分片完成度%（格宽足够时显示，电池格充电进度） */
+                /* In-chunk text: chunk percent (shown when the cell is wide
+                 * enough). */
                 if ((e - s) * bar_w > 44.0f) {
                     char seg_txt[16];
                     snprintf(seg_txt, sizeof(seg_txt), "%d%%", seg_pct);
@@ -721,7 +761,8 @@ void RenderProgress(const DownloadSnapshot& snap) {
                               pos.y + (bar_h - ts.y) * 0.5f);
                     draw->AddText(tp, IM_COL32(255, 255, 255, 235), seg_txt);
                 }
-                /* 分片内已下载边界（深色细线，区别于电池格分隔线） */
+                /* Downloaded boundary inside a chunk (dark thin line,
+                 * distinct from the battery-cell separators). */
                 if (cur > s && cur < e - 0.001f) {
                     draw->AddLine(ImVec2(pos.x + bar_w * cur, pos.y + 2.0f),
                                   ImVec2(pos.x + bar_w * cur,
@@ -730,7 +771,8 @@ void RenderProgress(const DownloadSnapshot& snap) {
                 }
             }
         } else if (snap.totalPercent > 0.0) {
-            /* 无分片数据（解析/合并阶段）：按总进度绿色渐变填充（左圆右直角） */
+            /* No chunk data (parse/merge stage): fill by total progress
+             * (left-rounded). */
             float cur = (float)(snap.totalPercent / 100.0);
             if (cur > 1.0f) cur = 1.0f;
             ImDrawFlags f2 = cur >= 0.999f ? ImDrawFlags_RoundCornersAll
@@ -738,8 +780,8 @@ void RenderProgress(const DownloadSnapshot& snap) {
             draw->AddRectFilled(pos, ImVec2(pos.x + bar_w * cur, pos.y + bar_h),
                                 gn_mid, radius, f2);
         }
-        /* 整体圆柱高光/阴影（胶囊形贯穿所有分片，贴合整体端面圆弧；
-         * 替代分片级独立高光 → 不再出现"每分片圆角高光长方体"） */
+        /* Overall cylinder highlight/shadow (one capsule across all chunks,
+         * matching the end-face arcs; replaces per-chunk highlights). */
         draw->AddRectFilled(
             pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.35f), gn_hi,
             radius, ImDrawFlags_RoundCornersAll);
@@ -747,8 +789,9 @@ void RenderProgress(const DownloadSnapshot& snap) {
             ImVec2(pos.x, pos.y + bar_h * 0.72f),
             ImVec2(pos.x + bar_w, pos.y + bar_h), gn_lo, radius,
             ImDrawFlags_RoundCornersAll);
-        /* 电池格分隔线：5px 深色竖带（2-3 倍加宽，用户需求），最后画 →
-         * 不被填充覆盖、格线始终清晰；无下载数据时格线也已显示（启动即加载好） */
+        /* Battery-cell separators: 5px dark vertical bands (2-3x wider,
+         * user request), drawn last so the fill never covers them; they show
+         * even with no download data. */
         if (!snap.threads.empty() && snap.threads[0].file_total > 0) {
             const double ft = (double)snap.threads[0].file_total;
             for (const auto& t : snap.threads) {
@@ -767,7 +810,7 @@ void RenderProgress(const DownloadSnapshot& snap) {
         ImGui::Dummy(ImVec2(bar_w, bar_h));
     }
 
-    /* 总进度条右下方：总体百分比 + 总体下载速度（用户需求） */
+    /* Bottom-right of the total bar: overall percent + speed. */
     {
         char info[128];
         if (snap.totalSpeed > 0) {
@@ -792,7 +835,7 @@ void RenderProgress(const DownloadSnapshot& snap) {
         case STAGE_MERGING:     stage_txt = i18n::T("stage.merging"); break;
         case STAGE_DONE:        stage_txt = i18n::T("stage.done"); break;
         case STAGE_CANCELED:
-            /* 暂停态（第一次取消）显示"已暂停"，否则"已取消" */
+            /* Paused (first cancel) shows "Paused", otherwise "Canceled". */
             stage_txt = g_paused ? i18n::T("stage.paused")
                                  : i18n::T("stage.canceled");
             break;
@@ -802,7 +845,7 @@ void RenderProgress(const DownloadSnapshot& snap) {
     ImGui::Text("%s: %s", i18n::T("label.status"), stage_txt);
 }
 
-/* ---- 日志区（F7） ---- */
+/* ---- Log area (F7) ---- */
 void RenderLog(const std::vector<std::string>& log) {
     ImGui::Separator();
     ImGui::Text("%s", i18n::T("label.log"));
@@ -821,7 +864,8 @@ void RenderLog(const std::vector<std::string>& log) {
         g_log_autoscroll = true;
     }
     for (const auto& line : log) {
-        ImGui::TextUnformatted(line.c_str()); /* 不换行：内容超宽时显示水平滚动条 */
+        /* No wrapping: a horizontal scrollbar shows when lines are wide. */
+        ImGui::TextUnformatted(line.c_str());
     }
     if (g_log_autoscroll && ImGui::GetScrollMaxY() > 0) {
         ImGui::SetScrollY(ImGui::GetScrollMaxY());
@@ -829,10 +873,13 @@ void RenderLog(const std::vector<std::string>& log) {
     ImGui::EndChild();
 }
 
-/* ---- Mac 风格圆形窗口按钮（红=关闭/黄=最小化/绿=最大化，hover 提示文字） ---- */
+/* ---- Mac-style circular window buttons (red=close / yellow=minimize /
+ * green=maximize, hover tooltip) ---- */
 bool MacCircleButton(float cx, float cy, float d, ImU32 color, ImU32 hover,
                      const char* tip) {
-    ImGui::PushID((int)color); /* 颜色唯一 → 三个按钮 ID 不冲突（修复 Program error） */
+    /* Unique color -> the three button IDs do not collide (fixes the
+     * "Program error" complaint). */
+    ImGui::PushID((int)color);
     ImGui::SetCursorScreenPos(ImVec2(cx - d * 0.5f, cy - d * 0.5f));
     ImGui::InvisibleButton("##macbtn", ImVec2(d, d));
     bool hovered = ImGui::IsItemHovered();
@@ -846,7 +893,8 @@ bool MacCircleButton(float cx, float cy, float d, ImU32 color, ImU32 hover,
     return clicked;
 }
 
-/* ---- 自绘标题栏（无边框窗口：设置 + 标题 + Mac 风格窗口按钮 + 拖动） ---- */
+/* ---- Custom title bar (borderless window: settings + title + Mac-style
+ * buttons + drag) ---- */
 void RenderTitleBar() {
     const ImGuiIO& io = ImGui::GetIO();
 
@@ -866,21 +914,24 @@ void RenderTitleBar() {
                      ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    const float cy = kTitleBarH * 0.5f;  /* 按钮垂直中心 */
+    const float cy = kTitleBarH * 0.5f;  /* button vertical center */
 
-    /* 标题文本（设置入口已移至主窗口"设置"菜单栏，见 Render()） */
-    ImGui::SetCursorPos(ImVec2(12, (kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f));
+    /* Title text (the settings entry moved to the main window's Settings
+     * menu bar, see Render()). */
+    ImGui::SetCursorPos(
+        ImVec2(12, (kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::Text("%s", i18n::T("window.title"));
 
-    /* 右侧：Mac 风格三色圆钮（红=关闭 最右，绿=最大化，黄=最小化） */
+    /* Right side: Mac-style three-color buttons (red=close at the far right,
+     * green=maximize, yellow=minimize). */
     const float btn_d = 14.0f;
     const float gap = 12.0f;
-    const float margin = 18.0f; /* 距右缘 */
-    /* 红（关闭） */
+    const float margin = 18.0f; /* distance from the right edge */
+    /* Red (close) */
     float rx = io.DisplaySize.x - margin - btn_d * 0.5f;
-    /* 绿（最大化） */
+    /* Green (maximize) */
     float gx = rx - btn_d - gap;
-    /* 黄（最小化） */
+    /* Yellow (minimize) */
     float yx = gx - btn_d - gap;
     const ImU32 cRed = IM_COL32(0xE0, 0x6C, 0x75, 255);
     const ImU32 cRedH = IM_COL32(0xF0, 0x8A, 0x92, 255);
@@ -908,8 +959,9 @@ void RenderTitleBar() {
         glfwSetWindowShouldClose(g_window, GLFW_TRUE);
     }
 
-    /* 标题栏拖动：按下时触发 Windows 原生窗口拖动（WM_NCLBUTTONDOWN/HTCAPTION），
-     * 由系统平滑移动窗口 → 无重影、无渲染干扰；非 Windows 回退为位置计算 */
+    /* Title bar drag: on press, trigger native Windows window dragging
+     * (WM_NCLBUTTONDOWN/HTCAPTION) so the system moves the window smoothly;
+     * non-Windows falls back to manual position updates. */
     ImGui::SetCursorPos(ImVec2(0, 0));
     ImGui::InvisibleButton("##titlebar_drag",
                            ImVec2(io.DisplaySize.x - btn_d * 3 - gap * 2 -
@@ -923,7 +975,8 @@ void RenderTitleBar() {
             SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
         }
 #else
-        /* 非 Windows 回退：记录按下位置逐帧移动 */
+        /* Non-Windows fallback: record the press position and move per
+         * frame. */
         static bool dragging = false;
         static int drag_x0 = 0, drag_y0 = 0;
         static ImVec2 drag_mouse0;
@@ -948,12 +1001,14 @@ void RenderTitleBar() {
     ImGui::PopStyleVar();
 }
 
-/* ---- 窗口边缘/四角 resize（无边框窗口无系统手柄，自绘：左右下边 + 左下/右下角） ----
- * 标题栏顶部 6px 留给"拖动移动"，不参与 resize（避免与标题栏 InvisibleButton 冲突） */
+/* ---- Window edge/corner resize (a borderless window has no system handles;
+ * self-drawn: left/right/bottom edges + bottom-left/bottom-right corners) ----
+ * The top 6px of the title bar is reserved for dragging and does not
+ * resize (avoids conflicting with the title bar InvisibleButton). */
 void RenderResizeGrip() {
     const ImGuiIO& io = ImGui::GetIO();
-    const float E = 6.0f;  /* 边缘带宽 */
-    const float C = 18.0f; /* 四角区域 */
+    const float E = 6.0f;  /* edge band width */
+    const float C = 18.0f; /* corner area */
     const float W = io.DisplaySize.x;
     const float H = io.DisplaySize.y;
 
@@ -976,9 +1031,10 @@ void RenderResizeGrip() {
     }
 
 #ifdef _WIN32
-    /* hover 缩放光标（未按下时） */
+    /* Hover resize cursor (when not pressed). */
     if (dir != None && !io.MouseDown[0]) {
-        /* 系统光标 ID（IDC_* 展开为 LPSTR，LoadCursorW 需 MAKEINTRESOURCEW 数值） */
+        /* System cursor IDs (IDC_* expand to LPSTR; LoadCursorW needs
+         * MAKEINTRESOURCEW values). */
         LPCWSTR cur = MAKEINTRESOURCEW(32512); /* IDC_ARROW */
         switch (dir) {
             case L:
@@ -992,7 +1048,7 @@ void RenderResizeGrip() {
     }
 #endif
 
-    /* 拖动状态 */
+    /* Drag state. */
     static Dir s_dir = None;
     static int w0 = 0, h0 = 0, x0 = 0, y0 = 0;
     static ImVec2 m0;
@@ -1019,9 +1075,10 @@ void RenderResizeGrip() {
             default: break;
         }
         if (s_dir != L && s_dir != R) {
-            nh = h0 + dy; /* B/BL/BR 下边 */
+            nh = h0 + dy; /* bottom edge for B/BL/BR */
         }
-        /* 最小尺寸（glfwSetWindowSizeLimits 已兜底，这里防左/上角越界） */
+        /* Minimum size (glfwSetWindowSizeLimits backs this up; guard the
+         * left/top edges here). */
         if (nw < 640) {
             if (s_dir == L || s_dir == BL) nx = x0 + (w0 - 640);
             nw = 640;
@@ -1035,7 +1092,7 @@ void RenderResizeGrip() {
         }
     }
 
-    /* 右下角三角标记（resize 视觉提示，hover 高亮） */
+    /* Bottom-right triangle marker (resize visual hint, hover highlight). */
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetWindowPos();
     ImVec2 c = ImVec2(p.x + W - 2, p.y + H - kTitleBarH - 2);
@@ -1052,11 +1109,13 @@ void Init(GLFWwindow* window) {
 
 bool Render(DownloadWorker& worker) {
 #ifdef _WIN32
-    /* 自绘标题栏（Windows 无边框窗口；Linux 用系统标题栏） */
+    /* Custom title bar (Windows borderless window; Linux uses the system
+     * title bar). */
     RenderTitleBar();
 #endif
 
-    /* 主窗口：从标题栏下方铺满客户区；自带"设置"菜单栏（语言切换，常规软件逻辑） */
+    /* Main window: fills the client area below the title bar; includes a
+     * Settings menu bar (language switching). */
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0.0f, kTitleBarH), ImGuiCond_Always);
     ImGui::SetNextWindowSize(
@@ -1068,9 +1127,9 @@ bool Render(DownloadWorker& worker) {
                      ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoSavedSettings);
 
-    /* 设置菜单栏：语言切换入口显示"目标语言"提示
-     * （中文界面 → "language"；英文界面 → "中文"，见 menu.lang_hint），
-     * 点开后是常规语言选择项 */
+    /* Settings menu bar: the language entry shows the TARGET language hint
+     * (a Chinese UI -> "language"; an English UI -> "中文", see
+     * menu.lang_hint); opening it shows the regular language choices. */
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu(i18n::T("menu.lang_hint"))) {
             bool zh = (i18n::GetLang() == i18n::Lang::Zh);
@@ -1091,16 +1150,17 @@ bool Render(DownloadWorker& worker) {
 
     RenderForm(worker);
 
-    /* 快照读取（每帧一次，锁内拷贝） */
+    /* Snapshot read (once per frame, copied under lock). */
     DownloadSnapshot snap;
     int stage = worker.GetSnapshot(snap);
 
-    /* 阶段边沿 → 弹窗（完成 F13 / 错误 F12）与暂停态确认
-     * CANCELED = 用户暂停（缓存保留，可继续/停止）；DONE/ERROR 退出暂停态 */
+    /* Stage edge -> popups (done F13 / error F12) and pause confirmation.
+     * CANCELED = user pause (cache kept, resume/stop available);
+     * DONE/ERROR exit the paused state. */
     if (g_started && stage != g_last_stage) {
         g_last_stage = stage;
         if (stage == STAGE_DONE) {
-            g_done_path = snap.status;  /* 完成路径在日志里，此处仅提示 */
+            g_done_path = snap.status;  /* completion path is in the log */
             g_done_open = true;
             g_paused = false;
         } else if (stage == STAGE_ERROR) {
@@ -1109,8 +1169,8 @@ bool Render(DownloadWorker& worker) {
             g_paused = false;
         } else if (stage == STAGE_CANCELED) {
             g_paused = true;
-            worker.AddLog("[INFO] 已暂停（缓存保留）：点击『继续』断点续传，"
-                          "或『停止』删除缓存");
+            worker.AddLog("[INFO] paused (cache kept): click Resume to "
+                          "continue or Stop to delete the cache");
         }
     }
     g_started = worker.IsRunning() || g_started;
@@ -1119,13 +1179,14 @@ bool Render(DownloadWorker& worker) {
     RenderLog(snap.log);
 
 #ifdef _WIN32
-    /* 右下角 resize 手柄（Windows 无边框窗口，须在窗口 End 前绘制） */
+    /* Bottom-right resize grip (Windows borderless window; draw before the
+     * window End). */
     RenderResizeGrip();
 #endif
 
     ImGui::End();
 
-    /* 文件已存在四选一（F11）处理 */
+    /* File-exists four-choice (F11) handling. */
     if (g_pending.active && g_exists_open) {
         dialogs::ExistsChoice c = dialogs::ShowFileExists(g_pending.path,
                                                           g_exists_open);
@@ -1137,38 +1198,39 @@ bool Render(DownloadWorker& worker) {
                     break;
                 case dialogs::ExistsChoice::Overwrite:
                     RemoveFile(g_pending.path);
-                    worker.AddLog("[INFO] 已删除旧文件（覆盖）: " +
+                    worker.AddLog("[INFO] old file deleted (overwrite): " +
                                   g_pending.path);
                     StartDownload(worker, g_pending.url, g_pending.path,
                                   g_pending.threads);
                     break;
                 case dialogs::ExistsChoice::Rename: {
                     std::string newpath = StampName(g_pending.path);
-                    worker.AddLog("[INFO] 已改名: " + newpath);
+                    worker.AddLog("[INFO] renamed to: " + newpath);
                     StartDownload(worker, g_pending.url, newpath,
                                   g_pending.threads);
                     break;
                 }
                 default:  /* Cancel */
-                    worker.AddLog("[INFO] 已取消（文件已存在弹窗）");
+                    worker.AddLog("[INFO] canceled (file-exists dialog)");
                     break;
             }
             g_pending.active = false;
         }
     }
 
-    /* 错误弹窗（F12） */
+    /* Error popup (F12). */
     dialogs::ShowError(g_error_title, g_error_msg, g_error_guide,
                        g_error_open);
 
-    /* 完成弹窗（F13） */
+    /* Done popup (F13). */
     dialogs::ShowDone(g_done_path, g_done_open);
 
-    /* 关于弹窗 */
+    /* About popup. */
     dialogs::ShowAbout(BURST_VERSION_STRING, g_about_open);
 
 #ifndef _WIN32
-    /* Linux 内置目录浏览器（Windows 走原生 IFileDialog，无此状态） */
+    /* Linux built-in directory browser (Windows uses the native IFileDialog
+     * and has no such state). */
     if (g_dirbrowse_open &&
         DirBrowserRender(g_dirbrowse_dir, g_dirbrowse_open)) {
         snprintf(g_path, sizeof(g_path), "%s", g_dirbrowse_dir.c_str());

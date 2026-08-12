@@ -1,6 +1,6 @@
 /**
  * @file i18n.cpp
- * @brief 国际化实现（§3.3）
+ * @brief Internationalization implementation.
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -24,7 +24,8 @@ namespace i18n {
 
 namespace {
 
-/* ---- 字符串表：key → {zh, en}（源码 UTF-8；缺键返回 key 并告警，R19） ---- */
+/* ---- String table: key -> {zh, en} (source UTF-8; a missing key returns
+ * the key itself with a warning) ---- */
 struct Entry {
     const char* key;
     const char* zh;
@@ -32,7 +33,7 @@ struct Entry {
 };
 
 const Entry kStrings[] = {
-    /* 模式开关 */
+    /* Mode switch */
     {"mode.file", "文件下载", "File Download"},
     {"mode.video", "视频下载", "Video Download"},
     {"placeholder.url.file", "输入文件下载地址…", "Enter file download URL..."},
@@ -42,7 +43,7 @@ const Entry kStrings[] = {
      "Save folder or full file path..."},
     {"placeholder.path.video", "选择视频保存目录…",
      "Choose a folder to save the video..."},
-    /* 表单 */
+    /* Form */
     {"label.url", "下载地址", "URL"},
     {"label.path", "保存路径", "Save to"},
     {"button.browse", "浏览…", "Browse..."},
@@ -61,7 +62,7 @@ const Entry kStrings[] = {
     {"button.minimize", "最小化", "Minimize"},
     {"button.maximize", "最大化", "Maximize"},
     {"button.close", "关闭", "Close"},
-    /* 进度区 */
+    /* Progress area */
     {"label.total", "总进度", "Total"},
     {"label.speed", "速度", "Speed"},
     {"label.eta", "剩余时间", "ETA"},
@@ -69,16 +70,16 @@ const Entry kStrings[] = {
     {"label.size", "已下载", "Downloaded"},
     {"label.log", "日志", "Log"},
     {"log.copy", "复制日志", "Copy log"},
-    /* 设置 */
+    /* Settings */
     {"menu.settings", "设置", "Settings"},
     {"menu.language", "语言", "Language"},
     {"menu.about", "关于", "About"},
-    /* 菜单栏语言切换入口：显示"目标语言"提示（中文界面→language，英文界面→中文），
-     * 便于引导用户切换语言（用户需求） */
+    /* Language switch entry shows the TARGET language hint: "language" on a
+     * Chinese UI, "中文" on an English UI (guides the user to switch). */
     {"menu.lang_hint", "language", "中文"},
     {"lang.zh", "中文", "中文"},
     {"lang.en", "English", "English"},
-    /* 阶段状态（F8） */
+    /* Stage states */
     {"stage.idle", "空闲", "Idle"},
     {"stage.downloading", "下载中", "Downloading"},
     {"stage.parsing", "解析中", "Parsing"},
@@ -89,7 +90,7 @@ const Entry kStrings[] = {
     {"stage.canceled", "已取消", "Canceled"},
     {"stage.paused", "已暂停", "Paused"},
     {"stage.error", "错误", "Error"},
-    /* 弹窗（F11/F12/F13） */
+    /* Dialogs */
     {"dialog.error.title", "下载失败", "Download Failed"},
     {"dialog.error.copy", "复制", "Copy"},
     {"dialog.error.ok", "确定", "OK"},
@@ -102,22 +103,24 @@ const Entry kStrings[] = {
     {"dialog.exists.cancel", "取消", "Cancel"},
     {"dialog.done.title", "下载完成", "Download Complete"},
     {"dialog.done.ok", "确定", "OK"},
-    /* 关于弹窗 */
+    /* About dialog */
     {"dialog.about.title", "关于 Burst Download", "About Burst Download"},
     {"dialog.about.version", "版本", "Version"},
     {"dialog.about.platform", "平台", "Platform"},
     {"dialog.about.license", "开源协议", "License"},
     {"dialog.about.ok", "确定", "OK"},
-    /* 通用 */
+    /* Common */
     {"msg.canceled", "已取消，部分文件保留可续传",
      "Canceled. Partial files kept for resume."},
     {"msg.error.log", "详见 download.log", "See download.log for details"},
     {"window.title", "Burst Download", "Burst Download"},
-    /* 错误弹窗分类指引（§8.3） */
+    /* Error dialog category guidance */
     {"err.guide.init", "检查保存路径与目录权限；确认 URL 可访问后重试。",
-     "Check the save path and folder permissions; verify the URL is reachable and retry."},
+     "Check the save path and folder permissions; verify the URL is "
+     "reachable and retry."},
     {"err.guide.generic", "检查网络连接与 URL；可稍后重试。详情见 download.log。",
-     "Check network connection and URL; retry later. See download.log for details."},
+     "Check network connection and URL; retry later. See download.log for "
+     "details."},
     {"err.url.invalid", "URL 无效：请输入以 http:// 或 https:// 开头的下载地址。",
      "Invalid URL: enter an address starting with http:// or https://."},
     {"err.thunder.invalid", "迅雷链接解码失败：无法提取有效的 http/https 下载地址。",
@@ -127,7 +130,7 @@ const Entry kStrings[] = {
     {"err.busy", "已有任务在运行，请等待其完成或取消后再试。",
      "A task is already running; wait for it to finish or cancel it first."},
     {"label.status", "状态", "Status"},
-    /* 视频模式错误指引（§8.3 错误分类：解析失败/合并失败） */
+    /* Video-mode error guidance (parse failure / merge failure) */
     {"err.guide.parse", "解析失败：请确认视频页面 URL 有效且可访问；"
      "网站改版时可稍后重试，或用 --update-parser 更新解析组件。",
      "Parsing failed: verify the video page URL is valid and reachable; "
@@ -135,17 +138,18 @@ const Entry kStrings[] = {
     {"err.guide.merge", "音视频轨已下载成功，但自动合并失败。两轨文件已保留，"
      "可用外部工具手动合并（ffmpeg -i <视频轨> -i <音频轨> -c copy <输出>）。",
      "Tracks downloaded, but auto-merge failed. Both track files are kept; "
-     "merge manually with an external tool (ffmpeg -i <video> -i <audio> -c copy <out>)."},
+     "merge manually with an external tool (ffmpeg -i <video> -i <audio> "
+     "-c copy <out>)."},
 };
 
 Lang g_lang = Lang::En;
 std::string g_exe_dir;
 
-/* ---- config.ini 持久化（与 exe 同目录，格式 key=value，ASCII） ---- */
+/* ---- config.ini persistence (next to the exe, key=value, ASCII) ---- */
 const char* kConfigFile = "config.ini";
 
 #ifdef _WIN32
-/** UTF-8 → UTF-16（Windows 中文路径） */
+/** UTF-8 -> UTF-16 (Windows paths with CJK characters). */
 std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return std::wstring();
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
@@ -155,7 +159,7 @@ std::wstring Utf8ToWide(const std::string& s) {
 }
 #endif
 
-/** 读取 config.ini 的 lang 值；未设置返回空串 */
+/** Read the lang value from config.ini; empty when not set. */
 std::string ReadConfigLang() {
     std::string path = g_exe_dir + "/" + kConfigFile;
     FILE* f = nullptr;
@@ -172,7 +176,7 @@ std::string ReadConfigLang() {
     while (fgets(line, sizeof(line), f) != nullptr) {
         if (strncmp(line, "lang=", 5) == 0) {
             lang = std::string(line + 5);
-            /* 去掉末尾换行/空白 */
+            /* Strip trailing newline/whitespace. */
             while (!lang.empty() &&
                    (lang.back() == '\n' || lang.back() == '\r' ||
                     lang.back() == ' ')) {
@@ -185,27 +189,66 @@ std::string ReadConfigLang() {
     return lang;
 }
 
-/** 写 config.ini（保留其他 key 的前提下更新 lang=） */
+/** Write config.ini, preserving unknown keys while updating lang=. */
 void WriteConfigLang(const std::string& lang) {
     std::string path = g_exe_dir + "/" + kConfigFile;
+    std::string content;
+    char line[256];
     FILE* f = nullptr;
 #ifdef _WIN32
-    f = _wfopen(Utf8ToWide(path).c_str(), L"w");
+    f = _wfopen(Utf8ToWide(path).c_str(), L"r");
 #else
-    f = fopen(path.c_str(), "w");
+    f = fopen(path.c_str(), "r");
+#endif
+    if (f != nullptr) {
+        while (fgets(line, sizeof(line), f) != nullptr) {
+            content += line;
+        }
+        fclose(f);
+    }
+
+    /* Replace the lang= line, or append it; keep all other keys. */
+    const std::string new_line = "lang=" + lang + "\n";
+    const size_t pos = content.find("lang=");
+    if (pos != std::string::npos) {
+        const size_t end = content.find('\n', pos);
+        if (end == std::string::npos) {
+            content = content.substr(0, pos) + new_line;
+        } else {
+            content = content.substr(0, pos) + new_line +
+                      content.substr(end + 1);
+        }
+    } else {
+        content += new_line;
+    }
+
+    /* Atomic replace: write a temp file then move it over the target, so a
+     * crash cannot leave a torn config file (issue R11). */
+    const std::string tmp = path + ".tmp";
+#ifdef _WIN32
+    f = _wfopen(Utf8ToWide(tmp).c_str(), L"w");
+#else
+    f = fopen(tmp.c_str(), "w");
 #endif
     if (f == nullptr) {
         return;
     }
-    fprintf(f, "lang=%s\n", lang.c_str());
+    fputs(content.c_str(), f);
     fclose(f);
+#ifdef _WIN32
+    MoveFileExW(Utf8ToWide(tmp).c_str(), Utf8ToWide(path).c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+#else
+    std::rename(tmp.c_str(), path.c_str());
+#endif
 }
 
-/** 系统语言检测：Windows UI 语言 / Linux LANG 前缀 zh；检测失败默认 En */
+/** System language detection: Windows UI language / Linux LANG zh prefix;
+ *  falls back to En when detection fails. */
 Lang DetectSystemLang() {
 #ifdef _WIN32
-    LANGID lid = GetUserDefaultUILanguage();
-    /* 主语言 ID 0x04 = 简体中文（0x0804/0x0404 等） */
+    const LANGID lid = GetUserDefaultUILanguage();
+    /* Primary language ID 0x04 = Simplified Chinese (0x0804/0x0404 etc.). */
     if ((lid & 0xFF) == 0x04) {
         return Lang::Zh;
     }
@@ -223,13 +266,13 @@ Lang DetectSystemLang() {
 
 Lang Init(const std::string& exe_dir) {
     g_exe_dir = exe_dir;
-    std::string cfg = ReadConfigLang();
+    const std::string cfg = ReadConfigLang();
     if (cfg == "zh") {
         g_lang = Lang::Zh;
     } else if (cfg == "en") {
         g_lang = Lang::En;
     } else {
-        /* 未设置过才跟随系统（R20：手动切换 + 持久化兜底） */
+        /* Follow the system only when the user never switched manually. */
         g_lang = DetectSystemLang();
     }
     return g_lang;
@@ -250,7 +293,7 @@ const char* T(const char* key) {
             return g_lang == Lang::Zh ? e.zh : e.en;
         }
     }
-    /* 缺键：返回 key 本身并告警（R19） */
+    /* Missing key: return the key itself and warn. */
     printf("[i18n] missing key: %s\n", key);
     return key;
 }

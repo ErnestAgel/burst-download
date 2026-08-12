@@ -2,8 +2,8 @@
  * @file test_cli_parse.cpp
  * @brief Unit tests for the pure CLI argument parser.
  *
- * The tests document the legacy parser contract, including the "./test"
- * output sentinel (issue R11) which P1 will replace with an explicit flag.
+ * The tests document the parser contract, including the explicit output-set
+ * flag introduced by issue R11 (no "./test" sentinel anymore).
  */
 
 #include <string>
@@ -94,15 +94,15 @@ static void TestCliParseDownloadDefaults(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, bOk == TRUE);
     BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionDownload);
     BURST_EXPECT_STR_EQ(cReport, "https://example.com/a.iso", tOpts.strUrl);
-    BURST_EXPECT_STR_EQ(cReport, BURST_CLI_DEFAULT_FILENAME,
-                        tOpts.strFilename);
+    BURST_EXPECT_TRUE(cReport, tOpts.bOutputSet == FALSE);
+    BURST_EXPECT_TRUE(cReport, tOpts.strFilename.empty());
     BURST_EXPECT_TRUE(cReport, tOpts.nThreads == 4);
     BURST_EXPECT_TRUE(cReport, tOpts.nTimeout == 60);
     BURST_EXPECT_TRUE(cReport, tOpts.bVideoMode == FALSE);
     BURST_EXPECT_TRUE(cReport, tOpts.bAutoUpdateParser == TRUE);
 }
 
-/** @brief Test: -o and explicit "./test" (legacy sentinel behavior, R11). */
+/** @brief Test: -o marks the output as explicitly set (issue R11). */
 static void TestCliParseOutputOption(CTestReport& cReport)
 {
     cReport.BeginCase("cli_parse: -o option");
@@ -113,12 +113,14 @@ static void TestCliParseOutputOption(CTestReport& cReport)
     std::vector<std::string> vecArgsOut = {"burst", "u", "-o", "out.bin"};
     RunParse(vecArgsOut, tOpts, bOk, strError);
     BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.bOutputSet == TRUE);
     BURST_EXPECT_STR_EQ(cReport, "out.bin", tOpts.strFilename);
 
-    std::vector<std::string> vecArgsSentinel =
+    std::vector<std::string> vecArgsExplicit =
         {"burst", "u", "-o", "./test"};
-    RunParse(vecArgsSentinel, tOpts, bOk, strError);
+    RunParse(vecArgsExplicit, tOpts, bOk, strError);
     BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.bOutputSet == TRUE);
     BURST_EXPECT_STR_EQ(cReport, "./test", tOpts.strFilename);
 }
 
@@ -216,8 +218,8 @@ static void TestCliParseErrors(CTestReport& cReport)
     std::vector<std::string> vecArgsUnknown = {"burst", "--bogus"};
     RunParse(vecArgsUnknown, tOpts, bOk, strError);
     BURST_EXPECT_TRUE(cReport, bOk == FALSE);
-    BURST_EXPECT_TRUE(cReport, strError.find("未知参数") !=
-                                std::string::npos);
+    BURST_EXPECT_TRUE(cReport, strError.find("unknown argument") !=
+                               std::string::npos);
 
     std::vector<std::string> vecArgsSecondUrl = {"burst", "a", "b"};
     RunParse(vecArgsSecondUrl, tOpts, bOk, strError);

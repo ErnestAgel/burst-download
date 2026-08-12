@@ -12,9 +12,6 @@
 #include <string>
 #include "burst_types.h"
 
-/** @brief Sentinel used for "no -o option given" (legacy behavior, see R11). */
-#define BURST_CLI_DEFAULT_FILENAME "./test"
-
 /** @brief Parsed CLI action. */
 typedef enum tagCliAction
 {
@@ -32,6 +29,7 @@ typedef struct tagCliOptions
     std::string strUrl;
     std::string strVideoUrl;
     std::string strFilename;
+    BOOL32      bOutputSet;
     s32         nThreads;
     s32         nTimeout;
     BOOL32      bVideoMode;
