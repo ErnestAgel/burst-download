@@ -13,6 +13,7 @@
 
 #include "app.h"
 #include "embedded_runtime.h"
+#include "embed_python.h"
 
 #include <cstdio>
 #include <cstring>
@@ -121,7 +122,9 @@ int main(int argc, char** argv)
 #ifdef BURST_HAS_GUI
     if (bExplicitGui || (argc <= 1))
     {
-        return RunGui(argc, argv);
+        const int nExit = RunGui(argc, argv);
+        EmbedPythonStopWorker(2);
+        return nExit;
     }
 #else
     if (bExplicitGui)
@@ -155,5 +158,7 @@ int main(int argc, char** argv)
         }
     }
 #endif
-    return RunCli(argc, argv);
+    const int nExit = RunCli(argc, argv);
+    EmbedPythonStopWorker(2);
+    return nExit;
 }

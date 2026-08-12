@@ -1,9 +1,10 @@
 /**
  * @file main_gui.cpp
- * @brief GUI 入口（RunGui）：GLFW 窗口 + ImGui 初始化 + 主循环 + 安全退出流程（§8.4）
+ * @brief GUI entry (RunGui): GLFW window + ImGui init + main loop + safe
+ *        exit flow.
  *
- * 退出铁律：置 cancel → join（≤5s）→ ImGui/GLFW 清理 → return；
- * 禁止 detach 或 RUNNING 中 exit（§8.4）。
+ * Exit rule: cancel -> join (bounded, then final join) -> ImGui/GLFW
+ * cleanup -> return; detach or exit-while-running are forbidden.
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -15,7 +16,7 @@
 #include <string>
 
 #ifndef _WIN32
-#include <unistd.h> /* Linux: readlink 解析 /proc/self/exe（§5.4 路径解析） */
+#include <unistd.h> /* Linux: readlink resolves /proc/self/exe */
 #endif
 
 #include "imgui.h"
@@ -40,7 +41,7 @@
 
 namespace {
 
-/** @brief 致命错误提示（Windows 弹窗 / Linux stderr） */
+/** @brief Fatal error prompt (Windows message box / Linux stderr). */
 void ShowFatal(const char* msg) {
 #ifdef _WIN32
     MessageBoxA(NULL, msg, "burst-gui", MB_OK | MB_ICONERROR);
@@ -49,7 +50,7 @@ void ShowFatal(const char* msg) {
 #endif
 }
 
-/** @brief 获取可执行文件所在目录（UTF-8；用于 config.ini 同目录定位） */
+/** @brief Executable directory (UTF-8; used to locate config.ini). */
 std::string ExeDir(const char* argv0) {
 #ifdef _WIN32
     wchar_t buf[MAX_PATH * 4] = {0};
@@ -59,7 +60,7 @@ std::string ExeDir(const char* argv0) {
     if (slash != std::wstring::npos) {
         w = w.substr(0, slash);
     }
-    /* UTF-16 → UTF-8 */
+    /* UTF-16 -> UTF-8. */
     int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0,
                                   NULL, NULL);
     std::string s(len, '\0');
@@ -81,53 +82,49 @@ std::string ExeDir(const char* argv0) {
 #endif
 }
 
-/** @brief 单实例互斥（§8.4）：已有一个实例则提示并尝试激活旧窗口，防双开同时写同一文件 */
+/** @brief Single-instance guard: prevents two instances writing the same
+ *         files; prompts and tries to activate the old window. */
 bool AcquireSingleInstance() {
 #ifdef _WIN32
     HANDLE h = CreateMutexW(NULL, TRUE, L"Global\\burst-gui");
     if (h == NULL) {
-        return true;  /* 创建失败不阻塞（无权限等），按单实例处理 */
+        return true;  /* creation failure (no rights etc.) is not blocking */
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        /* 已有实例：激活其窗口（若可见），并给出清晰提示 */
+        /* An instance already runs: try to activate its window. */
         HWND existing = FindWindowW(NULL, L"Burst Download");
-        if (existing == NULL) {
-            /* 窗口标题可能是 i18n 文本（中/英），按进程名枚举兜底 */
-            existing = NULL;
-            HWND hw = NULL;
-            DWORD target_pid = 0;
-            /* 不精确匹配：仅提示即可 */
-            (void)hw;
-            (void)target_pid;
-        }
         if (existing != NULL) {
             ShowWindow(existing, SW_RESTORE);
             SetForegroundWindow(existing);
         }
         MessageBoxW(NULL,
-                    L"burst-gui 已在运行。\n"
-                    L"若刚启动即提示此信息，说明已有实例在后台运行：\n"
-                    L"  1. 请在任务栏找到并关闭旧的 burst-gui 窗口，或\n"
-                    L"  2. 在任务管理器中结束 burst-gui.exe 进程后重试。",
+                    L"burst-gui is already running.\n"
+                    L"If this appears right after launch, an old instance is "
+                    L"running in the background:\n"
+                    L"  1. find and close the old burst-gui window in the "
+                    L"taskbar, or\n"
+                    L"  2. end the burst-gui.exe process in Task Manager and "
+                    L"retry.",
                     L"burst-gui", MB_OK | MB_ICONINFORMATION);
         return false;
     }
     return true;
 #else
     (void)0;
-    return true;  /* Linux 锁文件 Phase 3 补齐（当前桌面单用户场景风险低） */
+    return true;  /* Linux lock file planned (Phase 3; low risk on a single
+                   * user desktop) */
 #endif
 }
 
 }  // namespace
 
 int RunGui(int argc, char** argv) {
-    /* 崩溃兜底（§8.2）：真崩溃也写 crash.log + 弹窗，不"裸退" */
+    /* Crash guard: real crashes write crash.log + show a prompt. */
     crashguard::Install();
 
 #ifdef _WIN32
-    /* Windows 高分屏：声明进程 DPI 感知，避免无边框窗口首次显示被系统
-     * DPI 缩放导致"启动时明显宽度 resize"（900x640 被放大/收缩跳动） */
+    /* High-DPI awareness: prevents the borderless window from being DPI
+     * scaled on first show (visible width "resize" jitter). */
     {
         HMODULE u32 = GetModuleHandleW(L"user32.dll");
         if (u32 != nullptr) {
@@ -141,50 +138,54 @@ int RunGui(int argc, char** argv) {
     }
 #endif
 
-    /* 单实例检测（§8.4） */
+    /* Single-instance guard. */
     if (!AcquireSingleInstance()) {
         return 1;
     }
 
-    /* 国际化：config.ini 持久化优先，否则跟随系统（§3.3） */
+    /* i18n: config.ini persistence first, otherwise the system language. */
     i18n::Init(ExeDir(argc > 0 ? argv[0] : ""));
 
-    /* 初始化嵌入的 Python 运行时（视频解析用；幂等）。
-     * 定位顺序：exe 同目录 assets/ → 临时缓存 → 环境变量/编译期宏；
-     * 初始化失败不阻塞 GUI（文件模式仍可用），视频任务时 worker 会再次尝试并明确报错 */
+    /* Initialize the embedded Python runtime (idempotent; used for video
+     * parsing).  Locate order: assets/ next to the exe -> temp cache ->
+     * env/compile-time macro.  Init failure does not block the GUI (file
+     * mode still works); video tasks retry and report clearly. */
     EmbedPythonInit();
 
     /* ---- GLFW ---- */
     if (!glfwInit()) {
-        ShowFatal("GLFW 初始化失败。");
+        ShowFatal("GLFW initialization failed.");
         return 1;
     }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    /* 无边框窗口：系统标题栏由 UI 自绘（最小化/最大化/关闭按钮在自绘标题栏上） */
 #ifdef _WIN32
-    /* Windows: 无边框 + 自绘标题栏/resize 手柄（ui.cpp RenderTitleBar/RenderResizeGrip） */
+    /* Windows: borderless with a custom title bar / resize grip (ui.cpp
+     * RenderTitleBar / RenderResizeGrip). */
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
 #else
-    /* Linux: 系统标题栏与边框（窗口管理器提供拖动/缩放） */
+    /* Linux: system title bar and borders (window manager provides
+     * drag/resize). */
     glfwWindowHint(GLFW_DECORATED, GLFW_TRUE);
 #endif
     GLFWwindow* window = glfwCreateWindow(900, 640, i18n::T("window.title"),
                                           NULL, NULL);
     if (window == nullptr) {
-        /* R14：OpenGL 3.3+ 不可用（虚拟机/旧驱动）→ 弹窗指引，不崩溃 */
-        ShowFatal("无法创建 OpenGL 3.3+ 窗口。\n"
-                  "请升级显卡驱动，或在虚拟机中关闭 3D 加速后重试。");
+        /* OpenGL 3.3+ unavailable (VM / old driver): prompt, do not crash. */
+        ShowFatal("Failed to create an OpenGL 3.3+ window.\n"
+                  "Upgrade your GPU driver, or disable 3D acceleration in "
+                  "the virtual machine.");
         glfwTerminate();
         return 1;
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
-    /* 最小窗口尺寸：防 resize 手柄把窗口缩到无法操作 */
+    /* Minimum window size: prevents the resize grip from shrinking the
+     * window unusably. */
     glfwSetWindowSizeLimits(window, 640, 480, GLFW_DONT_CARE, GLFW_DONT_CARE);
-    /* 无边框窗口启动即强制聚焦：避免未激活时 Windows 将第一次点击
-     * 仅用于激活窗口（事件被系统消费 → "需要单击两次才有响应"） */
+    /* Focus the borderless window at startup: avoids the first click being
+     * consumed just to activate the window ("needs two clicks"). */
     glfwFocusWindow(window);
 #ifdef _WIN32
     if (HWND hwnd = glfwGetWin32Window(window)) {
@@ -199,11 +200,12 @@ int RunGui(int argc, char** argv) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    /* One Dark 主题（用户指定配色） */
+    /* One Dark theme (user-specified palette). */
     theme::ApplyOneDark();
 
-    /* 嵌入字体（GB2312 全量 + ASCII，中英一套字体，§3.3/§7.3）
-     * OversampleH/V 提高位图密度 → 中文渲染更清晰（代价：atlas 体积增大） */
+    /* Embedded font (GB2312 full + ASCII, one font for both languages).
+     * OversampleH/V raise the bitmap density for crisper CJK rendering
+     * (atlas size grows as a tradeoff). */
     {
         ImFontConfig cfg;
         cfg.FontDataOwnedByAtlas = false;
@@ -214,7 +216,7 @@ int RunGui(int argc, char** argv) {
             (int)third_party_fonts_NotoSansSC_subset_ttf_len, 18.0f, &cfg,
             io.Fonts->GetGlyphRangesChineseFull());
         if (font == nullptr) {
-            ShowFatal("字体加载失败。");
+            ShowFatal("Font loading failed.");
             ImGui::DestroyContext();
             glfwDestroyWindow(window);
             glfwTerminate();
@@ -224,20 +226,20 @@ int RunGui(int argc, char** argv) {
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window, true) ||
         !ImGui_ImplOpenGL3_Init("#version 130")) {
-        ShowFatal("ImGui 后端初始化失败。");
+        ShowFatal("ImGui backend initialization failed.");
         ImGui::DestroyContext();
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
     }
 
-    /* ---- 主循环 ---- */
+    /* ---- Main loop ---- */
     DownloadWorker worker;
     ui::Init(window);
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
-        /* 每帧清屏：修复窗口 resize 时旧帧残留导致的拖影 */
+        /* Clear every frame: prevents ghosting after window resizes. */
         glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
         glClearColor(0.10f, 0.10f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -253,19 +255,24 @@ int RunGui(int argc, char** argv) {
         glfwSwapBuffers(window);
     }
 
-    /* ---- 退出流程（§8.4 铁律）：置 cancel → join（≤5s）→ 清理 ---- */
+    /* ---- Exit flow: cancel -> join (bounded) -> cleanup ---- */
     if (worker.IsRunning()) {
         worker.Cancel();
         if (!worker.Join(5)) {
-            printf("[gui] worker join timeout, force continue cleanup\n");
+            /* Issue R1: never let the worker's destructor terminate; wait
+             * for it to finish (cancel checkpoints make this bounded). */
+            printf("[gui] worker still running, waiting for it to finish\n");
+            worker.Join(0);
         }
     }
 
-    /* 释放嵌入的 Python 解释器：**不调用** EmbedPythonShutdown ——
-     * Py_FinalizeEx 在 yt_dlp 加载大量扩展模块后可能长时间挂起（用户反馈
-     * "下载完成后关闭程序未响应"），且 CLI 同样不调用（进程退出时系统回收，
-     * Python 官方亦建议嵌入程序可跳过 finalize）。若需 Shutdown 应放于
-     * 所有 GLFW/ImGui 清理之后并容忍挂起风险。 */
+    /* The embedded Python interpreter is intentionally NOT finalized:
+     * Py_FinalizeEx can hang for a long time after yt_dlp loads many
+     * extension modules (reported as "program unresponsive after download"),
+     * and the CLI does not finalize either (the OS reclaims at exit; the
+     * Python docs also allow skipping finalize for embedders).  If a
+     * shutdown is ever needed, it must run after all GLFW/ImGui cleanup and
+     * tolerate the hang risk. */
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

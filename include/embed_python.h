@@ -1,10 +1,15 @@
 /**
  * @file embed_python.h
- * @brief 进程内嵌入 CPython + yt_dlp 的视频直链解析（纯代码调用，无外部进程）
+ * @brief In-process embedded CPython + yt_dlp video URL parsing (pure code
+ *        calls, no external process).
  *
- * 运行时资源（stdlib/、yt_dlp/）从 python_home 加载：
- *   - 默认 <可执行文件同目录>/assets/
- *   - 编译期宏 PYTHON_RUNTIME_FALLBACK 指定的源码树路径（开发调试用）
+ * Runtime assets (stdlib/, yt_dlp/) load from python_home:
+ *   - default <executable-dir>/assets/
+ *   - compile-time macro PYTHON_RUNTIME_FALLBACK source tree (dev/debug)
+ *
+ * All Python execution runs on a single dedicated worker thread with the
+ * GIL held (issue R5); parse/update calls are budgeted and cancel-aware
+ * (issues R1/R6).
  *
  * @author ErnestAgel
  * @date 2026-08-06
@@ -15,55 +20,77 @@
 #ifndef EMBED_PYTHON_H
 #define EMBED_PYTHON_H
 
+#include <atomic>
 #include <string>
 #include <vector>
 
 /**
- * @brief 初始化嵌入的 CPython（进程内调用一次，线程安全计数）
- * @param python_home 运行时资源根目录；为空时依次尝试：
- *                    exe 同目录/assets → 环境变量 CURLBOLT_PYHOME →
- *                    编译期宏 PYTHON_RUNTIME_FALLBACK
- * @return 是否初始化成功
+ * @brief Initialize the embedded CPython (idempotent, thread-safe).
+ * @param python_home Runtime assets root; when empty tries: exe assets/ ->
+ *        temp cache -> CURLBOLT_PYHOME -> compile-time macro.
+ * @return TRUE when initialization succeeded.
  */
 bool EmbedPythonInit(const std::string& python_home = "");
 
 /**
- * @brief 用嵌入的 yt_dlp 解析视频网页，得到媒体流直链列表
- * @param url 视频网页 URL（如 B站/YouTube 视频页）
- * @param urls 输出：媒体流直链列表（DASH 分离时依次为视频轨、音频轨）
- * @param cookies_from_browser 浏览器 Cookie 来源（chrome/firefox/edge，可为空）
- * @param cookie 手动 Cookie 字符串（可为空）
- * @param err 失败原因描述
- * @return 是否成功
- * @note 必须先在 EmbedPythonInit 成功后调用
+ * @brief Parse a video page with the embedded yt_dlp into media stream
+ *        URLs.
+ * @param url Video page URL (e.g. Bilibili/YouTube video page).
+ * @param urls Output: media stream URL list (DASH order: video, audio).
+ * @param cookies_from_browser Browser cookie source (chrome/firefox/edge,
+ *        may be empty).
+ * @param cookie Manual cookie string (may be empty).
+ * @param err Failure description on error.
+ * @param pbCancel Optional cancel flag; aborting mid-parse returns FALSE
+ *        with an empty err (caller maps to a cancel state).
+ * @return TRUE on success.
+ * @note EmbedPythonInit must succeed first.
  */
 bool EmbedParseVideoUrls(const std::string& url,
                          std::vector<std::string>& urls,
                          const std::string& cookies_from_browser,
                          const std::string& cookie,
-                         std::string& err);
+                         std::string& err,
+                         const std::atomic<bool>* pbCancel = nullptr);
 
 /**
- * @brief 在线更新内置视频解析组件（yt_dlp 包）到 GitHub 最新版
- * @param exe_path 可执行文件路径（argv[0]），用于定位同目录 assets/
- * @param msg 输出：执行结果描述（"已是最新" 或 新旧版本变化；失败为原因）
- * @return 是否执行成功（"已是最新" 也视为成功）
- * @note 需网络；仅替换 yt_dlp 包目录（原子替换，失败自动回滚保留旧版）；
- *       纯 Python 包替换，无需重新编译/打包 burst
+ * @brief Update the built-in video parser (yt_dlp package) to the latest
+ *        GitHub release.
+ * @param exe_path Executable path used to locate the same-dir assets/.
+ * @param msg Output: result description ("already latest" or version
+ *        change; failure reason).
+ * @return TRUE on success ("already latest" counts as success).
+ * @note Needs network; replaces only the yt_dlp package directory
+ *       (atomic replace with rollback).  Budgeted at 60s.
  */
 bool EmbedUpdateParser(const std::string& exe_path, std::string& msg);
 
 /**
- * @brief 自动更新内置视频解析组件（视频模式启动时调用）
- * @param msg 输出：执行结果描述；24h 节流内跳过时为空串
- * @return 是否完成检查（节流跳过也返回 true；运行时缺失/网络失败返回 false，调用方可忽略）
- * @note 24 小时节流一次（同一运行时目录），失败静默不阻塞后续解析；
- *       需要网络；仅替换 yt_dlp 包目录（原子替换，失败自动回滚保留旧版）
+ * @brief Auto-update the built-in video parser (called at video mode
+ *        start).
+ * @param msg Output: result description; empty when the 24h throttle skips.
+ * @param pbCancel Optional cancel flag; when set, the check is skipped.
+ * @return TRUE when a check completed (throttle skip also returns TRUE;
+ *         runtime missing / network failure returns FALSE, callers may
+ *         ignore).
+ * @note Throttled to once per 24h per runtime dir; failures are silent and
+ *       do not block parsing.  Needs network; replaces only the yt_dlp
+ *       package directory (atomic replace with rollback).
  */
-bool EmbedAutoUpdateParser(std::string& msg);
+bool EmbedAutoUpdateParser(std::string& msg,
+                           const std::atomic<bool>* pbCancel = nullptr);
 
 /**
- * @brief 释放嵌入的 CPython 与资源（可选调用，进程退出前）
+ * @brief Stop the dedicated Python worker thread without finalizing the
+ *        interpreter (safe for process exit).
+ * @param nTimeoutSec Bounded wait; on timeout the thread is detached so a
+ *        stuck network job cannot block exit.
+ */
+void EmbedPythonStopWorker(long nTimeoutSec = 2);
+
+/**
+ * @brief Release the embedded CPython and resources (optional, before
+ *        process exit).
  */
 void EmbedPythonShutdown();
 

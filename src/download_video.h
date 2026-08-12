@@ -105,7 +105,8 @@ public:
                     const std::string& strBasename, int nThreads,
                     int nTimeout,
                     const std::string& strCookiesFromBrowser = "",
-                    const std::string& strCookie = "");
+                    const std::string& strCookie = "",
+                    const std::atomic<bool>* pbCancel = nullptr);
 
     /**
      * @brief Final output artifact path (read after Run).

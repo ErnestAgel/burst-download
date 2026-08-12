@@ -26,10 +26,11 @@ using namespace std;
 
 bool ParseVideoUrls(const string& strUrl, vector<string>& vecUrls,
                     const string& strCookiesFromBrowser,
-                    const string& strCookie, string* pstrErr) {
+                    const string& strCookie, string* pstrErr,
+                    const std::atomic<bool>* pbCancel) {
     string strDetail;
     if (!EmbedParseVideoUrls(strUrl, vecUrls, strCookiesFromBrowser,
-                             strCookie, strDetail)) {
+                             strCookie, strDetail, pbCancel)) {
         fprintf(stderr, "[video] parsing failed: %s\n", strDetail.c_str());
         if (pstrErr) {
             *pstrErr = strDetail;

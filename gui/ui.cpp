@@ -477,9 +477,10 @@ void RenderForm(DownloadWorker& worker) {
         if (ImGui::Button(i18n::T("button.cancel"),
                           ImVec2(avail * 0.5f - 4.0f, 0))) {
             worker.Cancel();  /* first cancel = pause intent (cache kept) */
-            g_paused = true;  /* optimistic: buttons switch to resume/stop */
-            worker.AddLog("[INFO] pause requested: click Resume to continue "
-                          "or Stop to delete the cache");
+            /* Issue R10: do not optimistically enter the paused state; the
+             * stage edge decides pause (download cancel) vs stop (parse/
+             * merge cancel) once the worker actually stops. */
+            worker.AddLog("[INFO] cancel requested, stopping...");
         }
         ImGui::EndDisabled();
     }
@@ -1163,6 +1164,7 @@ bool Render(DownloadWorker& worker) {
      * CANCELED = user pause (cache kept, resume/stop available);
      * DONE/ERROR exit the paused state. */
     if (g_started && stage != g_last_stage) {
+        const int prev_stage = g_last_stage;
         g_last_stage = stage;
         if (stage == STAGE_DONE) {
             g_done_path = snap.status;  /* completion path is in the log */
@@ -1173,9 +1175,19 @@ bool Render(DownloadWorker& worker) {
                            ErrorGuide(snap.error), g_last_path);
             g_paused = false;
         } else if (stage == STAGE_CANCELED) {
-            g_paused = true;
-            worker.AddLog("[INFO] paused (cache kept): click Resume to "
-                          "continue or Stop to delete the cache");
+            /* Issue R10: a cancel during download is a real pause (cache
+             * kept, resume possible); a cancel during parse/merge simply
+             * stops the task. */
+            if ((prev_stage == STAGE_DOWNLOADING) ||
+                (prev_stage == STAGE_VIDEO_DL) ||
+                (prev_stage == STAGE_AUDIO_DL)) {
+                g_paused = true;
+                worker.AddLog("[INFO] paused (cache kept): click Resume to "
+                              "continue or Stop to delete the cache");
+            } else {
+                g_paused = false;
+                worker.AddLog("[INFO] task stopped");
+            }
         }
     }
     g_started = worker.IsRunning() || g_started;

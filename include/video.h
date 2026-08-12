@@ -14,6 +14,7 @@
 
 #include <string>
 #include <vector>
+#include <atomic>
 
 /**
  * @brief Parse a video page URL into downloadable media stream URLs.
@@ -32,6 +33,7 @@ bool ParseVideoUrls(const std::string& strUrl,
                     std::vector<std::string>& vecUrls,
                     const std::string& strCookiesFromBrowser = "",
                     const std::string& strCookie = "",
-                    std::string* pstrErr = nullptr);
+                    std::string* pstrErr = nullptr,
+                    const std::atomic<bool>* pbCancel = nullptr);
 
 #endif  // VIDEO_H

@@ -60,12 +60,18 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
                                  const std::string& strBasename, int nThreads,
                                  int nTimeout,
                                  const std::string& strCookiesFromBrowser,
-                                 const std::string& strCookie) {
+                                 const std::string& strCookie,
+                                 const std::atomic<bool>* pbCancel) {
     m_last_error.clear();
     m_output_path.clear();
 
+    /* Effective cancel flag: the external one (worker) takes precedence so a
+     * cancel aborts the in-flight parse immediately (issues R1/R6). */
+    const std::atomic<bool>* pCancel =
+        (pbCancel != nullptr) ? pbCancel : &m_cancel;
+
     /* Cancellation checkpoint: before parsing. */
-    if (m_cancel.load()) {
+    if (m_cancel.load() || pCancel->load()) {
         return VideoResult::Canceled;
     }
 
@@ -77,7 +83,10 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
     vector<string> vecStreams;
     string strParseErr;
     if (!ParseVideoUrls(strVideoUrl, vecStreams, strCookiesFromBrowser,
-                        strCookie, &strParseErr)) {
+                        strCookie, &strParseErr, pCancel)) {
+        if (m_cancel.load() || pCancel->load()) {
+            return VideoResult::Canceled;
+        }
         m_last_error =
             "video parsing failed: verify the URL is valid/reachable and "
             "the Python runtime assets are intact";
@@ -99,7 +108,7 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
         vecStreams.size() < 2 ? vecStreams.size() : 2;
     for (size_t nIndex = 0; nIndex < nStreamCount; nIndex++) {
         /* Cancellation checkpoint: before each stream. */
-        if (m_cancel.load()) {
+        if (m_cancel.load() || pCancel->load()) {
             return VideoResult::Canceled;
         }
         const string strOut =
@@ -162,7 +171,7 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
     /* ---- Stage 3: merge (DASH separated tracks; single stream skips) ---- */
     if (nStreamCount > 1) {
         /* Cancellation checkpoint: before merging. */
-        if (m_cancel.load()) {
+        if (m_cancel.load() || pCancel->load()) {
             return VideoResult::Canceled;
         }
         if (onStage) {
@@ -176,7 +185,10 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
             strBasename + "_full" + SuggestMergeExt(strVFile);
         string strMerr;
         string strMergedUsed = strMerged;
-        if (!MergeMp4(strVFile, strAFile, strMerged, strMerr)) {
+        if (!MergeMp4(strVFile, strAFile, strMerged, strMerr, pCancel)) {
+            if (m_cancel.load() || pCancel->load()) {
+                return VideoResult::Canceled;
+            }
             /* Generic fallback: when the mp4 container rejects some codecs
              * (e.g. Opus audio / missing HEVC tags), retry with Matroska
              * (.mkv, compatible with almost all codecs). */
@@ -185,7 +197,11 @@ VideoResult VideoDownloader::Run(const std::string& strVideoUrl,
                 const string strMergedMkv =
                     strMerged.substr(0, strMerged.size() - 4) + ".mkv";
                 string strMerr2;
-                if (MergeMp4(strVFile, strAFile, strMergedMkv, strMerr2)) {
+                if (MergeMp4(strVFile, strAFile, strMergedMkv, strMerr2,
+                             pCancel)) {
+                    if (m_cancel.load() || pCancel->load()) {
+                        return VideoResult::Canceled;
+                    }
                     Log("[INFO] mp4 container incompatible, merged to mkv "
                         "instead -> " + strMergedMkv);
                     strMergedUsed = strMergedMkv;

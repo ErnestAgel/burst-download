@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <fstream>
@@ -55,6 +56,17 @@ std::deque<std::function<void()>> g_py_jobs;
 std::thread g_py_thread;
 bool g_py_thread_started = false;
 bool g_py_thread_stop = false;
+std::atomic<bool> g_py_thread_exited{false};
+PyThreadState* g_py_main_thread_state = nullptr;
+
+/** @brief Shared result state for a Python job (survives caller timeouts). */
+typedef struct tagPyJobResult
+{
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool bDone = false;
+    int nRc = 0;
+} TPyJobResult;
 
 /** @brief Python worker loop: runs queued jobs until stopped. */
 void PythonWorkerLoop()
@@ -75,6 +87,7 @@ void PythonWorkerLoop()
         }
         fnJob();
     }
+    g_py_thread_exited.store(true);
 }
 
 /** @brief Submit a job to the Python worker thread (starts it on demand). */
@@ -90,29 +103,67 @@ void SubmitPythonJob(const std::function<void()>& fnJob)
     g_py_cv.notify_one();
 }
 
-/** @brief Run fnJob on the Python worker thread with the GIL held; blocks
- *         until it finishes. */
-void RunOnPythonThread(const std::function<void()>& fnJob)
+/**
+ * @brief Run fnJob on the Python worker thread with the GIL held.
+ *
+ * Waits up to nTimeoutSec for the job; returns early when pbCancel fires.
+ * On timeout/cancel the job keeps running in the background (it captures
+ * only copies / heap state, never caller-stack references).
+ *
+ * @param fnJob Job to run (must be copy-safe beyond the caller's lifetime).
+ * @param nTimeoutSec Budget in seconds (<= 0 waits forever).
+ * @param pbCancel Optional cancel flag checked while waiting.
+ * @return TRUE when the job finished within the budget.
+ */
+bool RunOnPythonThread(const std::function<void()>& fnJob, long nTimeoutSec,
+                       const std::atomic<bool>* pbCancel)
 {
-    std::mutex mtxDone;
-    std::condition_variable cvDone;
-    bool bDone = false;
-    SubmitPythonJob([&fnJob, &mtxDone, &cvDone, &bDone] {
+    auto pRes = std::make_shared<TPyJobResult>();
+    SubmitPythonJob([fnJob, pRes] {
         const PyGILState_STATE stGil = PyGILState_Ensure();
         fnJob();
         PyGILState_Release(stGil);
         {
-            std::lock_guard<std::mutex> lock(mtxDone);
-            bDone = true;
+            std::lock_guard<std::mutex> lock(pRes->mtx);
+            pRes->bDone = true;
         }
-        cvDone.notify_one();
+        pRes->cv.notify_one();
     });
-    std::unique_lock<std::mutex> lock(mtxDone);
-    cvDone.wait(lock, [&bDone] { return bDone; });
+
+    std::unique_lock<std::mutex> lock(pRes->mtx);
+    if (nTimeoutSec <= 0)
+    {
+        pRes->cv.wait(lock, [pRes] { return pRes->bDone; });
+        return true;
+    }
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(nTimeoutSec);
+    while (!pRes->bDone)
+    {
+        if ((pbCancel != nullptr) && pbCancel->load())
+        {
+            return false;  /* canceled: stop waiting */
+        }
+        if (pRes->cv.wait_until(lock, deadline,
+                                [pRes] { return pRes->bDone; }))
+        {
+            return true;
+        }
+        if ((pbCancel != nullptr) && pbCancel->load())
+        {
+            return false;  /* canceled exactly at the deadline */
+        }
+        return false;  /* deadline passed */
+    }
+    return true;
 }
 
-/** @brief Stop the Python worker thread (called before Py_Finalize). */
-void StopPythonThread()
+/**
+ * @brief Stop the Python worker thread.
+ * @param nTimeoutSec Bounded wait (<= 0 joins forever); on timeout the
+ *        thread is detached so a stuck network job cannot block exit.
+ */
+void StopPythonThread(long nTimeoutSec)
 {
     {
         std::lock_guard<std::mutex> lock(g_py_mutex);
@@ -123,9 +174,29 @@ void StopPythonThread()
         g_py_thread_stop = true;
     }
     g_py_cv.notify_all();
-    if (g_py_thread.joinable())
+    if (!g_py_thread.joinable())
+    {
+        return;
+    }
+    if (nTimeoutSec <= 0)
     {
         g_py_thread.join();
+        return;
+    }
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(nTimeoutSec);
+    while (!g_py_thread_exited.load() &&
+           (std::chrono::steady_clock::now() < deadline))
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (g_py_thread_exited.load())
+    {
+        g_py_thread.join();
+    }
+    else
+    {
+        g_py_thread.detach();  /* still busy: OS reclaims at process exit */
     }
 }
 
@@ -335,7 +406,8 @@ std::string ExtractJsonStr(const std::string& strContent,
 
 /** @brief Run the yt_dlp online check/update for the given runtime home
  *         (shared by the manual --update-parser and the auto update). */
-bool UpdateParserAt(const std::string& strHome, std::string& strMsg)
+bool UpdateParserAt(const std::string& strHome, std::string& strMsg,
+                    const std::atomic<bool>* pbCancel)
 {
     /* Current parser version; empty when no marker file exists, in which
      * case the version comparison is skipped and an update is attempted. */
@@ -469,11 +541,24 @@ bool UpdateParserAt(const std::string& strHome, std::string& strMsg)
         "json.dump(out, open(OUT, 'w', encoding='utf-8'), "
         "ensure_ascii=False)\n";
 
-  int nRc = 0;
-  RunOnPythonThread([&nRc, &strScript] {
-    nRc = PyRun_SimpleString(strScript.c_str());
-  });
-    if (nRc != 0)
+    auto pRc = std::make_shared<int>(0);
+    const std::string strScriptCopy = strScript;
+    const bool bRan = RunOnPythonThread(
+        [pRc, strScriptCopy] {
+            *pRc = PyRun_SimpleString(strScriptCopy.c_str());
+        },
+        60L, pbCancel);
+    if (!bRan)
+    {
+        if ((pbCancel != nullptr) && pbCancel->load())
+        {
+            strMsg = "";
+            return false;  /* canceled: caller maps to a cancel state */
+        }
+        strMsg = "update timed out";
+        return false;
+    }
+    if (*pRc != 0)
     {
         strMsg = "update script execution failed";
         return false;
@@ -595,13 +680,17 @@ bool EmbedPythonInit(const std::string& strPythonHome)
     PyConfig_Clear(&tConfig);
     g_python_home = strHome;
     g_initialized = true;
+    /* Issue R5: release the GIL so the dedicated Python worker thread can
+     * acquire it; without this its PyGILState_Ensure deadlocks. */
+    g_py_main_thread_state = PyEval_SaveThread();
     return true;
 }
 
 bool EmbedParseVideoUrls(const std::string& strUrl,
                          std::vector<std::string>& vecUrls,
                          const std::string& strCookiesFromBrowser,
-                         const std::string& strCookie, std::string& strErr)
+                         const std::string& strCookie, std::string& strErr,
+                         const std::atomic<bool>* pbCancel)
 {
     vecUrls.clear();
     if (!g_initialized)
@@ -685,11 +774,24 @@ bool EmbedParseVideoUrls(const std::string& strUrl,
         B64Lit(strUrl).c_str(), B64Lit(strResultFile).c_str(),
         B64Lit(strResultFile).c_str());
 
-  int nRc = 0;
-  RunOnPythonThread([&nRc, &szScript] {
-    nRc = PyRun_SimpleString(szScript);
-  });
-    if (nRc != 0)
+    auto pRc = std::make_shared<int>(0);
+    const std::string strScriptCopy(szScript);
+    const bool bRan = RunOnPythonThread(
+        [pRc, strScriptCopy] {
+            *pRc = PyRun_SimpleString(strScriptCopy.c_str());
+        },
+        30L, pbCancel);
+    if (!bRan)
+    {
+        if ((pbCancel != nullptr) && pbCancel->load())
+        {
+            strErr = "";
+            return false;  /* canceled: caller maps to a cancel state */
+        }
+        strErr = "parsing timed out";
+        return false;
+    }
+    if (*pRc != 0)
     {
         strErr = "Python script execution failed";
         return false;
@@ -750,11 +852,17 @@ bool EmbedUpdateParser(const std::string& strExePath, std::string& strMsg)
                  "next to the executable)";
         return false;
     }
-    return UpdateParserAt(strHome, strMsg);
+    return UpdateParserAt(strHome, strMsg, nullptr);
 }
 
-bool EmbedAutoUpdateParser(std::string& strMsg)
+bool EmbedAutoUpdateParser(std::string& strMsg,
+                           const std::atomic<bool>* pbCancel)
 {
+    if ((pbCancel != nullptr) && pbCancel->load())
+    {
+        strMsg = "";
+        return false;
+    }
     /* Prefer the already initialized runtime home; probe otherwise. */
     std::string strHome = g_python_home;
     if (strHome.empty())
@@ -788,7 +896,7 @@ bool EmbedAutoUpdateParser(std::string& strMsg)
         strMsg.clear();  /* failed recently: skip to avoid hammering GitHub */
         return true;
     }
-    const bool bOk = UpdateParserAt(strHome, strMsg);
+    const bool bOk = UpdateParserAt(strHome, strMsg, pbCancel);
     if (bOk)
     {
         { std::ofstream f(strCheckStamp.c_str(), std::ios::app); }
@@ -806,8 +914,18 @@ void EmbedPythonShutdown()
     std::lock_guard<std::mutex> lock(g_init_mutex);
     if (g_initialized)
     {
-        StopPythonThread();
+        StopPythonThread(0);
+        if (g_py_main_thread_state != nullptr)
+        {
+            PyEval_RestoreThread(g_py_main_thread_state);
+            g_py_main_thread_state = nullptr;
+        }
         Py_Finalize();
         g_initialized = false;
     }
+}
+
+void EmbedPythonStopWorker(long nTimeoutSec)
+{
+    StopPythonThread(nTimeoutSec);
 }

@@ -1,12 +1,18 @@
 /**
  * @file avmerge.cpp
- * @brief 内置音视频轨合并器实现：FFmpeg 静态库双输入 remux（-c copy 语义）
+ * @brief Built-in audio/video track merger implementation: FFmpeg static
+ *        library two-input remux (-c copy semantics).
  *
- * 实现要点：
- *   - avformat_open_input 打开视频轨/音频轨两个 MP4，输出到新 MP4
- *   - 输出开启 +faststart（moov 前置，便于网络播放/快速拖动）
- *   - 双流按 DTS 交错写帧（av_interleaved_write_frame），保证样本时间顺序
- *   - 仅拷贝编解码参数（avcodec_parameters_copy），不触碰媒体数据
+ * Implementation notes:
+ *   - avformat_open_input opens the video/audio MP4 tracks, output is a new
+ *     MP4;
+ *   - the output enables +faststart (moov at the front for network playback /
+ *     quick seeking);
+ *   - the two streams are interleaved by DTS (av_interleaved_write_frame) so
+ *     samples stay in time order;
+ *   - only codec parameters are copied (avcodec_parameters_copy), media data
+ *     is untouched;
+ *   - cancellation checkpoints (issue R6) abort the write loop.
  *
  * @author ErnestAgel
  * @date 2026-08-06
@@ -29,7 +35,8 @@ extern "C" {
 
 namespace {
 
-/* 捕获 FFmpeg 错误日志，便于把真实失败原因带进报错（GUI 无 stderr 可见） */
+/* Capture FFmpeg error logs so the real failure reason reaches the error
+ * dialog (the GUI has no visible stderr). */
 thread_local std::string g_avlog;
 
 void AvLogCapture(void*, int level, const char* fmt, va_list vl) {
@@ -48,7 +55,8 @@ std::string TakeAvLog() {
   return s;
 }
 
-/* 根据视频流编码建议容器扩展名：VP9/AV1/VP8（WebM 典型）-> .mkv，其余 -> .mp4 */
+/* Suggest the container extension by the video codec: VP9/AV1/VP8 (typical
+ * WebM) -> .mkv, otherwise .mp4. */
 std::string ExtForVideoCodec(int codec_id) {
   if (codec_id == AV_CODEC_ID_VP9 || codec_id == AV_CODEC_ID_VP8 ||
       codec_id == AV_CODEC_ID_AV1) {
@@ -57,15 +65,18 @@ std::string ExtForVideoCodec(int codec_id) {
   return ".mp4";
 }
 
-/* 将包时间戳从输入流时基换算到输出流时基 */
+/* Rescale a packet's timestamps from the input stream timebase to the
+ * output stream timebase. */
 void RescalePkt(AVPacket* pkt, const AVStream* is, const AVStream* os) {
   if (pkt->pts != AV_NOPTS_VALUE) {
     pkt->pts = av_rescale_q_rnd(pkt->pts, is->time_base, os->time_base,
-                                (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+                                (AVRounding)(AV_ROUND_NEAR_INF |
+                                             AV_ROUND_PASS_MINMAX));
   }
   if (pkt->dts != AV_NOPTS_VALUE) {
     pkt->dts = av_rescale_q_rnd(pkt->dts, is->time_base, os->time_base,
-                                (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+                                (AVRounding)(AV_ROUND_NEAR_INF |
+                                             AV_ROUND_PASS_MINMAX));
   }
   if (pkt->duration > 0) {
     pkt->duration = av_rescale_q(pkt->duration, is->time_base, os->time_base);
@@ -73,12 +84,13 @@ void RescalePkt(AVPacket* pkt, const AVStream* is, const AVStream* os) {
   pkt->pos = -1;
 }
 
-/* 打开一个输入文件并复制其所有流到输出容器，返回输入流数或 -1 */
+/* Open one input file and copy all its streams into the output context;
+ * returns the input stream count or -1. */
 int AddInput(AVFormatContext** in_ctx, const char* path,
              AVFormatContext* out_ctx, std::vector<int>& stream_map,
              std::string& err) {
   if (avformat_open_input(in_ctx, path, nullptr, nullptr) != 0) {
-    err = "打开输入文件失败: ";
+    err = "failed to open input file: ";
     err += path;
     return -1;
   }
@@ -86,14 +98,14 @@ int AddInput(AVFormatContext** in_ctx, const char* path,
     AVStream* ist = (*in_ctx)->streams[i];
     AVStream* ost = avformat_new_stream(out_ctx, nullptr);
     if (!ost) {
-      err = "创建输出流失败";
+      err = "failed to create the output stream";
       return -1;
     }
     if (avcodec_parameters_copy(ost->codecpar, ist->codecpar) < 0) {
-      err = "复制编解码参数失败";
+      err = "failed to copy codec parameters";
       return -1;
     }
-    ost->codecpar->codec_tag = 0; /* 交由输出 muxer 决定 */
+    ost->codecpar->codec_tag = 0; /* let the output muxer decide */
     stream_map.push_back(static_cast<int>(ost->index));
   }
   return static_cast<int>((*in_ctx)->nb_streams);
@@ -101,10 +113,11 @@ int AddInput(AVFormatContext** in_ctx, const char* path,
 
 }  // namespace
 
-std::string SuggestMergeExt(const std::string& video_path) {
+std::string SuggestMergeExt(const std::string& strVideoPath) {
   AVFormatContext* c = nullptr;
-  if (avformat_open_input(&c, video_path.c_str(), nullptr, nullptr) != 0 || !c) {
-    return ".mp4";  /* 打不开时按默认 mp4 处理 */
+  if (avformat_open_input(&c, strVideoPath.c_str(), nullptr, nullptr) != 0 ||
+      !c) {
+    return ".mp4";  /* default mp4 when the track cannot be opened */
   }
   std::string ext = ".mp4";
   for (unsigned i = 0; i < c->nb_streams; i++) {
@@ -117,8 +130,10 @@ std::string SuggestMergeExt(const std::string& video_path) {
   return ext;
 }
 
-bool MergeMp4(const std::string& video_path, const std::string& audio_path,
-              const std::string& output_path, std::string& err) {
+bool MergeMp4(const std::string& strVideoPath,
+              const std::string& strAudioPath,
+              const std::string& strOutputPath, std::string& strErr,
+              const std::atomic<bool>* pbCancel) {
   g_avlog.clear();
   av_log_set_callback(AvLogCapture);
   av_log_set_level(AV_LOG_ERROR);
@@ -129,55 +144,64 @@ bool MergeMp4(const std::string& video_path, const std::string& audio_path,
   bool ok = false;
 
   do {
-    /* 输出容器（按文件名后缀推断 mp4） */
+    /* Output container (inferred by the file suffix, e.g. mp4). */
     if (avformat_alloc_output_context2(&octx, nullptr, nullptr,
-                                       output_path.c_str()) < 0 ||
+                                       strOutputPath.c_str()) < 0 ||
         !octx) {
-      err = "创建输出容器失败";
+      strErr = "failed to create the output container";
       break;
     }
 
-    /* 打开两个输入并映射流 */
+    /* Open both inputs and map their streams. */
     std::vector<int> v_map, a_map;
-    if (AddInput(&vctx, video_path.c_str(), octx, v_map, err) < 0) break;
-    if (AddInput(&actx, audio_path.c_str(), octx, a_map, err) < 0) break;
+    if (AddInput(&vctx, strVideoPath.c_str(), octx, v_map, strErr) < 0) break;
+    if (AddInput(&actx, strAudioPath.c_str(), octx, a_map, strErr) < 0) break;
     if (v_map.empty() && a_map.empty()) {
-      err = "输入文件不含媒体流";
+      strErr = "input files contain no media streams";
       break;
     }
 
-    /* 打开输出文件，+faststart 让 moov 前置 */
+    /* Open the output file; +faststart puts moov at the front. */
     if (!(octx->oformat->flags & AVFMT_NOFILE)) {
-      if (avio_open(&octx->pb, output_path.c_str(), AVIO_FLAG_WRITE) < 0) {
-        err = "创建输出文件失败: " + output_path;
+      if (avio_open(&octx->pb, strOutputPath.c_str(), AVIO_FLAG_WRITE) < 0) {
+        strErr = "failed to create the output file: " + strOutputPath;
         break;
       }
     }
     AVDictionary* opts = nullptr;
-    /* 仅 MP4 输出启用 moov 前置（faststart）；Matroska 输出无此选项，传入会报错 */
-    if (output_path.size() > 4 &&
-        output_path.compare(output_path.size() - 4, 4, ".mp4") == 0) {
+    /* Only MP4 outputs enable moov-at-front (faststart); Matroska outputs
+     * have no such option and would error. */
+    if (strOutputPath.size() > 4 &&
+        strOutputPath.compare(strOutputPath.size() - 4, 4, ".mp4") == 0) {
       av_dict_set(&opts, "movflags", "+faststart", 0);
     }
     if (avformat_write_header(octx, &opts) < 0) {
-      err = "写入输出头失败（编码格式可能不受支持）";
+      strErr = "failed to write the output header (codec may be "
+               "unsupported)";
       av_dict_free(&opts);
       break;
     }
     av_dict_free(&opts);
 
-    /* 双输入按 DTS 交错写帧（-c copy） */
+    /* Two inputs interleaved by DTS (-c copy). */
     AVPacket* pv = av_packet_alloc();
     AVPacket* pa = av_packet_alloc();
     if (!pv || !pa) {
       av_packet_free(&pv);
       av_packet_free(&pa);
-      err = "分配内存失败";
+      strErr = "out of memory";
       break;
     }
     bool veof = false, aeof = false;
     bool v_pending = false, a_pending = false;
+    long long nPackets = 0;
     while (!(veof && aeof)) {
+      /* Cancellation checkpoint (issue R6): check every 256 packets. */
+      if (((nPackets++ & 255) == 0) && (pbCancel != nullptr) &&
+          pbCancel->load()) {
+        strErr = "merge canceled";
+        break;
+      }
       if (!v_pending && !veof) {
         if (av_read_frame(vctx, pv) < 0) {
           veof = true;
@@ -199,13 +223,14 @@ bool MergeMp4(const std::string& video_path, const std::string& audio_path,
         }
       }
       if (veof && aeof) break;
-      /* 交错写帧：按 DTS 排序；任一时间戳无效时按“先写有效侧”处理，避免写入失败 */
+      /* Interleave by DTS; when either timestamp is invalid, write the valid
+       * side first to avoid write failures. */
       if (v_pending && (aeof || !a_pending || pa->dts == AV_NOPTS_VALUE ||
                         (pv->dts != AV_NOPTS_VALUE && pv->dts <= pa->dts))) {
         if (av_interleaved_write_frame(octx, pv) < 0) {
           av_packet_free(&pv);
           av_packet_free(&pa);
-          err = "写入媒体数据失败";
+          strErr = "failed to write media data";
           break;
         }
         av_packet_unref(pv);
@@ -214,7 +239,7 @@ bool MergeMp4(const std::string& video_path, const std::string& audio_path,
         if (av_interleaved_write_frame(octx, pa) < 0) {
           av_packet_free(&pv);
           av_packet_free(&pa);
-          err = "写入媒体数据失败";
+          strErr = "failed to write media data";
           break;
         }
         av_packet_unref(pa);
@@ -223,16 +248,16 @@ bool MergeMp4(const std::string& video_path, const std::string& audio_path,
     }
     av_packet_free(&pv);
     av_packet_free(&pa);
-    if (!err.empty()) break;
+    if (!strErr.empty()) break;
 
     if (av_write_trailer(octx) < 0) {
-      err = "写入输出尾部失败";
+      strErr = "failed to write the output trailer";
       break;
     }
     ok = true;
   } while (false);
 
-  /* 清理 */
+  /* Cleanup. */
   if (vctx) avformat_close_input(&vctx);
   if (actx) avformat_close_input(&actx);
   if (octx) {
@@ -243,16 +268,16 @@ bool MergeMp4(const std::string& video_path, const std::string& audio_path,
   av_log_set_callback(av_log_default_callback);
   av_log_set_level(AV_LOG_INFO);
   if (!ok) {
-    remove(output_path.c_str()); /* 失败清理半成品 */
-    /* 附上 FFmpeg 真实错误日志（去行尾空白） */
+    remove(strOutputPath.c_str()); /* clean up the partial output */
+    /* Append the real FFmpeg error log (trailing whitespace stripped). */
     std::string l = TakeAvLog();
     while (!l.empty() && (l.back() == '\n' || l.back() == '\r' ||
                           l.back() == ' ' || l.back() == '\t')) {
       l.pop_back();
     }
     if (!l.empty()) {
-      err += " | ffmpeg: ";
-      err += l;
+      strErr += " | ffmpeg: ";
+      strErr += l;
     }
   }
   return ok;

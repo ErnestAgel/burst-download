@@ -351,12 +351,20 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
     }
 
     /* Auto-update the video parser (24h throttle; failures are silent and do
-     * not block parsing). */
+     * not block parsing).  The call is cancel-aware (issue R6). */
     {
         std::string up_msg;
-        if (EmbedAutoUpdateParser(up_msg) && !up_msg.empty()) {
+        if (EmbedAutoUpdateParser(up_msg, &m_cancel) && !up_msg.empty()) {
             AddLog("[INFO] " + up_msg);
         }
+    }
+    /* Cancellation checkpoint: do not start parsing after a cancel during
+     * the auto-update. */
+    if (m_cancel.load()) {
+        SetStage(STAGE_CANCELED, "",
+                 "[INFO] canceled (transfer not started)");
+        m_running.store(false);
+        return;
     }
 
     VideoDownloader vd;
@@ -404,7 +412,8 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
     };
     vd.onLog = [this](const std::string& msg) { AddLog(msg); };
 
-    VideoResult result = vd.Run(url, basename, threads, timeout);
+    VideoResult result = vd.Run(url, basename, threads, timeout, "", "",
+                                &m_cancel);
     if (result == VideoResult::Ok) {
         /* Done wins over cancel races (a cancel arriving after Run returned
          * must not misreport). */
