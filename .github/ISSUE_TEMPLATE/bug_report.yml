@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a crash, wrong behavior or build failure
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Burst version
+      description: Output of `burst --version` or the About dialog.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows x86_64
+        - Linux x86_64
+        - Linux aarch64
+        - Other / not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: build-type
+    attributes:
+      label: Build type
+      options:
+        - Release binary from GitHub Releases
+        - Built from source (Debug)
+        - Built from source (Release)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact command(s) or GUI steps, including the URL if relevant.
+      placeholder: |
+        1. Run `burst --video <url> -o movie`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste `download.log`, `crash.log` or terminal output. Remove any sensitive info (cookies, tokens).
+      render: shell
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Network type, file size, server, screenshots — anything that might help.

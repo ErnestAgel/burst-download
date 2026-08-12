@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Burst Download — Open-Source Multi-Threaded Download Manager with Video Download</title>
+<meta name="description" content="Burst Download is a free, open-source, cross-platform download manager. Multi-threaded HTTP chunking saturates your bandwidth, with resume support and built-in video download for Bilibili, YouTube and more.">
+<meta name="keywords" content="download manager, multi-threaded downloader, video downloader, bilibili downloader, youtube downloader, aria2 alternative, IDM alternative, open source, libcurl, cross-platform, resume, cmake, c++">
+<meta property="og:title" content="Burst Download">
+<meta property="og:description" content="Open-source multi-threaded download manager with built-in video download. Windows, Linux x86_64 and ARM64.">
+<meta property="og:image" content="GUI.png">
+<meta property="og:url" content="https://ernestagel.github.io/burst-download/">
+<link rel="canonical" href="https://ernestagel.github.io/burst-download/">
+<style>
+  :root {
+    --bg: #282c34;
+    --bg-soft: #21252b;
+    --bg-card: #2c313a;
+    --border: #3e4451;
+    --text: #abb2bf;
+    --text-strong: #e6e6e6;
+    --accent: #61afef;
+    --green: #98c379;
+    --orange: #d19a66;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(33, 37, 43, 0.94);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(6px);
+  }
+  nav { display: flex; align-items: center; gap: 20px; height: 60px; }
+  .brand { font-weight: 700; font-size: 18px; color: var(--text-strong); }
+  .brand span { color: var(--orange); }
+  nav a.nav-link { color: var(--text); font-size: 14px; }
+  nav .spacer { flex: 1; }
+  .btn {
+    display: inline-block; padding: 10px 22px; border-radius: 8px;
+    font-weight: 600; font-size: 15px; transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.88; text-decoration: none; }
+  .btn-primary { background: var(--accent); color: #10131a; }
+  .btn-ghost { border: 1px solid var(--border); color: var(--text-strong); }
+
+  .hero { padding: 72px 0 56px; text-align: center; }
+  .hero .logo { font-size: 58px; }
+  .hero h1 { font-size: 44px; color: var(--text-strong); margin: 8px 0 12px; }
+  .hero h1 span { color: var(--orange); }
+  .hero .tagline { font-size: 19px; max-width: 720px; margin: 0 auto 10px; }
+  .hero .sub { color: var(--text); max-width: 640px; margin: 0 auto 32px; font-size: 15px; }
+  .hero .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .chips { margin-top: 26px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .chip {
+    border: 1px solid var(--border); border-radius: 999px; padding: 5px 14px;
+    font-size: 13px; color: var(--text-strong); background: var(--bg-soft);
+  }
+  .zh-note { margin-top: 22px; font-size: 13px; }
+
+  section { padding: 56px 0; }
+  section.alt { background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  h2 { font-size: 28px; color: var(--text-strong); text-align: center; margin-bottom: 10px; }
+  .section-desc { text-align: center; max-width: 660px; margin: 0 auto 36px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px;
+  }
+  .card h3 { color: var(--text-strong); font-size: 17px; margin-bottom: 8px; }
+  .card p { font-size: 14px; }
+  .card .emoji { font-size: 26px; display: block; margin-bottom: 10px; }
+
+  .how { text-align: center; }
+  .how svg { max-width: 720px; width: 100%; margin: 20px auto; display: block; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 28px; text-align: left; }
+  .step { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; font-size: 13px; }
+  .step b { color: var(--text-strong); display: block; margin-bottom: 6px; }
+
+  figure { margin: 0 auto; max-width: 860px; }
+  figure img { width: 100%; border: 1px solid var(--border); border-radius: 12px; }
+  figcaption { text-align: center; font-size: 13px; margin-top: 12px; color: var(--text); }
+
+  pre {
+    background: #181a1f; border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px; overflow-x: auto; font-size: 14px; margin: 16px 0;
+  }
+  code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+  pre code { color: var(--green); }
+  .inline-code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+  th { background: var(--bg-soft); color: var(--text-strong); }
+
+  footer { border-top: 1px solid var(--border); padding: 34px 0 44px; text-align: center; font-size: 13px; }
+  footer a { color: var(--text); }
+
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 32px; }
+    nav a.nav-link { display: none; }
+    .hero { padding: 48px 0 40px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="container">
+    <nav>
+      <span class="brand"><span>⚡</span> Burst Download</span>
+      <a class="nav-link" href="#features">Features</a>
+      <a class="nav-link" href="#how">How it works</a>
+      <a class="nav-link" href="#screenshot">Screenshots</a>
+      <a class="nav-link" href="#video">Video download</a>
+      <span class="spacer"></span>
+      <a class="btn btn-primary" href="https://github.com/ErnestAgel/burst-download/releases" target="_blank" rel="noopener">Download</a>
+      <a class="btn btn-ghost" href="https://github.com/ErnestAgel/burst-download" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero container">
+    <div class="logo">⚡</div>
+    <h1>Burst <span>Download</span></h1>
+    <p class="tagline">Open-source, cross-platform download manager — multi-threaded chunking, resume support and built-in video download.</p>
+    <p class="sub">HTTP Range chunking with 1–8 parallel connections saturates your bandwidth on high-latency links. One command downloads large files, and the same binary downloads and auto-merges videos from Bilibili, YouTube and more.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/ErnestAgel/burst-download/releases" target="_blank" rel="noopener">⬇ Download v2.3.0</a>
+      <a class="btn btn-ghost" href="https://github.com/ErnestAgel/burst-download" target="_blank" rel="noopener">Star on GitHub ★</a>
+    </div>
+    <div class="chips">
+      <span class="chip">Windows x86_64</span>
+      <span class="chip">Linux x86_64</span>
+      <span class="chip">Linux ARM64</span>
+      <span class="chip">GUI + CLI</span>
+      <span class="chip">MIT License</span>
+    </div>
+    <p class="zh-note">🇨🇳 中文说明见 <a href="https://github.com/ErnestAgel/burst-download/blob/main/README_ZH.md" target="_blank" rel="noopener">GitHub 中文 README</a></p>
+  </div>
+
+  <section id="features" class="alt">
+    <div class="container">
+      <h2>Features</h2>
+      <p class="section-desc">Everything you expect from a serious downloader — without ads, bundles or account walls.</p>
+      <div class="grid">
+        <div class="card">
+          <span class="emoji">🚀</span>
+          <h3>Multi-threaded chunking</h3>
+          <p>1–8 concurrent HTTP Range connections (adaptive to your CPU cores) to push past single-connection TCP limits and saturate your bandwidth.</p>
+        </div>
+        <div class="card">
+          <span class="emoji">📦</span>
+          <h3>Resume support</h3>
+          <p>Interrupted downloads continue from where they stopped — chunk-level metadata means only unfinished pieces are re-fetched.</p>
+        </div>
+        <div class="card">
+          <span class="emoji">🎬</span>
+          <h3>Video download</h3>
+          <p>Paste a Bilibili or YouTube page URL, and Burst resolves the stream, downloads video + audio tracks in parallel and merges them into one file.</p>
+        </div>
+        <div class="card">
+          <span class="emoji">🔧</span>
+          <h3>Zero-dependency binaries</h3>
+          <p>Release builds are single files with curl, Python and FFmpeg statically linked. Unzip (Windows) or chmod +x (Linux) and run.</p>
+        </div>
+        <div class="card">
+          <span class="emoji">🖥️</span>
+          <h3>GUI + CLI in one binary</h3>
+          <p>Launch without arguments for the desktop GUI, or use the terminal CLI for scripting and servers. Same binary, both modes.</p>
+        </div>
+        <div class="card">
+          <span class="emoji">🛡️</span>
+          <h3>Privacy-friendly</h3>
+          <p>No ads, no telemetry, no account. Cookie and Referer support is there when a site needs it, and stays under your control.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="container how">
+      <h2>How it works</h2>
+      <p class="section-desc">Why multiple connections are faster than one — especially on high-latency or cross-border links.</p>
+      <img src="how-it-works.en.svg" alt="Diagram of multi-threaded HTTP Range chunked download">
+      <div class="steps">
+        <div class="step"><b>1 · Range request</b>Each thread requests a different <span class="inline-code">Range: bytes=...</span> slice of the file.</div>
+        <div class="step"><b>2 · Parallel connections</b>N threads each hold their own TCP connection and download their slice simultaneously.</div>
+        <div class="step"><b>3 · Why faster</b>A single connection is throttled by TCP slow start and the congestion window; parallel connections stack up to the bandwidth ceiling.</div>
+        <div class="step"><b>4 · Graceful fallback</b>Servers without Range support are handled automatically with a single-threaded download.</div>
+        <div class="step"><b>5 · Assembly</b>Finished slices are merged into the complete file — no leftover pieces.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screenshot" class="alt">
+    <div class="container">
+      <h2>Screenshots</h2>
+      <p class="section-desc">The desktop GUI — dark theme, live progress, pause/resume and a four-stage video pipeline.</p>
+      <figure>
+        <img src="GUI.png" alt="Burst Download GUI screenshot on Windows">
+        <figcaption>Burst Download GUI (Windows) — file and video download modes, chunk-level progress and pause/resume.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="video">
+    <div class="container">
+      <h2>Video download</h2>
+      <p class="section-desc">One command, any supported site. DASH streams (separate video + audio) are downloaded in parallel and auto-merged into a single file.</p>
+      <pre><code># Download a Bilibili video (auto-resolve + multi-threaded download)
+./burst --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
+
+# Bilibili HD (720p+), reading your logged-in browser cookies
+./burst --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookies-from-browser chrome
+
+# YouTube and other popular sites
+./burst --video "https://www.youtube.com/watch?v=xxxxx" -o clip</code></pre>
+      <p>Output container is chosen by the video codec: VP9/AV1 tracks become <span class="inline-code">.mkv</span>, everything else <span class="inline-code">.mp4</span>. Parsers update online (<span class="inline-code">--update-parser</span>), so site changes don't force a rebuild.</p>
+    </div>
+  </section>
+
+  <section id="download" class="alt">
+    <div class="container">
+      <h2>Download &amp; install</h2>
+      <p class="section-desc">Grab the latest release from <a href="https://github.com/ErnestAgel/burst-download/releases" target="_blank" rel="noopener">GitHub Releases</a>.</p>
+      <table>
+        <tr><th>Platform</th><th>Package</th><th>Run</th></tr>
+        <tr><td>Windows x86_64</td><td><span class="inline-code">burst-windows-x86_64.zip</span></td><td>Unzip, double-click <span class="inline-code">burst.exe</span></td></tr>
+        <tr><td>Linux x86_64</td><td><span class="inline-code">burst-linux-x86_64</span></td><td><span class="inline-code">chmod +x burst && ./burst</span></td></tr>
+        <tr><td>Linux ARM64</td><td><span class="inline-code">burst-linux-aarch64</span></td><td><span class="inline-code">chmod +x burst && ./burst</span></td></tr>
+      </table>
+      <pre><code># CLI quick start
+./burst https://example.com/file.iso -o file.iso -t 8 --timeout 30
+
+# See all options
+./burst --help</code></pre>
+      <p style="text-align:center;font-size:14px;">Package managers (winget / scoop / Homebrew / apt) are on the roadmap — <a href="https://github.com/ErnestAgel/burst-download" target="_blank" rel="noopener">watch the repository</a> to get notified.</p>
+    </div>
+  </section>
+
+  <section id="notes">
+    <div class="container">
+      <h2>Good to know</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>✅ Works best with</h3>
+          <p>GitHub Releases, software mirrors, CDNs and other Range-capable static resources; large files like ISOs, datasets and model weights; direct video streams.</p>
+        </div>
+        <div class="card">
+          <h3>❌ Not a magic bullet</h3>
+          <p>Account-throttled clouds (e.g. Baidu Pan) limit speed server-side — more threads won't help. Servers without Range support automatically fall back to single-threaded download.</p>
+        </div>
+        <div class="card">
+          <h3>⚖️ Legal note</h3>
+          <p>Use Burst only for content you have the right to download — personal backups, study material, public-domain or CC-licensed assets. Users are responsible for their own use.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="container">
+    <p><a href="https://github.com/ErnestAgel/burst-download" target="_blank" rel="noopener">GitHub</a> · <a href="https://github.com/ErnestAgel/burst-download/releases" target="_blank" rel="noopener">Releases</a> · <a href="https://github.com/ErnestAgel/burst-download/blob/main/README_ZH.md" target="_blank" rel="noopener">中文</a></p>
+    <p style="margin-top:8px;">© 2026 ErnestAgel · Released under the MIT License · Built with libcurl, FFmpeg &amp; Dear ImGui</p>
+  </div>
+</footer>
+</body>
+</html>

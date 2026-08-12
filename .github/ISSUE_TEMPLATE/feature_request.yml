@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an idea for Burst Download
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do, and why doesn't the current tool cover it?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should the feature behave? CLI flags, GUI behavior, defaults…
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds or other tools you've tried.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Use cases, priority, screenshots, links.

@@ -1,10 +1,9 @@
 <div align="center">
 
-[🇨🇳 中文](README.md) · [🇬🇧 English](README_EN.md)
+[🇬🇧 English](README.md) · [🇨🇳 中文](README_ZH.md)
 
 # ⚡ Burst Download
 
-**多线程分片下载器 · 支持视频下载**  
 **Multi-threaded chunked downloader with video download support**
 
 ![C/C++](https://img.shields.io/badge/language-C%2FC%2B%2B-blue?style=for-the-badge)
@@ -16,120 +15,135 @@
 [![Stars](https://img.shields.io/github/stars/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/stargazers)
 [![Forks](https://img.shields.io/github/forks/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/network)
 [![Last commit](https://img.shields.io/github/last-commit/ErnestAgel/burst-download?style=flat-square)](https://github.com/ErnestAgel/burst-download/commits/main)
+[![CI](https://github.com/ErnestAgel/burst-download/actions/workflows/ci.yml/badge.svg)](https://github.com/ErnestAgel/burst-download/actions/workflows/ci.yml)
 
-> 🎬 **视频下载**：一条命令下载 B站 / YouTube 等主流网站的视频，多线程分片下载
-> ⚡ **多线程加速**：HTTP Range 分片，1~8 线程并发（默认按 CPU 核数自适应），榨干带宽
-> 📦 **断点续传**：中断后从断点继续，不重头来
-> 🖥 **三平台构建**：Linux x86_64 / ARM64 / Windows，Release 单文件发布
+> 🎬 **Video download**: one command to download videos from Bilibili / YouTube and other popular sites
+> ⚡ **Multi-threading**: HTTP Range chunking with 1–8 threads (default adaptive to CPU cores) to saturate bandwidth
+> 📦 **Resume support**: continue from where it stopped instead of restarting
+> 🖥 **Three-platform builds**: Linux x86_64 / ARM64 / Windows; single-file Release per platform
+> 🌐 **Website**: [burst-download.github.io](https://ernestagel.github.io/burst-download/) — landing page with screenshots, usage guide & download links
 
 </div>
 
 ---
 
-## ✨ 特性 Features
+## ⬇️ Download & Install
 
-| | 说明 Description |
-|---|---|
-| 🎬 **视频下载** | `--video` 模式：输入视频网页 URL，自动解析媒体流直链（B站/YouTube 等主流网站），多线程分片下载；音视频分离流（DASH）下载后**自动合并**为单文件（MP4 / WebM 多格式容器） |
-| 🔄 **解析器在线更新** | `--update-parser` 一键把内置视频解析组件升级到最新版（需网络，无需重新编译/重新发布） |
-| ⚡ **多线程并发** | `-t` 1~8 线程（默认按 CPU 核数 2~4 自适应），HTTP Range 分片，最后一个分片负责余数 |
-| 📦 **断点续传** | 自动检测本地已存在文件并从断点继续；服务器不支持 Range 时自动退化为单线程 |
-| ⏱ **超时中断与日志** | `--timeout` / `--no-timeout` 控制；超时中断、失败详情写入 `download.log` |
-| 🍪 **Cookie 支持** | `--cookies-from-browser` 读浏览器登录态（B站 720p+ 高清流）、`--cookie` 手动指定 |
-| 🛡 **防盗链 Referer** | 自动携带视频页 Referer，B站等视频流防 403 |
-| 🖥 **跨平台** | Linux x86_64 / Linux aarch64 / Windows；**Debug（动态库调试）+ Release（静态单文件发布）双构建**；Windows Release 需将运行 dll 与 exe 同目录（构建时自动复制） |
+Grab the latest binaries from the [Releases page](https://github.com/ErnestAgel/burst-download/releases):
+
+| Platform | Package | Run |
+|---|---|---|
+| Windows x86_64 | `burst-windows-x86_64.zip` (exe + runtime DLLs) | unzip, then `burst.exe` |
+| Linux x86_64 | `burst-linux-x86_64` (single file) | `./burst` |
+| Linux ARM64 | `burst-linux-aarch64` (single file) | `./burst` |
+
+```bash
+# CLI quick start
+./burst https://example.com/file.iso -o file.iso -t 8 --timeout 30
+
+# Video download (Bilibili / YouTube / more)
+./burst --video "https://www.bilibili.com/video/BVxxxx" -o movie
+```
+
+> 🗺️ Package-manager installs (winget / scoop / Homebrew / apt) are on the roadmap — watch the repo to get notified.
 
 ---
 
-## 💡 为什么用 Burst Download？Why Burst Download?
+## ✨ Features
 
-**对比传统下载工具（curl / wget）：**
+| | Description |
+|---|---|
+| 🎬 **Video download** | `--video` mode: pass a video page URL, the built-in parser resolves the media stream (Bilibili / YouTube and more), then downloads with multi-threaded chunking; DASH streams are **auto-merged** into one file (MP4 / WebM containers) |
+| ⚡ **Multi-threaded** | `-t` 1–8 threads (default 2–4, adaptive to CPU cores), HTTP Range chunking, the last chunk absorbs the remainder |
+| 📦 **Resume** | Automatically detects an existing local file and resumes; falls back to single-thread when the server lacks Range support |
+| ⏱ **Timeout & logging** | `--timeout` / `--no-timeout` control; timeouts and failure details are written to `download.log` |
+| 🍪 **Cookie support** | `--cookies-from-browser` reads browser login state (Bilibili 720p+ streams), `--cookie` for manual cookies |
+| 🛡 **Referer** | Automatically sends the video page Referer to avoid anti-hotlinking 403s |
+| 🖥 **Cross-platform** | Linux x86_64 / Linux aarch64 / Windows; **Debug (dynamic libs) + Release (static single-file) dual builds**; on Windows the runtime DLLs must sit next to the exe (copied automatically by CMake) |
+
+---
+
+## 💡 Why Burst Download?
+
+**Compared with traditional download tools (curl / wget):**
 
 | | curl / wget | burst |
 |---|---|---|
-| 连接数 | 单线程、单连接 | 1~8 个并发连接 |
-| 带宽利用 | 单连接受 TCP 慢启动/拥塞窗口限制，高带宽高延迟网络常吃不饱 | 多连接并行，逼近带宽上限 |
-| 断点续传 | `curl -C -` 需手动指定 | 自动检测本地文件，断点续传 |
-| 视频下载 | ❌ 不支持 | `--video` 自动解析直链下载 |
-| 日志/超时 | 无 | 超时中断 + `download.log` |
+| Connections | single-threaded, single connection | 1–8 concurrent connections |
+| Bandwidth | limited by TCP slow start / congestion window; often can't saturate high-bandwidth, high-latency links | parallel connections approach the bandwidth ceiling |
+| Resume | manual `curl -C -` | automatic detection & resume |
+| Video download | ❌ not supported | `--video` auto-resolves stream URLs |
+| Logging / timeout | none | timeout interrupt + `download.log` |
 
-**适用场景 ✅**
+**Good fit ✅**
 
-- GitHub Releases、软件源、镜像站、CDN 等支持 Range 的静态资源
-- 大文件：ISO、压缩包、数据集、模型权重
-- 视频网站直链下载（B站 / YouTube）
+- GitHub Releases, software mirrors, CDNs and other Range-capable static resources
+- Large files: ISOs, archives, datasets, model weights
+- Direct video stream downloads (Bilibili / YouTube)
 
-**不适用场景 ❌**
+**Not a fit ❌**
 
-- 百度网盘等**账号级限速**网盘：服务端按账号限速，多线程总量不变
-- 不支持 Range 的服务器（自动退化为单线程）
-- 需登录 + 动态签名的私有网盘（无直链）
-
----
-
-## ⚙️ 加速原理 How It Works
-
-![多线程分片下载原理](docs/how-it-works.svg)
-
-1. **HTTP Range 分片**：向服务器发送 `Range: bytes=0-26214399` 这类请求，把大文件切成 N 段；
-2. **多线程并发**：N 个线程各持一条独立 TCP 连接，同时拉取自己的分片；
-3. **为什么能加速**：单条 TCP 连接受**慢启动 + 拥塞窗口**限制，实际速率往往达不到带宽上限（高延迟网络尤其明显，如跨国下载）；多连接并行叠加，就能逼近带宽上限；
-4. **前提条件**：服务器支持 Range 且**不设账号级限速**——静态文件服务器 / CDN 天然满足；百度网盘这类按账号限速的不满足，开再多线程总量也不变；
-5. **收尾拼接**：各分片落盘后合并为完整文件（最后一个分片负责余数）。
+- **Account-rate-limited** cloud drives (e.g. Baidu Pan): the server throttles per account, so more threads don't increase total throughput
+- Servers without Range support (automatically falls back to single-thread)
+- Private drives requiring login + dynamic signatures (no direct links)
 
 ---
 
-## 🎬 视频下载（亮点 Video Download）
+## ⚙️ How It Works
 
-一条命令，任意支持网站：
+![Multi-thread chunked download](docs/how-it-works.en.svg)
+
+1. **HTTP Range chunking**: send requests like `Range: bytes=0-26214399` to split a large file into N chunks;
+2. **Multi-threaded concurrency**: N threads each hold an independent TCP connection and pull their own chunk simultaneously;
+3. **Why it's faster**: a single TCP connection is limited by **slow start + congestion window**, so the actual rate often stays below the bandwidth ceiling (especially on high-latency links, e.g. cross-border downloads); parallel connections add up and approach the ceiling;
+4. **Prerequisites**: the server must support Range and **not throttle per account** — static file servers / CDNs naturally qualify; account-limited drives like Baidu Pan don't, so more threads change nothing;
+5. **Final assembly**: chunks are written to disk and merged into the complete file (the last chunk absorbs the remainder).
+
+---
+
+## 🎬 Video Download
+
+One command for any supported site:
 
 ```bash
-# 下载 B站视频（自动解析 + 多线程分片下载）
+# Download a Bilibili video (auto-resolve + multi-threaded download)
 ./burst --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie
 
-# B站高清 720p+（需要浏览器已登录 B站）
+# Bilibili 720p+ (requires being logged in to Bilibili in the browser)
 ./burst --video "https://www.bilibili.com/video/BVxxxxxxxx" -o movie --cookies-from-browser chrome
 
-# YouTube 等主流视频网站
+# YouTube and other popular video sites
 ./burst --video "https://www.youtube.com/watch?v=xxxxx" -o clip
 ```
 
-- 支持 B站、YouTube 等主流视频网站，视频网页地址直接可用
-- 音视频分离流（DASH）自动下载视频轨 + 音频轨，并**自动合并**为单文件（内置合并引擎，全程进程内，无需外部工具）：输出容器按视频编码自动选择——VP9/AV1 视频轨 → `.mkv`，其余 → `.mp4`；合并成功后自动删除音视频中间文件
-- **文件命名防覆盖**：未指定 `-o` 时按 URL 推断 + 时间戳命名（如 `10Mb_20260807_123456.dat`、`BVxxxx_20260807_123456_full.mkv`）；显式 `-o` 指定的目标已存在时自动追加时间戳避让，不会覆盖已有文件
+- Works with Bilibili, YouTube and other popular sites — just paste the video page URL
+- DASH streams: video + audio tracks are downloaded and **auto-merged** into one file (in-process, no external tools). The output container follows the video codec: VP9/AV1 → `.mkv`, otherwise → `.mp4`. Temporary tracks are deleted after a successful merge.
+- **Overwrite protection**: without `-o`, names come from the URL plus a timestamp (e.g. `10Mb_20260807_123456.dat`, `BVxxxx_20260807_123456_full.mkv`); with explicit `-o`, if the target already exists a timestamp is appended instead of overwriting.
 
 ---
 
-## 🚀 快速开始 Quick Start
+## 🚀 Quick Start
 
 ```bash
 ./burst <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
 ./burst --video <video-url> [-o basename] [-t threads] [--timeout sec]
-./burst --update-parser
-./burst --version
 ```
 
 ```bash
-# 下载文件（8 线程，30 秒无进展超时）
+# Download a file (8 threads, 30s no-progress timeout)
 ./burst https://example.com/file.iso -o file.iso -t 8 --timeout 30
 
-# 下载视频
+# Download a video
 ./burst --video "https://www.bilibili.com/video/BVxxxx" -o movie
 
-# 强制下载不自动中断
+# Force download without auto-interruption
 ./burst https://example.com/file.iso -o file.iso --no-timeout
 
-# 在线更新视频解析组件（网站改版导致解析失效时自愈，无需重新编译）
-./burst --update-parser
-
-# 查看帮助
+# Show help
 ./burst -h
-
-# 查看版本
-./burst --version
 ```
 
-终端实时输出**进度 / 速率 / 剩余时间**：
+Live **progress / speed / ETA** output:
 
 ```
 percent: 42% speed: 3.20 MB/s ETA: 00:05:12
@@ -137,97 +151,94 @@ percent: 42% speed: 3.20 MB/s ETA: 00:05:12
 
 ---
 
-## 🔨 构建 Build
+## 🔨 Build
 
-项目自带三平台 libcurl 库、最小化 FFmpeg 静态库与 Python 运行时（`third_party/`），无需安装开发包。
+The project ships prebuilt libcurl libraries, a minimal static FFmpeg and the Python runtime for all three platforms (`third_party/`) — no need to install dev packages.
 
-**Debug（默认）**：链接动态库，便于 gdb 调试
+**Debug (default)**: links dynamic libraries, convenient for gdb
 
 ```bash
 cmake -B build . && cmake --build build        # Linux
-cmake -B build -G "MinGW Makefiles" .          # Windows（MSYS2/mingw64 环境，gcc 与 mingw32-make 需在 PATH）
+cmake -B build -G "MinGW Makefiles" .          # Windows (MSYS2/mingw64 env, gcc and mingw32-make on PATH)
 ```
 
-**Release**：链接静态库，产出**单文件程序**。Windows 需将 `third_party/python/windows-x86_64/dll/` 下的运行 dll 与 exe 同目录（CMake 构建时自动复制），解压即用。Linux：curl/openssl/python/ffmpeg 均为仓库静态库，glibc 动态链接，运行时依赖桌面环境的 `libGL`/`libX11`；产物为单文件。视频解析组件随程序分发，开箱即用。
+**Release**: links static libraries into a **single-file binary**. On Windows, the DLLs under `third_party/python/windows-x86_64/dll/` must sit next to the exe (copied automatically by CMake) — unpack and run. On Linux, curl/openssl/python/ffmpeg are static from the repo while glibc is dynamic; the binary depends on the desktop's `libGL`/`libX11` at runtime; the artifact is a single file. The video parser ships with the program and works out of the box.
 
 ```bash
-# Linux（openssl 静态库由构建脚本准备）
+# Linux (static openssl prepared by the build script)
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT=/path/to/openssl \
       -DCURL_STATIC_DEPS="/path/libz.a;/path/libzstd.a" .
 cmake --build build
-# Windows（Schannel 原生 TLS，无需 openssl）
+# Windows (native Schannel TLS, no openssl needed)
 cmake -B build -DCMAKE_BUILD_TYPE=Release .
 cmake --build build
 ```
 
 ---
 
-## 🖥️ 图形界面 GUI
+## 🖥️ GUI
 
-![Burst Download GUI（Windows）](docs/GUI.png)
+![Burst Download GUI (Windows)](docs/GUI.png)
 
-图形界面提供**文件下载 + 视频下载**操作，支持 **Windows x86_64 / Linux x86_64**（Linux aarch64 构建不含图形界面）。
+The GUI provides **File Download + Video Download** operations and is supported on **Windows x86_64 / Linux x86_64** (the Linux aarch64 build has no GUI).
 
-**运行**：
+**Run**:
 
 ```bash
-./burst                 # 打开图形界面（GUI）
-./burst --gui           # 显式指定打开图形界面
-./burst <url> ...       # 终端 CLI 下载
+./burst                 # open the GUI
+./burst --gui           # explicitly open the GUI
+./burst <url> ...       # terminal CLI download
 ```
 
-Windows：双击 `burst.exe` 打开 GUI；Linux：`./burst` 无参数打开 GUI，依赖桌面环境自带的 `libGL`/`libX11`。
+Windows: double-click `burst.exe` to open the GUI; Linux: run `./burst` with no arguments to open the GUI (depends on the desktop's `libGL`/`libX11`).
 
-**构建**（`option(BUILD_GUI ON)` 默认开启）：
+**Build** (`option(BUILD_GUI ON)` by default):
 
 ```bash
-# Windows（MSYS2/mingw64）
+# Windows (MSYS2/mingw64)
 cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target burst      # 产出 burst.exe
+cmake --build build --target burst      # produces burst.exe
 
-# Linux（需 X11 开发包：libgl1-mesa-dev libx11-dev libxrandr-dev
-#   libxinerama-dev libxcursor-dev libxi-dev）
+# Linux (needs X11 dev packages: libgl1-mesa-dev libx11-dev libxrandr-dev
+#   libxinerama-dev libxcursor-dev libxi-dev)
 cmake -B build -DCMAKE_BUILD_TYPE=Release .
-cmake --build build --target burst      # 产出 burst
+cmake --build build --target burst      # produces burst
 ```
 
-**已支持**：
+**Supported**:
 
-- 🎨 **Atom One Dark 暗色主题**；Windows：无边框窗口 + Mac 风格按钮（最小化/最大化/关闭）；Linux：系统标题栏
-- ⚡ 多线程分片下载（1~8 线程可选，默认随 CPU 核数自适应）
-- 🎬 **视频下载**（B站/YouTube 等）：解析 → 下载视频轨/音频轨（分片并行）→ 自动合并，四阶段状态实时显示（解析中/下载视频轨/下载音频轨/合并中）
-- ⏸️ **暂停 / 继续 / 停止**状态机：下载中第一次点"取消"= 暂停（保留缓存，可**断点续传**——`.curlbolt.part` 分片级元数据，仅续传未完成分片）；"停止"（红色）删除缓存并清空 UI
-- 📊 **3D 圆柱体总进度条**（电池格分片效果）：完成格绿色、当前格增长、格线 5px、格内显示分片完成度%，hover 显示分片速度；右下角显示总体百分比 + 总速度
-- 📁 保存路径填目录即可（文件名自动取自 URL）；"浏览…"按钮：Windows 原生目录对话框 / Linux 内置目录浏览器（零依赖）
-- ⚡ 支持 **迅雷专用链接**（`thunder://` 自动解码）
-- 🌐 中英双语界面（菜单栏显示目标语言提示：中文界面 → `language`，英文界面 → `中文`）
-- 🪟 Windows：无边框窗口全边缘 resize（左右下边 + 四角）+ 最小 640×480 + DPI 感知；Linux：系统标题栏（可拖动/缩放）
-- 💾 内嵌字体与第三方库，随仓库分发，无需额外安装
-
----
-
-## ⚠️ 注意事项 Notes
-
-- 需要服务器支持 **HTTP Range**（静态文件服务器通常都支持；不支持时自动退化单线程）；
-- **视频模式**支持 B站/YouTube 等主流网站；B站 720p+ 高清流需登录态（`--cookies-from-browser chrome`）；
-- **断点续传**仅比较文件大小，远程内容变更时建议删除本地文件重新下载；
-- 超时机制：默认 60 秒无进展自动中断，`--timeout N` 调整，`--no-timeout` 禁用。
+- 🎨 **Atom One Dark theme**; Windows: frameless window with Mac-style buttons (minimize/maximize/close); Linux: native title bar
+- ⚡ Multi-threaded segmented download (1–8 threads selectable, default adaptive to CPU cores)
+- 🎬 **Video download** (Bilibili / YouTube etc.): parse → download video/audio tracks (parallel chunks) → auto-merge, with 4-stage status shown live (Parsing / Downloading video track / Downloading audio track / Merging)
+- ⏸️ **Pause / Resume / Stop** state machine: first "Cancel" click pauses (cache kept, **segmented resume** via `.curlbolt.part` metadata — only unfinished parts re-download); red "Stop" deletes cache and resets UI
+- 📊 **3D cylinder progress bar** (battery-cell chunks): completed cells green, active cell growing, 5px separators, per-cell percentage, hover shows per-thread speed; overall % + speed bottom-right
+- 📁 Save to a directory only — filename is derived from the URL automatically; "Browse…": native folder dialog on Windows / built-in directory browser on Linux (zero deps)
+- ⚡ **Thunder links** (`thunder://`) decoded automatically
+- 🌐 Bilingual UI (menu bar shows target-language hint: `language` in Chinese UI, `中文` in English UI)
+- 🪟 Windows: frameless full-edge resize (left/right/bottom + corners, min 640×480), DPI-aware; Linux: native title bar (drag & resize)
+- 💾 Fonts and third-party libs bundled and distributed with the repo; no extra installs
 
 ---
 
-## ⚠️ 免责声明 Disclaimer
+## ⚠️ Notes
 
-本工具仅用于下载**您有权获取**的内容（如个人备份、学习研究、公有领域或 CC 协议素材）。请勿用于下载、传播或商用受版权保护的内容，也不得用于任何违法行为。**使用者应自行承担全部法律责任，作者不对任何使用行为负责。**
+- Requires server support for **HTTP Range** (static file servers usually support it; falls back to single-thread otherwise);
+- **Video mode** works with Bilibili / YouTube and other popular sites; Bilibili 720p+ streams require login state (`--cookies-from-browser chrome`);
+- **Resume** uses segmented metadata (`.curlbolt.part`); the target file is pre-allocated (sparse) so its size always matches — delete the file together with its `.curlbolt.part` to restart clean;
+- Timeout: interrupts after 60s with no progress by default; `--timeout N` adjusts it, `--no-timeout` disables it.
+
+---
+
+## ⚠️ Disclaimer
 
 This tool is intended only for downloading content **you have the right to obtain** (e.g. personal backups, study & research, public domain or CC-licensed material). Do not use it to download, redistribute or commercially exploit copyrighted content, nor for any unlawful purpose. **Users bear full legal responsibility; the author assumes no liability for any use of this tool.**
+
+本工具仅用于下载**您有权获取**的内容（如个人备份、学习研究、公有领域或 CC 协议素材）。请勿用于下载、传播或商用受版权保护的内容，也不得用于任何违法行为。**使用者应自行承担全部法律责任，作者不对任何使用行为负责。**
 
 ---
 
 ## 📄 License
 
-本项目采用 **MIT License**（Copyright © 2026 ErnestAgel），允许自由使用、修改、商用与分发。  
-**This project is licensed under the MIT License.**
-
-内置 **FFmpeg**（[LGPL v2.1+](https://www.ffmpeg.org/legal.html)）静态库，仅用于音视频封装合并（remux），未作修改；LGPL 许可要求下，本仓库随附全部源码与链接说明。
+This project is licensed under the **MIT License** (Copyright © 2026 ErnestAgel) — free to use, modify, commercialize and redistribute.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
