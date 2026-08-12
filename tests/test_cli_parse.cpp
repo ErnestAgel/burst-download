@@ -93,7 +93,8 @@ static void TestCliParseDownloadDefaults(CTestReport& cReport)
     RunParse(vecArgs, tOpts, bOk, strError);
     BURST_EXPECT_TRUE(cReport, bOk == TRUE);
     BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionDownload);
-    BURST_EXPECT_STR_EQ(cReport, "https://example.com/a.iso", tOpts.strUrl);
+    BURST_EXPECT_STR_EQ(cReport, "https://example.com/a.iso",
+                        tOpts.vecUrls[0]);
     BURST_EXPECT_TRUE(cReport, tOpts.bOutputSet == FALSE);
     BURST_EXPECT_TRUE(cReport, tOpts.strFilename.empty());
     BURST_EXPECT_TRUE(cReport, tOpts.nThreads == 4);
@@ -275,8 +276,8 @@ static void TestCliParseErrors(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, strError.find("unknown argument") !=
                                std::string::npos);
 
-    std::vector<std::string> vecArgsSecondUrl = {"burst", "a", "b"};
-    RunParse(vecArgsSecondUrl, tOpts, bOk, strError);
+    std::vector<std::string> vecArgsMissingJobs = {"burst", "u", "-j"};
+    RunParse(vecArgsMissingJobs, tOpts, bOk, strError);
     BURST_EXPECT_TRUE(cReport, bOk == FALSE);
 
     std::vector<std::string> vecArgsMissingOutput = {"burst", "u", "-o"};
@@ -307,6 +308,35 @@ static void TestCliParseVersionMidList(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, bOk == FALSE);
 }
 
+/** @brief Test: multiple positional URLs and the -j jobs option. */
+static void TestCliParseMultiUrl(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: multi URL + -j");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgs = {"burst", "https://a/f1.iso",
+                                        "https://b/f2.iso", "-j", "4"};
+    RunParse(vecArgs, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.vecUrls.size() == 2u);
+    if (tOpts.vecUrls.size() == 2u)
+    {
+        BURST_EXPECT_STR_EQ(cReport, "https://a/f1.iso",
+                            tOpts.vecUrls[0]);
+        BURST_EXPECT_STR_EQ(cReport, "https://b/f2.iso",
+                            tOpts.vecUrls[1]);
+    }
+    BURST_EXPECT_TRUE(cReport, tOpts.nJobs == 4);
+
+    /* -j clamps to [1, 8]. */
+    std::vector<std::string> vecArgsClamp = {"burst", "u", "-j", "99"};
+    RunParse(vecArgsClamp, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.nJobs == 8);
+}
+
 /** @brief Run all CLI parser tests. */
 void RunCliParseTests(CTestReport& cReport)
 {
@@ -324,4 +354,5 @@ void RunCliParseTests(CTestReport& cReport)
     TestCliParseDeletePartial(cReport);
     TestCliParseErrors(cReport);
     TestCliParseVersionMidList(cReport);
+    TestCliParseMultiUrl(cReport);
 }

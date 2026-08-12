@@ -10,6 +10,7 @@
  */
 
 #include <string>
+#include <vector>
 #include "burst_types.h"
 
 /** @brief Parsed CLI action. */
@@ -26,7 +27,7 @@ typedef enum tagCliAction
 typedef struct tagCliOptions
 {
     TCliAction  emAction;
-    std::string strUrl;
+    std::vector<std::string> vecUrls;
     std::string strVideoUrl;
     std::string strFilename;
     BOOL32      bOutputSet;
@@ -35,6 +36,7 @@ typedef struct tagCliOptions
     BOOL32      bDeletePartial;
     s32         nThreads;
     s32         nTimeout;
+    s32         nJobs;
     BOOL32      bVideoMode;
     BOOL32      bAutoUpdateParser;
     std::string strCookiesFromBrowser;

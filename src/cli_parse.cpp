@@ -40,7 +40,7 @@ static BOOL32 NextArgIsValue(s32 nArgc, s32 nIndex, char** ppszArgv)
 static void InitDefaultOptions(TCliOptions& tOpts, s32 nDefaultThreads)
 {
     tOpts.emAction = emCliActionNone;
-    tOpts.strUrl = "";
+    tOpts.vecUrls.clear();
     tOpts.strVideoUrl = "";
     tOpts.strFilename = "";
     tOpts.bOutputSet = FALSE;
@@ -49,6 +49,7 @@ static void InitDefaultOptions(TCliOptions& tOpts, s32 nDefaultThreads)
     tOpts.bDeletePartial = FALSE;
     tOpts.nThreads = nDefaultThreads;
     tOpts.nTimeout = 60;
+    tOpts.nJobs = 2;
     tOpts.bVideoMode = FALSE;
     tOpts.bAutoUpdateParser = TRUE;
     tOpts.strCookiesFromBrowser = "";
@@ -80,7 +81,14 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
     }
 
     tOpts.emAction = emCliActionDownload;
-    for (s32 nIndex = 1; nIndex < nArgc; ++nIndex)
+    /* Optional explicit download command: `burst dl <url>...` is equivalent
+     * to `burst <url>...` (default command, see cli-design.md). */
+    s32 nIndex = 1;
+    if ((nArgc >= 3) && (std::strcmp(ppszArgv[1], "dl") == 0))
+    {
+        nIndex = 2;
+    }
+    for (; nIndex < nArgc; ++nIndex)
     {
         char* pszArg = ppszArgv[nIndex];
         if ((std::strcmp(pszArg, "--video") == 0) &&
@@ -117,6 +125,25 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
             tOpts.nTimeout = std::atoi(ppszArgv[nIndex + 1]);
             ++nIndex;
         }
+        else if ((std::strcmp(pszArg, "-j") == 0) ||
+                 (std::strcmp(pszArg, "--jobs") == 0))
+        {
+            if (!NextArgIsValue(nArgc, nIndex, ppszArgv))
+            {
+                strError = "missing value for -j/--jobs";
+                return FALSE;
+            }
+            tOpts.nJobs = std::atoi(ppszArgv[nIndex + 1]);
+            if (tOpts.nJobs < 1)
+            {
+                tOpts.nJobs = 1;
+            }
+            if (tOpts.nJobs > 8)
+            {
+                tOpts.nJobs = 8;
+            }
+            ++nIndex;
+        }
         else if (std::strcmp(pszArg, "--no-timeout") == 0)
         {
             tOpts.nTimeout = 0;
@@ -134,10 +161,18 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
         {
             tOpts.bVerify = TRUE;
             /* Optional algorithm value: sha256 is the only supported one. */
-            if (NextArgIsValue(nArgc, nIndex, ppszArgv) &&
-                (std::strcmp(ppszArgv[nIndex + 1], "sha256") == 0))
+            if (NextArgIsValue(nArgc, nIndex, ppszArgv))
             {
-                ++nIndex;
+                if (std::strcmp(ppszArgv[nIndex + 1], "sha256") == 0)
+                {
+                    ++nIndex;
+                }
+                else
+                {
+                    strError = "unsupported verify algorithm: ";
+                    strError += ppszArgv[nIndex + 1];
+                    return FALSE;
+                }
             }
         }
         else if (std::strcmp(pszArg, "--continue") == 0)
@@ -166,9 +201,9 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
             tOpts.emAction = emCliActionHelp;
             return TRUE;
         }
-        else if ((pszArg[0] != '-') && tOpts.strUrl.empty())
+        else if (pszArg[0] != '-')
         {
-            tOpts.strUrl = pszArg;
+            tOpts.vecUrls.push_back(pszArg);
         }
         else
         {

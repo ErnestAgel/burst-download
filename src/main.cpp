@@ -37,6 +37,7 @@
 #include "download_video.h"
 #include "embed_python.h"
 #include "pathutil.h"
+#include "taskqueue.h"
 #include "version.h"
 #include "video.h"
 
@@ -141,6 +142,8 @@ static void PrintUsage(const char* pszProg)
     printf("  -t threads     download threads 1~%d (default adapts to CPU "
            "cores: %d)\n",
            BurstMaxThreads(), BurstDefaultThreads());
+    printf("  -j, --jobs N   batch concurrency for multiple URLs (default "
+           "2, max 8)\n");
     printf("  --timeout N    abort after N seconds without progress (default "
            "60, 0 = unlimited)\n");
     printf("  --no-timeout   disable automatic timeout (same as --timeout "
@@ -166,6 +169,7 @@ static void PrintUsage(const char* pszProg)
            "--cookies-from-browser chrome\n", pszProg);
     printf("  %s https://example.com/private.zip -o p.zip --cookie "
            "\"SESSDATA=xxx\"\n", pszProg);
+    printf("  %s https://a/file1.iso https://b/file2.iso -j 2\n", pszProg);
     printf("Logs: timeout interruptions, failures and completions are "
            "written to download.log\n");
 }
@@ -192,6 +196,69 @@ static bool DownloadVideo(const std::string& strVideoUrl,
     const VideoResult r = vd.Run(strVideoUrl, strBasename, nThreads,
                                  nTimeout, strCookiesFromBrowser, strCookie);
     return r == VideoResult::Ok;
+}
+
+/**
+ * @brief Execute one plain file download (shared by single and batch mode).
+ * @param tOpts Parsed CLI options (naming, verify, cookie, delete-partial).
+ * @param strUrl URL to download.
+ * @param strOutPath Receives the resolved output path.
+ * @return TRUE on success.
+ */
+static BOOL32 ExecuteFileTask(const TCliOptions& tOpts,
+                              const std::string& strUrl,
+                              std::string& strOutPath)
+{
+    std::string strFilename = tOpts.strFilename;
+    if (tOpts.bOutputSet == FALSE)
+    {
+        std::string strBase = SanitizeFileName(UrlBaseName(strUrl));
+        if (strBase.empty())
+        {
+            strBase = "download.dat";
+        }
+        strFilename = "./" + StampName(strBase);
+    }
+    else if (FileExists(strFilename) && (tOpts.bContinue == FALSE))
+    {
+        strFilename = StampName(strFilename);
+        printf("target file already exists, using: %s\n",
+               strFilename.c_str());
+    }
+    strOutPath = strFilename;
+
+    unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
+    if (!tOpts.strCookie.empty())
+    {
+        ptr->SetCookie(tOpts.strCookie);
+    }
+    if (!ptr->Init(strUrl, strFilename, tOpts.nThreads, tOpts.nTimeout))
+    {
+        return FALSE;
+    }
+    if (!ptr->Download_Task())
+    {
+        if (tOpts.bDeletePartial == TRUE)
+        {
+            std::remove(strFilename.c_str());
+            std::remove((strFilename + ".curlbolt.part").c_str());
+            printf("partial file deleted (--delete-partial)\n");
+        }
+        printf("download failed: some chunks are incomplete "
+               "(see download.log)\n");
+        return FALSE;
+    }
+    if (tOpts.bVerify == TRUE)
+    {
+        std::string strDigest;
+        if (!ptr->VerifySha256(strDigest))
+        {
+            printf("sha256 verification failed\n");
+            return FALSE;
+        }
+        printf("sha256: %s\n", strDigest.c_str());
+    }
+    return TRUE;
 }
 
 /**
@@ -305,66 +372,75 @@ int RunCli(int argc, char** argv)
         return 0;
     }
 
-    if (tOpts.strUrl.empty())
+    if (tOpts.vecUrls.empty())
     {
         PrintUsage(argv[0]);
         return 1;
     }
 
-    /* When -o is omitted, derive the name from the URL plus a timestamp;
-     * when -o is given but the file exists, append a timestamp. */
-    if (tOpts.bOutputSet == FALSE)
+    /* Single URL keeps the historical behavior exactly. */
+    if (tOpts.vecUrls.size() == 1u)
     {
-        std::string strBase = SanitizeFileName(UrlBaseName(tOpts.strUrl));
-        if (strBase.empty())
-        {
-            strBase = "download.dat";
-        }
-        tOpts.strFilename = "./" + StampName(strBase);
-    }
-    else if (FileExists(tOpts.strFilename) && (tOpts.bContinue == FALSE))
-    {
-        tOpts.strFilename = StampName(tOpts.strFilename);
-        printf("target file already exists, using: %s\n",
-               tOpts.strFilename.c_str());
+        std::string strOutPath;
+        return ExecuteFileTask(tOpts, tOpts.vecUrls[0], strOutPath) ? 0 : 1;
     }
 
-    unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
-    if (!tOpts.strCookie.empty())
+    /* Multiple URLs: run as a batch through the task queue (P5). */
+    if (tOpts.bOutputSet == TRUE)
     {
-        /* Plain downloads may carry cookies. */
-        ptr->SetCookie(tOpts.strCookie);
-    }
-    if (!ptr->Init(tOpts.strUrl, tOpts.strFilename, tOpts.nThreads,
-                   tOpts.nTimeout))
-    {
+        printf("-o cannot be used with multiple URLs; each URL gets a "
+               "timestamped default name\n");
         return 1;
     }
-    if (!ptr->Download_Task())
-    {
-        if (tOpts.bDeletePartial == TRUE)
-        {
-            std::remove(tOpts.strFilename.c_str());
-            std::remove((tOpts.strFilename + ".curlbolt.part").c_str());
-            printf("partial file deleted (--delete-partial)\n");
-        }
-        printf("download failed: some chunks are incomplete "
-               "(see download.log)\n");
-        return 1;
-    }
-    if (tOpts.bVerify == TRUE)
-    {
-        std::string strDigest;
-        if (ptr->VerifySha256(strDigest))
-        {
-            printf("sha256: %s\n", strDigest.c_str());
-        }
-        else
-        {
-            printf("sha256 verification failed\n");
-            return 1;
-        }
-    }
+    printf("batch download: %u URLs, %d concurrent\n",
+           static_cast<unsigned>(tOpts.vecUrls.size()), tOpts.nJobs);
 
-    return 0;
+    CThreadPool cPool(static_cast<u32>(tOpts.nJobs));
+    CTaskQueue cQueue(static_cast<u32>(tOpts.nJobs), cPool);
+    for (const std::string& strUrl : tOpts.vecUrls)
+    {
+        cQueue.AddTask(strUrl, "", tOpts.nThreads, tOpts.nTimeout, FALSE);
+    }
+    cQueue.Start(
+        [&tOpts](TDownloadTask& tTask, CTaskContext& cCtx) -> BOOL32 {
+            (void)cCtx;
+            return ExecuteFileTask(tOpts, tTask.strUrl, tTask.strOutput);
+        });
+    cQueue.WaitAll();
+
+    u32 dwOk = 0;
+    u32 dwFail = 0;
+    u32 dwCanceled = 0;
+    const std::vector<TDownloadTask> vecTasks = cQueue.Snapshot();
+    for (const TDownloadTask& tTask : vecTasks)
+    {
+        if (tTask.emState == emTaskDone)
+        {
+            ++dwOk;
+        }
+        else if (tTask.emState == emTaskError)
+        {
+            ++dwFail;
+            printf("[%llu] failed: %s (%s)\n",
+                   static_cast<unsigned long long>(tTask.dwId),
+                   tTask.strUrl.c_str(),
+                   tTask.strError.empty() ? "download failed"
+                                          : tTask.strError.c_str());
+        }
+        else if (tTask.emState == emTaskCanceled)
+        {
+            ++dwCanceled;
+        }
+    }
+    printf("batch finished: %u ok, %u failed, %u canceled\n", dwOk, dwFail,
+           dwCanceled);
+    if ((dwFail == 0u) && (dwCanceled == 0u))
+    {
+        return 0;
+    }
+    if (dwOk > 0u)
+    {
+        return 3;  /* partial success */
+    }
+    return 1;
 }
