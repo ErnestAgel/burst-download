@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    name: Linux x86_64 Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 (runtime pyc bytecode)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install GUI build dependencies (X11/OpenGL)
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=ON -DGLFW_BUILD_WAYLAND=OFF -DBURST_VERSION=${GITHUB_REF_NAME#v} .
+
+      - name: Build
+        run: cmake --build build --target burst --parallel 2
+
+      - name: Package single-file release
+        run: python scripts/package_release.py --platform linux-x86_64 --exe build/burst --runtime third_party/python/runtime --out burst-linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: burst-linux-x86_64
+          path: burst-linux-x86_64
+          if-no-files-found: error
+
+  linux-arm64:
+    name: Linux ARM64 Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 (runtime pyc bytecode)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install cross toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Configure (cross-compile, CLI only)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DBUILD_GUI=OFF -DBURST_VERSION=${GITHUB_REF_NAME#v} .
+
+      - name: Build
+        run: cmake --build build --target burst --parallel 2
+
+      - name: Verify architecture
+        run: file build/burst | grep aarch64
+
+      - name: Package single-file release
+        run: python scripts/package_release.py --platform linux-aarch64 --exe build/burst --runtime third_party/python/runtime --out burst-linux-aarch64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: burst-linux-aarch64
+          path: burst-linux-aarch64
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64 Release
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 (runtime pyc bytecode)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=ON -DBURST_VERSION=${GITHUB_REF_NAME#v} .
+
+      - name: Build
+        run: cmake --build build --target burst --parallel 2
+
+      - name: Package zip release
+        run: python scripts/package_release.py --platform windows-x86_64 --exe build/burst.exe --runtime third_party/python/runtime --build-dir build --out burst-windows-x86_64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: burst-windows-x86_64.zip
+          path: burst-windows-x86_64.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [linux-x86_64, linux-arm64, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for release notes)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd assets
+          sha256sum burst-* | tee SHA256SUMS.txt
+
+      - name: Generate release notes
+        run: |
+          PREV=$(git tag --sort=-version:refname | sed -n '2p')
+          if [ -n "$PREV" ]; then
+            git log --oneline "$PREV..HEAD" > changes.txt
+          else
+            git log --oneline -10 > changes.txt
+          fi
+          {
+            echo "## burst ${GITHUB_REF_NAME}"
+            echo
+            echo "### 变更记录"
+            cat changes.txt
+            echo
+            echo "### 平台产物"
+            echo "- burst-linux-x86_64 : 单文件（curl/Python/FFmpeg 静态，依赖桌面 libGL/X11）"
+            echo "- burst-linux-aarch64 : 交叉编译（CLI）"
+            echo "- burst-windows-x86_64.zip : burst.exe + Python 运行 dll（解压即用）"
+          } > release-body.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          body_path: release-body.md

@@ -9,6 +9,8 @@
 - 产物输出到 release-assets/(默认在仓库父目录)
 - 发布前检查 tag 冲突,防止误覆盖已有 Release
 - 复用 git 凭据中的 GitHub token,不硬编码任何密钥
+- 注意：后续版本发布优先走 GitHub Actions（推送 v* tag 自动构建并发布 Release，
+  见 .github/workflows/release.yml）；本脚本保留为本地兜底/试运行。
 
 .PARAMETER Version
 版本号,如 v1.2.0 或 1.2.0(自动补 v 前缀)。发布模式必填;-SkipRelease 时忽略。
