@@ -132,7 +132,9 @@ private:
     /** @brief Format ETA text ("--" when speed is zero). */
     static std::string FormatEta(double dRemain, double dSpeed);
 
-    CThreadPool m_cExecPool{2};               /**< task orchestration pool */
+    /* 4 concurrent task slots (P9A): queued tasks start sooner; each task
+     * still keeps its full chunk count in flight on the shared engine. */
+    CThreadPool m_cExecPool{4};               /**< task orchestration pool */
     CTaskQueue  m_cQueue;
     std::unique_ptr<CCurlMultiEngine> m_pChunkEngine; /**< shared engine (P8-4) */
     mutable std::mutex m_mutex;

@@ -59,6 +59,11 @@ bool g_py_thread_stop = false;
 std::atomic<bool> g_py_thread_exited{false};
 PyThreadState* g_py_main_thread_state = nullptr;
 
+/** @brief Idle lifetime of the Python worker (P8-2): the thread releases
+ *         itself after this long without jobs, so pure downloads run with
+ *         zero Python threads and parsing respawns it on demand. */
+constexpr auto kPyWorkerIdle = std::chrono::seconds(60);
+
 /** @brief Shared result state for a Python job (survives caller timeouts). */
 typedef struct tagPyJobResult
 {
@@ -68,7 +73,8 @@ typedef struct tagPyJobResult
     int nRc = 0;
 } TPyJobResult;
 
-/** @brief Python worker loop: runs queued jobs until stopped. */
+/** @brief Python worker loop: runs queued jobs until stopped or idle for
+ *         kPyWorkerIdle (P8-2 on-demand release). */
 void PythonWorkerLoop()
 {
     for (;;)
@@ -76,8 +82,13 @@ void PythonWorkerLoop()
         std::function<void()> fnJob;
         {
             std::unique_lock<std::mutex> lock(g_py_mutex);
-            g_py_cv.wait(lock, [] { return g_py_thread_stop ||
-                                         !g_py_jobs.empty(); });
+            const bool bTimedOut = !g_py_cv.wait_for(
+                lock, kPyWorkerIdle,
+                [] { return g_py_thread_stop || !g_py_jobs.empty(); });
+            if (bTimedOut && g_py_jobs.empty() && !g_py_thread_stop)
+            {
+                break;  /* idle release */
+            }
             if (g_py_jobs.empty() && g_py_thread_stop)
             {
                 break;
@@ -87,7 +98,15 @@ void PythonWorkerLoop()
         }
         fnJob();
     }
-    g_py_thread_exited.store(true);
+    /* Exit: mark idle so the next submit spawns a fresh worker.  The
+     * std::thread handle stays joinable and is reclaimed by the next
+     * SubmitPythonJob / StopPythonThread (never destroyed joinable). */
+    {
+        std::lock_guard<std::mutex> lock(g_py_mutex);
+        g_py_thread_started = false;
+        g_py_thread_exited.store(true);
+        g_py_cv.notify_all();
+    }
 }
 
 /** @brief Submit a job to the Python worker thread (starts it on demand). */
@@ -96,6 +115,12 @@ void SubmitPythonJob(const std::function<void()>& fnJob)
     std::lock_guard<std::mutex> lock(g_py_mutex);
     if (!g_py_thread_started)
     {
+        /* Reclaim the idle-released worker handle before respawning. */
+        if (g_py_thread.joinable())
+        {
+            g_py_thread.join();
+        }
+        g_py_thread_exited.store(false);
         g_py_thread_started = true;
         g_py_thread = std::thread(PythonWorkerLoop);
     }
@@ -169,6 +194,11 @@ void StopPythonThread(long nTimeoutSec)
         std::lock_guard<std::mutex> lock(g_py_mutex);
         if (!g_py_thread_started)
         {
+            /* An idle-released worker may still hold a finished handle. */
+            if (g_py_thread.joinable())
+            {
+                g_py_thread.join();
+            }
             return;
         }
         g_py_thread_stop = true;

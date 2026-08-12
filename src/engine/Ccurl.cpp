@@ -1377,6 +1377,9 @@ bool Ccurl::get_Download_FileSize() {
   curl_easy_setopt(m_easyHandle, CURLOPT_HEADERFUNCTION, HeadProbeHeader);
   curl_easy_setopt(m_easyHandle, CURLOPT_HEADERDATA, &ctxHead);
   curl_easy_setopt(m_easyHandle, CURLOPT_CONNECTTIMEOUT, 10L);
+  /* P9C: bound the whole probe so a stalled server cannot delay the
+   * download start by the 60s low-speed timeout. */
+  curl_easy_setopt(m_easyHandle, CURLOPT_TIMEOUT, 15L);
   if (m_timeout > 0) {
     /* The probe is also protected by the low-speed timeout. */
     curl_easy_setopt(m_easyHandle, CURLOPT_LOW_SPEED_LIMIT, 1L);
@@ -1441,6 +1444,7 @@ bool Ccurl::get_Download_FileSize() {
     curl_easy_setopt(probe, CURLOPT_HEADERFUNCTION, RangeProbeHeader);
     curl_easy_setopt(probe, CURLOPT_HEADERDATA, &ctxRange);
     curl_easy_setopt(probe, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(probe, CURLOPT_TIMEOUT, 15L);
     if (m_timeout > 0) {
       curl_easy_setopt(probe, CURLOPT_LOW_SPEED_LIMIT, 1L);
       curl_easy_setopt(probe, CURLOPT_LOW_SPEED_TIME, m_timeout);
@@ -1523,6 +1527,7 @@ bool Ccurl::Check_Range_Support() {
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, RangeProbeHeader);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
   if (m_timeout > 0) {
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, m_timeout);
