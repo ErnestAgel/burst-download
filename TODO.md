@@ -27,4 +27,4 @@ Pending items; completed work is tracked in the README and Releases.
 
 ## ✅ 待验证 To verify
 
-- [ ] release.yml 首次真实发布（打 `v*` tag 触发）
+- [x] release.yml 首次真实发布（v2.4.0 已跑通；因视频解析 bug 已作废，v2.4.1 起可用）

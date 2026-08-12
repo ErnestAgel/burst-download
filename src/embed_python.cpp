@@ -199,9 +199,9 @@ bool UpdateParserAt(const std::string& home, std::string& msg) {
     "import json, os, shutil, ssl, sys, tarfile, urllib.request, base64\n"
     "import certifi\n"
     "def _b(s): return base64.b64decode(s.encode('ascii')).decode('utf-8', 'replace')\n"
-    "OUT = " + B64Lit(result_file) + "\n"
-    "HOME = " + B64Lit(home) + "\n"
-    "CUR = " + B64Lit(cur_ver) + "\n"
+    "OUT = _b(" + B64Lit(result_file) + ")\n"
+    "HOME = _b(" + B64Lit(home) + ")\n"
+    "CUR = _b(" + B64Lit(cur_ver) + ")\n"
     "out = {'ok': False, 'msg': '', 'old': '', 'new': ''}\n"
     "class UpdateAbort(Exception):\n"
     "    pass\n"
@@ -426,9 +426,9 @@ bool EmbedParseVideoUrls(const std::string& url,
     "def _b(s): return base64.b64decode(s.encode('ascii')).decode('utf-8', 'replace')\n"
     "try:\n"
     "    opts = {'quiet': True, 'skip_download': True, 'no_warnings': True}\n"
-    "    _browser = %s\n"
-    "    _cookie = %s\n"
-    "    _url = %s\n"
+    "    _browser = _b(%s)\n"
+    "    _cookie = _b(%s)\n"
+    "    _url = _b(%s)\n"
     "    if _browser:\n"
     "        opts['cookiesfrombrowser'] = (_browser,)\n"
     "    if _cookie:\n"
@@ -449,10 +449,10 @@ bool EmbedParseVideoUrls(const std::string& url,
     "                raise Exception('页面解析成功但未返回任何媒体格式：视频可能需要登录 Cookie，或受区域限制')\n"
     "            raise Exception('解析到 ' + str(len(fmts)) + ' 个格式但均无可用直链：可能需要登录 Cookie')\n"
     "        json.dump({'title': info.get('title'), 'urls': urls},\n"
-    "                  open(%s, 'w', encoding='utf-8'), ensure_ascii=False)\n"
+    "                  open(_b(%s), 'w', encoding='utf-8'), ensure_ascii=False)\n"
     "except Exception as e:\n"
     "    json.dump({'error': (str(e) or repr(e))},\n"
-    "              open(%s, 'w', encoding='utf-8'), ensure_ascii=False)\n",
+    "              open(_b(%s), 'w', encoding='utf-8'), ensure_ascii=False)\n",
     B64Lit(cookies_from_browser).c_str(), B64Lit(cookie).c_str(),
     B64Lit(url).c_str(), B64Lit(result_file).c_str(),
     B64Lit(result_file).c_str());
