@@ -1,6 +1,7 @@
 /**
  * @file Ccurl.cpp
- * @brief 基于 libcurl 的多线程分片下载器 C++ 实现（跨平台：Windows / Linux x86_64 / Linux aarch64）
+ * @brief Multi-threaded chunked downloader C++ implementation based on
+ *        libcurl (cross-platform: Windows / Linux x86_64 / Linux aarch64).
  *
  * @author ErnestAgel
  * @date 2026-08-06
@@ -33,12 +34,14 @@
 
 #include "Ccurl.h"
 #include "curl/mprintf.h"
+#include "sha256.h"
 
 #ifdef _WIN32
 /**
- * @brief UTF-8 字符串转 UTF-16（Windows 宽字符文件路径，见 gui-design.md §5.4）
- * @param s UTF-8 输入
- * @return UTF-16 输出（空输入返回空串）
+ * @brief Convert a UTF-8 string to UTF-16 (Windows wide-character file
+ *        paths).
+ * @param s UTF-8 input.
+ * @return UTF-16 output (empty input returns an empty string).
  */
 static std::wstring Utf8ToWide(const std::string& s) {
   if (s.empty()) return std::wstring();
@@ -49,28 +52,29 @@ static std::wstring Utf8ToWide(const std::string& s) {
 }
 #endif
 
-/** @brief 将 libcurl 返回码转换为布尔值 */
+/** @brief Convert a libcurl return code to a boolean. */
 #define CHECK_CURL(value) ((value) == CURLE_OK)
 
 extern "C" {
-/** @brief 打印错误日志（含文件、行号与 errno 描述） */
+/** @brief Print an error log (file, line and errno description). */
 #define LOG_ERR(...)                                              \
   printf("[%s %d] Erro:%s", __FILE__, __LINE__, strerror(errno)); \
   printf(__VA_ARGS__);
 
-/** @brief 打印信息日志（含文件、行号） */
+/** @brief Print an info log (file and line). */
 #define LOG_INFO(...)                    \
   printf("[%s %d]", __FILE__, __LINE__); \
   printf(__VA_ARGS__);
 }
 
-st_EasyList** g_pInfoTable;   /**< 全局分片任务表指针，供进度回调汇总各线程下载量 */
-double g_filelen;             /**< 待下载文件总大小（字节） */
-double g_resume_len;          /**< 断点续传基数：本地已存在的字节数（计入进度统计） */
+st_EasyList** g_pInfoTable;   /**< Global chunk table for progress
+                               * aggregation */
+double g_filelen;             /**< Total file size (bytes) */
+double g_resume_len;          /**< Resume base: bytes already on disk */
 
 /**
- * @brief 追加写日志文件（download.log，线程安全）：记录超时中断/失败/成功等事件
- * @param fmt 格式化字符串（同 printf）
+ * @brief Append a line to download.log (thread-safe): logs timeouts,
+ *        failures and completions.
  */
 static void AppendLog(const char* fmt, ...) {
   static std::mutex log_mutex;
@@ -94,50 +98,53 @@ static void AppendLog(const char* fmt, ...) {
   }
 }
 
-/* 进度显示状态：多线程进度回调共享，用互斥锁保护（跨平台 std::mutex） */
-static int g_print = 1;                 /**< 下一次要打印的百分比 */
-static double g_last_total = 0;         /**< 上次打印时的累计下载量 */
-static time_t g_last_t = 0;             /**< 上次打印时间 */
-static std::mutex g_progress_mutex;     /**< 进度回调互斥锁 */
-static std::chrono::steady_clock::time_point g_last_cb_time; /**< GUI onProgress 节流时间戳（~200ms） */
+/* Progress display state shared by the chunk callbacks (mutex protected). */
+static int g_print = 1;          /**< Next percent to print */
+static double g_last_total = 0;  /**< Accumulated bytes at the last print */
+static time_t g_last_t = 0;      /**< Last print time */
+static std::mutex g_progress_mutex;  /**< Progress callback mutex */
+static std::chrono::steady_clock::time_point g_last_cb_time; /**< GUI throttle
+                                                             *  (~200ms) */
+static std::chrono::steady_clock::time_point g_last_flush_time =
+    std::chrono::steady_clock::now(); /**< Periodic mmap flush (~10s) */
 
 extern "C" {
 
 /**
- * @brief libcurl 写回调：将下载数据写入映射内存的对应偏移（带分片边界检查）
- * @param ptr 收到的数据指针
- * @param size 单个数据块大小
- * @param memb 数据块数量
- * @param userdata 指向 st_EasyList 的用户数据
- * @return 实际写入的字节数
+ * @brief libcurl write callback: write data into the mapped memory at the
+ *        chunk offset (with chunk-boundary checks).
+ * @return Bytes actually written.
  */
 size_t File_Write(char* ptr, size_t size, size_t memb, void* userdata) {
   st_EasyList* info = (st_EasyList*)userdata;
-  /* ---- 取消检查点（§5.2）：返回非 CURL_WRITEFUNC_OK 即中断本分片传输，延迟 < 1s ---- */
+  /* Cancellation checkpoint: return non-CURL_WRITEFUNC_OK to abort. */
   if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
     return 0;
   }
-  size_t total = size * memb;
+  const size_t total = size * memb;
+  /* Strict 206 (issue R2): when a Range request was answered with 200, the
+   * server sent the full body; discard it so it is never written at the
+   * chunk offset (the transfer degrades to a single stream later). */
+  if (info->use_range && !info->bGot206) {
+    return total;
+  }
   size_t n = total;
   int64_t end_pos = info->end + 1;
   if (info->offset < end_pos) {
     if (info->offset + (int64_t)n > end_pos) {
-      n = (size_t)(end_pos - info->offset);  /* 截断到分片末尾，防止越界写 */
+      n = (size_t)(end_pos - info->offset);  /* clamp to the chunk end */
     }
     memcpy((info->file_ptr + info->offset), ptr, n);
     info->offset += n;
   }
-  /* 超出分片范围的数据直接丢弃；返回原始字节数，避免触发 CURLE_WRITE_ERROR */
+  /* Bytes beyond the chunk are discarded; return the original count to
+   * avoid triggering CURLE_WRITE_ERROR. */
   return total;
 }
 
 /**
- * @brief libcurl 写回调：丢弃收到的数据（用于 Range 支持检测）
- * @param ptr 收到的数据指针
- * @param size 单个数据块大小
- * @param memb 数据块数量
- * @param userdata 未使用
- * @return 实际接收的字节数
+ * @brief libcurl write callback: discard all received data (Range probe).
+ * @return Bytes received.
  */
 size_t DummyWrite(char* ptr, size_t size, size_t memb, void* userdata) {
   (void)ptr;
@@ -145,7 +152,8 @@ size_t DummyWrite(char* ptr, size_t size, size_t memb, void* userdata) {
   return size * memb;
 }
 
-/** @brief 头字段名大小写不敏感比较（"Content-Range" 匹配 "content-range:"） */
+/** @brief Case-insensitive header name comparison
+ *         ("Content-Range" matches "content-range:"). */
 static bool HeaderNameIs(const char* line, const char* name) {
   size_t nl = strlen(name);
   for (size_t i = 0; i < nl; i++) {
@@ -157,63 +165,152 @@ static bool HeaderNameIs(const char* line, const char* name) {
   return line[nl] == ':';
 }
 
+/** @brief Strip trailing CR/LF/space/tab from a header value. */
+static std::string TrimHeaderValue(const char* pszValue) {
+  std::string strOut(pszValue);
+  const size_t nStart = strOut.find_first_not_of(" \t");
+  if (nStart == std::string::npos) {
+    return "";
+  }
+  strOut = strOut.substr(nStart);
+  while (!strOut.empty() &&
+         ((strOut.back() == '\r') || (strOut.back() == '\n') ||
+          (strOut.back() == ' ') || (strOut.back() == '\t'))) {
+    strOut.pop_back();
+  }
+  return strOut;
+}
+
+/** @brief Per-probe header context shared by the probe callbacks. */
+typedef struct tagProbeCtx {
+  curl_off_t nTotal;        /**< Content-Range total size (-1 = unknown) */
+  BOOL32 bAcceptRanges;     /**< HEAD: Accept-Ranges: bytes */
+  BOOL32 bStatus206;        /**< Range GET: final status is 206 */
+  std::string strEtag;      /**< ETag header value */
+  std::string strLastModified; /**< Last-Modified header value */
+} TProbeCtx;
+
 /**
- * @brief 响应头回调：捕获 "Content-Range: bytes 0-0/TOTAL" 中的总大小（Range 探测用）
- * @param userdata 指向 curl_off_t 接收总大小
+ * @brief HEAD probe header callback: captures Accept-Ranges, ETag and
+ *        Last-Modified.
  */
-size_t ContentRangeHeader(char* buffer, size_t size, size_t nitems,
-                          void* userdata) {
+static size_t HeadProbeHeader(char* buffer, size_t size, size_t nitems,
+                              void* userdata) {
+  TProbeCtx* ctx = (TProbeCtx*)userdata;
   const size_t n = size * nitems;
-  if (n > 0 && HeaderNameIs(buffer, "content-range")) {
+  if (n == 0) {
+    return 0;
+  }
+  if (HeaderNameIs(buffer, "accept-ranges") &&
+      strstr(buffer, "bytes") != nullptr) {
+    ctx->bAcceptRanges = TRUE;
+  } else if (HeaderNameIs(buffer, "etag")) {
+    ctx->strEtag = TrimHeaderValue(buffer + 5);
+  } else if (HeaderNameIs(buffer, "last-modified")) {
+    ctx->strLastModified = TrimHeaderValue(buffer + 14);
+  }
+  return n;
+}
+
+/**
+ * @brief Range GET probe header callback: aborts on a 2xx non-206 response
+ *        (server ignored Range), captures Content-Range/ETag/Last-Modified.
+ */
+static size_t RangeProbeHeader(char* buffer, size_t size, size_t nitems,
+                               void* userdata) {
+  TProbeCtx* ctx = (TProbeCtx*)userdata;
+  const size_t n = size * nitems;
+  if (n == 0) {
+    return 0;
+  }
+  if ((n >= 5) && (strncmp(buffer, "HTTP/", 5) == 0)) {
+    /* Status line: abort when a 2xx response is not 206 (full body case).
+     * Redirects (3xx) pass through so FOLLOWLOCATION keeps working. */
+    const char* p = strchr(buffer, ' ');
+    if (p != nullptr) {
+      while ((*p != '\0') && ((*p < '0') || (*p > '9'))) {
+        ++p;
+      }
+      const long code = atol(p);
+      if ((code >= 200) && (code <= 299) && (code != 206)) {
+        return 0;  /* abort the transfer */
+      }
+      if (code == 206) {
+        ctx->bStatus206 = TRUE;
+      }
+    }
+    return n;
+  }
+  if (HeaderNameIs(buffer, "content-range")) {
     const char* slash = strrchr(buffer, '/');
     if (slash != nullptr && slash[1] != '\0' && slash[1] != '*') {
-      *((curl_off_t*)userdata) =
-          (curl_off_t)strtoll(slash + 1, nullptr, 10);
+      ctx->nTotal = (curl_off_t)strtoll(slash + 1, nullptr, 10);
+    }
+  } else if (HeaderNameIs(buffer, "etag")) {
+    ctx->strEtag = TrimHeaderValue(buffer + 5);
+  } else if (HeaderNameIs(buffer, "last-modified")) {
+    ctx->strLastModified = TrimHeaderValue(buffer + 14);
+  }
+  return n;
+}
+
+/**
+ * @brief Chunk header callback: records whether the final response is 206
+ *        and aborts a Range request answered with a 2xx non-206 body.
+ */
+static size_t ChunkStatusHeader(char* buffer, size_t size, size_t nitems,
+                                void* userdata) {
+  st_EasyList* info = (st_EasyList*)userdata;
+  const size_t n = size * nitems;
+  if ((n >= 5) && (strncmp(buffer, "HTTP/", 5) == 0)) {
+    const char* p = strchr(buffer, ' ');
+    if (p != nullptr) {
+      while ((*p != '\0') && ((*p < '0') || (*p > '9'))) {
+        ++p;
+      }
+      const long code = atol(p);
+      info->bGot206 = (code == 206);
+      if (info->use_range && (code >= 200) && (code <= 299) &&
+          (code != 206)) {
+        return 0;  /* abort: Range answered with the full body */
+      }
     }
   }
   return n;
 }
 
 /**
- * @brief 响应头回调：捕获 "Accept-Ranges: bytes"（HEAD 探测时判断服务器是否支持 Range）
- * @param userdata 指向 bool（命中置 true）
- */
-size_t AcceptRangesHeader(char* buffer, size_t size, size_t nitems,
-                          void* userdata) {
-  const size_t n = size * nitems;
-  if (n > 0 && HeaderNameIs(buffer, "accept-ranges") &&
-      strstr(buffer, "bytes") != nullptr) {
-    *((bool*)userdata) = true;
-  }
-  return n;
-}
-
-/**
- * @brief libcurl 进度回调：汇总各线程下载量并打印整体百分比、速率与剩余时间
- * @param userdata 指向 st_EasyList 的用户数据
- * @param totalDownload 总下载字节数
- * @param nowDownload 当前已下载字节数
- * @param totalUpload 总上传字节数
- * @param nowUpload 当前已上传字节数
- * @return 0 表示继续下载
+ * @brief libcurl progress callback: aggregate per-thread bytes, print the
+ *        overall percentage/speed/ETA, and periodically flush the mapping.
+ * @return 0 to continue the download.
  */
 size_t progressFunc(void* userdata,
-                 double totalDownload,
-                 double nowDownload,
-                 double totalUpload,
-                 double nowUpload) {
+                    double totalDownload,
+                    double nowDownload,
+                    double totalUpload,
+                    double nowUpload) {
   g_progress_mutex.lock();
   st_EasyList* info = (st_EasyList*)userdata;
   info->download_len = nowDownload;
 
-  /* ---- 取消检查点（§5.2）：进度回调返回非 0 即中止传输 ---- */
+  /* Cancellation checkpoint: return non-zero to abort the transfer. */
   if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
     g_progress_mutex.unlock();
     return 1;
   }
 
+  /* Periodic dirty-page flush (crash consistency, issue R4). */
+  const auto nowFlush = std::chrono::steady_clock::now();
+  if (info->owner != nullptr &&
+      std::chrono::duration_cast<std::chrono::seconds>(
+          nowFlush - g_last_flush_time)
+              .count() >= 10) {
+    g_last_flush_time = nowFlush;
+    info->owner->FlushMapping();
+  }
+
   int percent = 0;
-  double allDownload = g_resume_len;  /* 续传时以本地已存在字节数为基数 */
+  double allDownload = g_resume_len;  /* resume base counts as downloaded */
   if (totalDownload > 0) {
     for (int i = 0; i < MaxThread + 1; i++) {
       if (g_pInfoTable[i] != nullptr) {
@@ -223,7 +320,7 @@ size_t progressFunc(void* userdata,
     percent = (int)(allDownload / g_filelen * 100);
   }
 
-  /* ---- GUI 模式：~200ms 时间节流回调（原 1% 门控打印让位于实时节流，见 §5.1/§5.2） ---- */
+  /* ---- GUI mode: ~200ms throttled callback ---- */
   if (info->on_progress != nullptr && *info->on_progress) {
     auto now_cb = std::chrono::steady_clock::now();
     long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -248,9 +345,8 @@ size_t progressFunc(void* userdata,
         }
         ThreadProgress t;
         t.id = i;
-        /* 文件内绝对位置（用户需求：每线程进度按文件内位置显示）：
-         * downloaded = 分片起点 + 本片已下载量（续传含基数），
-         * percent = 位置 / 文件总大小（与总进度对齐，不再从 0 起算） */
+        /* In-file absolute positions: downloaded = chunk start + chunk bytes
+         * (resume base included), percent = position / file total. */
         t.file_start = (long long)p->part_start;
         t.downloaded = (long long)p->part_start + (long long)p->download_len;
         t.total = (long long)p->end + 1;
@@ -258,7 +354,7 @@ size_t progressFunc(void* userdata,
         t.percent = (g_filelen > 0)
                         ? (t.downloaded / (double)g_filelen * 100.0)
                         : 0.0;
-        /* 本线程速率：本分片在节流窗口内的增量 */
+        /* Per-thread speed: increment inside the throttle window. */
         time_t dt = (p->last_t > 0) ? (now - p->last_t) : 0;
         if (dt > 0 && p->download_len >= p->last_len) {
           t.speed = (p->download_len - p->last_len) / (double)dt;
@@ -275,7 +371,7 @@ size_t progressFunc(void* userdata,
     return 0;
   }
 
-  /* ---- CLI 模式：保留原 1% 门控打印（默认回调，见 §5.1/R6） ---- */
+  /* ---- CLI mode: keep the original 1% gate printing ---- */
   if (percent >= g_print) {
     time_t now = time(NULL);
     double speed = 0;
@@ -300,7 +396,7 @@ size_t progressFunc(void* userdata,
 
   return 0;
 }
-}
+}  // extern "C"
 
 Ccurl::Ccurl() {
   for (int i = 0; i <= MaxThread; i++) {
@@ -315,20 +411,25 @@ Ccurl::~Ccurl() {
   this->Destory();
 }
 
-bool Ccurl::Init(const string url, string filename, int thread_num, int timeout) {
+bool Ccurl::Init(const string url, string filename, int thread_num,
+                 int timeout) {
   unique_lock<mutex> lock(m_lock);
   m_url = url;
   m_filename = filename;
-  m_thread_num = thread_num < 1 ? 1 : (thread_num > MaxThread ? MaxThread : thread_num);
+  m_thread_num =
+      thread_num < 1 ? 1 : (thread_num > MaxThread ? MaxThread : thread_num);
   m_timeout = timeout < 0 ? 0 : timeout;
-  m_cancel_flag.store(false);   /* 每次任务前重置取消标志（复用实例/多任务串行） */
-  g_print = 1;                  /* 重置 CLI 1% 门控进度打印状态 */
+  m_cancel_flag.store(false);   /* reset per task (instance reuse) */
+  m_range_denied.store(false);
+  m_remote_etag.clear();
+  m_remote_last_modified.clear();
+  g_print = 1;                  /* reset the CLI 1% progress printing */
   g_last_total = 0;
   g_last_t = 0;
   LOG_INFO(">>>>>\n");
-  /* 顺序优化（"继续"响应更快）：先 HEAD 探测文件大小（get_Download_FileSize，
-   * 内部捕获 Accept-Ranges 确认 Range 支持），仅当 HEAD 未确认时再走独立
-   * Range 探测（Check_Range_Support）→ 大多数服务器只发 1 次 HEAD 即完成初始化 */
+  /* Order optimization (faster "Resume"): probe the size with HEAD first
+   * (capturing Accept-Ranges inside), and only run the standalone Range
+   * probe when HEAD did not confirm Range support. */
   if (!this->get_Download_FileSize()) {
     return false;
   }
@@ -363,15 +464,12 @@ void Ccurl::SetCookie(const string& cookie) {
   m_cookie = cookie;
 }
 
-void *Ccurl::Downloading(void* arg) {
+void* Ccurl::Downloading(void* arg) {
   st_EasyList* info = (st_EasyList*)arg;
-  char range[64] = {0};
   const int max_retry = 3;
   const int64_t base_offset = info->offset;
 
   if (info->use_range) {
-    snprintf(range, sizeof(range), "%lld-%lld",
-             (long long)info->offset, (long long)info->end);
 #ifdef _WIN32
     LOG_INFO("threadid: %p, download from: %lld to: %lld\n", info->thid,
              (long long)info->offset, (long long)info->end);
@@ -384,18 +482,28 @@ void *Ccurl::Downloading(void* arg) {
     LOG_INFO("threadid: %p, download whole range from: %lld\n", info->thid,
              (long long)info->offset);
 #else
-    LOG_INFO("threadid: %ld, download whole range from: %lld\n", (long)info->thid,
-             (long long)info->offset);
+    LOG_INFO("threadid: %ld, download whole range from: %lld\n",
+             (long)info->thid, (long long)info->offset);
 #endif
   }
 
   for (int attempt = 0; attempt < max_retry; attempt++) {
-    /* 取消检查点：取消后不再重试，直接结束本分片 */
+    /* Cancellation checkpoint: no retry after cancel. */
     if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
       info->success = false;
       return nullptr;
     }
-    info->offset = base_offset;  /* 重试前恢复本分片起点 */
+    /* Issue O1: the chunk may already be complete from a partial attempt. */
+    if (info->offset > info->end) {
+      info->success = true;
+      return nullptr;
+    }
+    /* Resume from the current written offset (issue O1), not the base. */
+    char range[64] = {0};
+    if (info->use_range) {
+      snprintf(range, sizeof(range), "%lld-%lld",
+               (long long)info->offset, (long long)info->end);
+    }
     CURL* curl = curl_easy_init();
     if (curl == nullptr) {
       LOG_ERR("curl Easy init failed\n");
@@ -404,8 +512,9 @@ void *Ccurl::Downloading(void* arg) {
     curl_easy_setopt(curl, CURLOPT_URL, info->url);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                     "(KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36");
+                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                     "AppleWebKit/537.36 (KHTML, like Gecko) "
+                     "Chrome/115.0.0.0 Safari/537.36");
     if (info->referer != nullptr && info->referer[0] != '\0') {
       curl_easy_setopt(curl, CURLOPT_REFERER, info->referer);
     }
@@ -414,6 +523,9 @@ void *Ccurl::Downloading(void* arg) {
     }
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, File_Write);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, info);
+    /* Strict 206: track/abort a Range request answered with 200. */
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ChunkStatusHeader);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, info);
 
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progressFunc);
@@ -423,7 +535,7 @@ void *Ccurl::Downloading(void* arg) {
       curl_easy_setopt(curl, CURLOPT_RANGE, range);
     }
     if (info->timeout > 0) {
-      /* 低速超时：下载无进展（低于 1 字节/秒）持续 timeout 秒则中断 */
+      /* Low-speed timeout: abort after timeout seconds without progress. */
       curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
       curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, info->timeout);
     }
@@ -432,27 +544,44 @@ void *Ccurl::Downloading(void* arg) {
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
-    /* 取消检查点：perform 因取消中止（写回调返回 0 / 进度回调返回 1），不视为失败也不重试 */
+    /* Cancellation checkpoint: cancel-aborted transfers are not failures. */
     if (info->cancel_flag != nullptr && info->cancel_flag->load()) {
       info->success = false;
       return nullptr;
     }
-    bool http_ok = (http_code == 200 || http_code == 206);
-    if (http_ok && CHECK_CURL(res) && info->offset >= info->end + 1) {
-      info->success = true;  /* 本分片下载成功且已写满 */
-      return nullptr;
-    }
-    if (res == CURLE_OPERATION_TIMEDOUT) {
-      /* 超时即中断（不重试），输出详细日志 */
-      LOG_ERR("part %lld-%lld timeout (no progress for %ld s)\n",
-              (long long)info->offset, (long long)info->end, info->timeout);
-      AppendLog("[WARN] timeout on part %lld-%lld (url=%s, no progress for %ld s)",
-                (long long)info->offset, (long long)info->end, info->url, info->timeout);
+    const bool b2xx = (http_code >= 200) && (http_code <= 299);
+    if (info->use_range && b2xx && (http_code != 206)) {
+      /* Server ignored Range (200): degrade to a single full-body stream. */
+      if (info->range_denied != nullptr) {
+        info->range_denied->store(true);
+      }
+      LOG_ERR("server ignored Range (HTTP %ld) on part %lld-%lld, "
+              "restarting single-stream (url=%s)\n",
+              http_code, (long long)info->offset, (long long)info->end,
+              info->url);
+      AppendLog("[ERROR] server ignored Range (HTTP %ld) on part %lld-%lld, "
+                "restarting single-stream (url=%s)",
+                http_code, (long long)info->offset, (long long)info->end,
+                info->url);
       info->success = false;
       return nullptr;
     }
-    if (!http_ok) {
-      /* HTTP 错误（403/404 等）：错误页已被写回调接收，直接判失败，不重试 */
+    if (b2xx && CHECK_CURL(res) && info->offset >= info->end + 1) {
+      info->success = true;  /* chunk complete and full */
+      return nullptr;
+    }
+    if (res == CURLE_OPERATION_TIMEDOUT) {
+      LOG_ERR("part %lld-%lld timeout (no progress for %ld s)\n",
+              (long long)info->offset, (long long)info->end, info->timeout);
+      AppendLog("[WARN] timeout on part %lld-%lld (url=%s, no progress for "
+                "%ld s)",
+                (long long)info->offset, (long long)info->end, info->url,
+                info->timeout);
+      info->success = false;
+      return nullptr;
+    }
+    if (!b2xx) {
+      /* HTTP error (403/404 etc.): fail without retrying. */
       LOG_ERR("HTTP %ld on part %lld-%lld (url=%s)\n", http_code,
               (long long)info->offset, (long long)info->end, info->url);
       AppendLog("[ERROR] HTTP %ld on part %lld-%lld (url=%s)", http_code,
@@ -460,38 +589,33 @@ void *Ccurl::Downloading(void* arg) {
       info->success = false;
       return nullptr;
     }
-    LOG_ERR("res:%s, retry %d/%d\n", curl_easy_strerror(res), attempt + 1, max_retry);
+    LOG_ERR("res:%s, retry %d/%d from offset %lld\n",
+            curl_easy_strerror(res), attempt + 1, max_retry,
+            (long long)info->offset);
 #ifdef _WIN32
-    Sleep(1000);  /* 重试前等待 1 秒 */
+    Sleep(1000);  /* wait 1s before the retry */
 #else
     sleep(1);
 #endif
   }
   info->success = false;
   AppendLog("[ERROR] part %lld-%lld failed after %d retries (url=%s)",
-            (long long)base_offset, (long long)info->end, max_retry, info->url);
+            (long long)base_offset, (long long)info->end, max_retry,
+            info->url);
 
   return nullptr;
 }
 
-bool Ccurl::Download_Task() {
-  unique_lock<mutex> lock(m_lock);
+bool Ccurl::RunChunks() {
   bool all_ok = true;
-
-  if (m_Easy_List[0] == nullptr) {
-    return true;  /* 无分片任务（文件已完整），直接视为成功 */
-  }
-  /* 取消检查点：任务开始前已被取消则直接返回 */
-  if (m_cancel_flag.load()) {
-    return false;
-  }
   for (int i = 0; i < m_thread_num; i++) {
     if (m_Easy_List[i]->success) {
-      continue;  /* 分片级续传：该分片上次已写满，跳过不重下 */
+      continue;  /* chunk-level resume: already full, skip */
     }
 #ifdef _WIN32
-    m_Easy_List[i]->thid = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&Downloading,
-                                        (LPVOID)m_Easy_List[i], 0, NULL);
+    m_Easy_List[i]->thid =
+        CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&Downloading,
+                     (LPVOID)m_Easy_List[i], 0, NULL);
     if (m_Easy_List[i]->thid != NULL) {
       m_Easy_List[i]->thread_created = true;
     } else {
@@ -508,7 +632,7 @@ bool Ccurl::Download_Task() {
     }
 #endif
   }
-  
+
   for (int i = 0; i < m_thread_num; i++) {
     if (m_Easy_List[i]->thread_created) {
 #ifdef _WIN32
@@ -522,24 +646,78 @@ bool Ccurl::Download_Task() {
       all_ok = false;
     }
   }
-  /* 取消检查点：任务结束后区分"取消"与"失败"，GUI 依据 IsCanceled() 显示"已取消" */
+  return all_ok;
+}
+
+bool Ccurl::VerifyAllPartsWritten() const {
+  long long nTotal = 0;
+  for (int i = 0; i < m_thread_num; i++) {
+    if (m_Easy_List[i] == nullptr) {
+      return false;
+    }
+    nTotal += (long long)(m_Easy_List[i]->offset -
+                          m_Easy_List[i]->part_start);
+  }
+  return nTotal == (long long)m_fileLen;
+}
+
+bool Ccurl::Download_Task() {
+  unique_lock<mutex> lock(m_lock);
+
+  if (m_Easy_List[0] == nullptr) {
+    return true;  /* no chunks (file already complete) */
+  }
+  /* Cancellation checkpoint: canceled before the transfer starts. */
+  if (m_cancel_flag.load()) {
+    return false;
+  }
+  bool all_ok = RunChunks();
+
+  /* Strict 206 (issue R2): when the server ignored Range, restart once as a
+   * single full-body stream (discard resume meta and all partial data). */
+  if (!all_ok && m_range_denied.load()) {
+    AppendLog("[WARN] server ignored Range, restarting as single stream: "
+              "url=%s",
+              m_url.c_str());
+    m_range_supported = false;
+    m_range_denied.store(false);
+    m_part_written.clear();
+    ClearPartMeta();
+    DestoryUnlocked();
+    m_thread_num = 1;
+    if (!File_Init(m_filename.c_str())) {
+      return false;
+    }
+    all_ok = RunChunks();
+  }
+
+  /* Cancellation checkpoint: distinguish cancel from failure. */
   if (m_cancel_flag.load()) {
     AppendLog("[INFO] download canceled: url=%s", m_url.c_str());
-    SavePartMeta();  /* 取消（暂停）也写回分片进度，供下次续传 */
+    SavePartMeta();  /* cancel (pause) also saves chunk progress */
     return false;
   }
   if (all_ok) {
-    AppendLog("[INFO] download complete: url=%s", m_url.c_str());
+    /* Issue O4: verify every part actually wrote its full range. */
+    if (!VerifyAllPartsWritten()) {
+      AppendLog("[ERROR] download size verification failed, parts incomplete "
+                "(url=%s)",
+                m_url.c_str());
+      SavePartMeta();
+      return false;
+    }
+    AppendLog("[INFO] download complete: url=%s, size verified", m_url.c_str());
     ClearPartMeta();
   } else {
-    AppendLog("[ERROR] download task failed: some parts not completed (url=%s)",
+    AppendLog("[ERROR] download task failed: some parts not completed "
+              "(url=%s)",
               m_url.c_str());
     SavePartMeta();
   }
   return all_ok;
 }
 
-/* ---- 分片级断点续传元数据（<目标文件>.curlbolt.part） ---- */
+/* ---- Chunk-level resume metadata (<target>.curlbolt.part) ---- */
 
 std::string Ccurl::MetaPath() const {
   return m_filename + ".curlbolt.part";
@@ -553,7 +731,7 @@ std::vector<ThreadProgress> Ccurl::SnapshotParts() const {
     t.file_start = (long long)m_Easy_List[i]->part_start;
     t.downloaded =
         (long long)m_Easy_List[i]->part_start +
-        (long long)m_Easy_List[i]->download_len; /* 续传时含已写部分 */
+        (long long)m_Easy_List[i]->download_len; /* resume base included */
     t.total = (long long)m_Easy_List[i]->end + 1;
     t.file_total = (long long)m_fileLen;
     t.percent =
@@ -564,7 +742,22 @@ std::vector<ThreadProgress> Ccurl::SnapshotParts() const {
   return out;
 }
 
-bool Ccurl::LoadPartMeta() {
+/**
+ * @brief Read the resume meta (v2 with schema/etag/last_modified).
+ *
+ * Format:
+ *   schema=2
+ *   filelen=<total>
+ *   etag=<...>
+ *   last_modified=<...>
+ *   part=<start>,<written>
+ *   ...
+ *
+ * @return emMetaOk when usable and remote integrity matches, emMetaChanged
+ *         when the remote content changed or the meta is legacy v1
+ *         (conservative full restart), emMetaNone otherwise.
+ */
+Ccurl::TMetaResult Ccurl::LoadPartMeta() {
   m_part_written.clear();
   const std::string path = MetaPath();
 #ifdef _WIN32
@@ -573,13 +766,22 @@ bool Ccurl::LoadPartMeta() {
   FILE* f = fopen(path.c_str(), "rb");
 #endif
   if (f == nullptr) {
-    return false;
+    return emMetaNone;
   }
   long long filelen = -1;
-  char line[128];
+  bool bSchemaV2 = false;
+  std::string strEtag;
+  std::string strLastModified;
+  char line[256];
   while (fgets(line, sizeof(line), f) != nullptr) {
-    if (strncmp(line, "filelen=", 8) == 0) {
+    if (strncmp(line, "schema=", 7) == 0) {
+      bSchemaV2 = (atoll(line + 7) == 2);
+    } else if (strncmp(line, "filelen=", 8) == 0) {
       filelen = atoll(line + 8);
+    } else if (strncmp(line, "etag=", 5) == 0) {
+      strEtag = TrimHeaderValue(line + 5);
+    } else if (strncmp(line, "last_modified=", 14) == 0) {
+      strLastModified = TrimHeaderValue(line + 14);
     } else {
       char* comma = strchr(line, ',');
       if (comma != nullptr) {
@@ -589,15 +791,56 @@ bool Ccurl::LoadPartMeta() {
     }
   }
   fclose(f);
-  /* filelen 必须与当前任务一致（目标文件已变 → 元数据作废） */
-  const bool ok = (filelen == (long long)m_fileLen) && !m_part_written.empty();
-  if (!ok) {
+  /* The file size must match the current task (target changed -> discard). */
+  if ((filelen != (long long)m_fileLen) || m_part_written.empty()) {
     m_part_written.clear();
+    return emMetaNone;
   }
-  return ok;
+  /* Legacy v1 meta (no schema): conservative full restart once (upgrades to
+   * v2 on the next save). */
+  if (!bSchemaV2) {
+    m_part_written.clear();
+    return emMetaChanged;
+  }
+  /* Remote integrity (issue R3): compare ETag first, then Last-Modified. */
+  if (!strEtag.empty() && !m_remote_etag.empty() &&
+      (strEtag != m_remote_etag)) {
+    m_part_written.clear();
+    return emMetaChanged;
+  }
+  if (strEtag.empty() && !m_remote_etag.empty()) {
+    /* The meta has no ETag but the server now provides one: cannot verify
+     * the old data, restart conservatively. */
+    m_part_written.clear();
+    return emMetaChanged;
+  }
+  if (strEtag.empty() && m_remote_etag.empty() &&
+      !strLastModified.empty() && !m_remote_last_modified.empty() &&
+      (strLastModified != m_remote_last_modified)) {
+    m_part_written.clear();
+    return emMetaChanged;
+  }
+  return emMetaOk;
+}
+
+/**
+ * @brief Flush dirty mapped pages to disk (issue R4).  No locking: called
+ *        from transfer threads or under the lifecycle lock.
+ */
+void Ccurl::FlushMapping() {
+#ifdef _WIN32
+  if (m_pTrunck != nullptr) {
+    FlushViewOfFile(m_pTrunck, 0);
+  }
+#else
+  if (m_pTrunck != nullptr) {
+    msync(m_pTrunck, (size_t)m_fileLen, MS_SYNC);
+  }
+#endif
 }
 
 void Ccurl::SavePartMeta() {
+  FlushMapping();  /* issue R4: flush before recording progress */
   const std::string path = MetaPath();
 #ifdef _WIN32
   FILE* f = _wfopen(Utf8ToWide(path).c_str(), L"wb");
@@ -607,10 +850,14 @@ void Ccurl::SavePartMeta() {
   if (f == nullptr) {
     return;
   }
+  fprintf(f, "schema=2\n");
   fprintf(f, "filelen=%lld\n", (long long)m_fileLen);
+  fprintf(f, "etag=%s\n", m_remote_etag.c_str());
+  fprintf(f, "last_modified=%s\n", m_remote_last_modified.c_str());
   for (int i = 0; i < m_thread_num; i++) {
     if (m_Easy_List[i] != nullptr) {
-      /* 已写字节 = 写回调推进到的位置 - 分片起点（含续传起点） */
+      /* Written bytes = write-callback position - chunk start (resume base
+       * included). */
       long long written =
           (long long)(m_Easy_List[i]->offset - m_Easy_List[i]->part_start);
       if (written < 0) written = 0;
@@ -630,50 +877,60 @@ void Ccurl::ClearPartMeta() {
 #endif
 }
 
-
-
 bool Ccurl::File_Init(const char* filename) {
   LOG_INFO(">>>>>\n");
 
-  /* 文件大小已由 Init → get_Download_FileSize() 探测（含 Range 支持确认） */
+  /* The file size was probed by Init -> get_Download_FileSize(). */
   if (m_fileLen <= 0) {
     LOG_ERR("invalid file length: %lld\n", (long long)m_fileLen);
-    m_last_error = "服务器未返回有效的文件大小（链接可能不是直接下载地址，或服务器不支持 HEAD）";
+    m_last_error = "server returned no valid file size (the link may not be "
+                   "a direct download, or the server does not support HEAD)";
     return false;
   }
 
-  /* 分片级断点续传：可信来源 = .curlbolt.part 元数据。
-   * mmap 预分配使文件大小恒等于 m_fileLen，stat 判断会误判"已完整"
-   * （暂停后继续"瞬间完成"无流量的 bug 根因）；无元数据 → 保守全量重下 */
+  /* Chunk-level resume: the trusted source is the .curlbolt.part meta.
+   * mmap preallocates the file to m_fileLen, so a stat check would wrongly
+   * report "complete"; without meta we conservatively redownload. */
   m_resume_len = 0;
   m_part_written.clear();
+  TMetaResult metaRes = emMetaNone;
   bool have_part_meta = false;
+  bool bRemoteChanged = false;
 #ifdef _WIN32
-  std::wstring wfile = Utf8ToWide(filename);  /* UTF-8 → UTF-16，支持中文路径（§5.4） */
-  struct _stat64 st;
+  std::wstring wfile = Utf8ToWide(filename);  /* UTF-8 -> UTF-16 */
+  struct _stat64 st = {};
   if (_wstat64(wfile.c_str(), &st) == 0 && (st.st_mode & _S_IFREG) &&
       st.st_size > 0) {
-    have_part_meta = LoadPartMeta();
+    metaRes = LoadPartMeta();
   }
 #else
-  struct stat st;
+  struct stat st = {};
   if (stat(filename, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
-    have_part_meta = LoadPartMeta();
+    metaRes = LoadPartMeta();
   }
 #endif
-  if (have_part_meta) {
+  if (metaRes == emMetaOk) {
+    have_part_meta = true;
     LOG_INFO("resume meta found, %d parts\n", (int)m_part_written.size());
+  } else if (metaRes == emMetaChanged) {
+    /* Issue R3: the remote content changed or the meta is legacy v1;
+     * discard it and restart the full download. */
+    bRemoteChanged = true;
+    LOG_INFO("resume meta invalid/remote changed, restarting full download\n");
+    m_part_written.clear();
+    ClearPartMeta();
   } else if (st.st_size > 0) {
     LOG_INFO("existing file without resume meta (%lld bytes), redownload\n",
              (long long)st.st_size);
   }
 
-  /* 服务器不支持 Range：退化单线程整段，无法分片续传，丢弃元数据重来 */
+  /* Server without Range support: single stream, no chunk resume. */
   int open_flags = O_RDWR | O_CREAT;
   if (!m_range_supported) {
     m_thread_num = 1;
     if (have_part_meta) {
-      LOG_INFO("server does not support Range, discard resume meta and restart\n");
+      LOG_INFO("server does not support Range, discard resume meta and "
+               "restart\n");
       m_part_written.clear();
       have_part_meta = false;
       ClearPartMeta();
@@ -681,7 +938,8 @@ bool Ccurl::File_Init(const char* filename) {
     }
   }
 
-  /* 线程数：基于整个文件（最小分片 1MB；分片划分与 resume 无关，位置固定） */
+  /* Thread count based on the whole file (min chunk 1MB; the chunk layout is
+   * fixed and resume-independent). */
   {
     const int64_t kMinPartSize = 1 << 20; /* 1MB */
     int max_threads_by_size = (int)(m_fileLen / kMinPartSize);
@@ -692,7 +950,8 @@ bool Ccurl::File_Init(const char* filename) {
       m_thread_num = max_threads_by_size;
     }
   }
-  /* 元数据分片数必须与当前划分一致（线程数/划分变化 → 作废重来） */
+  /* The meta chunk count must match the current layout (threads/layout
+   * changed -> discard). */
   if (have_part_meta && (int)m_part_written.size() != m_thread_num) {
     LOG_INFO("resume meta part count mismatch (%d vs %d), discard\n",
              (int)m_part_written.size(), m_thread_num);
@@ -700,7 +959,7 @@ bool Ccurl::File_Init(const char* filename) {
     have_part_meta = false;
     ClearPartMeta();
   }
-  /* 续传基数（总进度计算用）：各分片已写字节之和 */
+  /* Resume base (progress accounting): sum of the written bytes. */
   if (have_part_meta) {
     for (int64_t w : m_part_written) {
       m_resume_len += w;
@@ -716,10 +975,12 @@ bool Ccurl::File_Init(const char* filename) {
                         dwCreation, FILE_ATTRIBUTE_NORMAL, NULL);
   if (m_hFile == INVALID_HANDLE_VALUE) {
     LOG_ERR("CreateFile:%s failed\n", filename);
-    m_last_error = "无法创建本地文件（保存路径不存在或不可写）";
+    m_last_error = "failed to create the local file (save path missing or "
+                   "not writable)";
     return false;
   }
-  /* 将文件扩展到目标大小并写满末尾 1 字节，保证映射覆盖整个文件 */
+  /* Extend the file to the target size and write the last byte so the
+   * mapping covers the whole file. */
   LARGE_INTEGER li;
   li.QuadPart = m_fileLen - 1;
   if (!SetFilePointerEx(m_hFile, li, NULL, FILE_BEGIN)) {
@@ -771,7 +1032,8 @@ bool Ccurl::File_Init(const char* filename) {
   }
 
   m_pTrunck =
-      (char*)mmap(NULL, (size_t)m_fileLen, PROT_READ | PROT_WRITE, MAP_SHARED, m_fd, 0);
+      (char*)mmap(NULL, (size_t)m_fileLen, PROT_READ | PROT_WRITE, MAP_SHARED,
+                  m_fd, 0);
   if (m_pTrunck == MAP_FAILED) {
     LOG_ERR("Mapping file failed\n");
     close(m_fd);
@@ -781,23 +1043,25 @@ bool Ccurl::File_Init(const char* filename) {
   }
 #endif
   /**
-   * 分片示意：整个文件 [0, m_fileLen-1] 按线程数均分（划分与 resume 无关，位置固定），
-   * 续传时每分片从元数据记录的已写位置继续：
+   * Chunk layout: the whole file [0, m_fileLen-1] is split evenly by the
+   * thread count (fixed layout, resume-independent).  On resume each chunk
+   * continues from its recorded written position:
    *  --------------------------------------------------------
    * |              |              |               |         |
-   * |  1st part    |  2st part    |   3rd part    | ....... |
-   * ---------------------------------------------------------
+   * |  1st part    |  2nd part    |   3rd part    | ....... |
+   * --------------------------------------------------------
    */
   int64_t part_Size = m_fileLen / m_thread_num;
   for (int i = 0; i < m_thread_num; i++) {
     m_Easy_List[i] = (st_EasyList*)malloc(sizeof(st_EasyList));
-    m_Easy_List[i]->part_start = i * part_Size;   /* 文件内分片起点（算分片总长） */
+    m_Easy_List[i]->part_start = i * part_Size;
     if (i < m_thread_num - 1) {
       m_Easy_List[i]->end = (i + 1) * part_Size - 1;
     } else {
-      m_Easy_List[i]->end = m_fileLen - 1;  /* 最后一个线程负责余数部分 */
+      m_Easy_List[i]->end = m_fileLen - 1;  /* last chunk takes the rest */
     }
-    /* 分片级续传：已满 → 标记成功跳过；否则从 part_start + written 继续 */
+    /* Chunk-level resume: full chunks are marked done and skipped; others
+     * continue from part_start + written. */
     const int64_t part_len =
         m_Easy_List[i]->end - m_Easy_List[i]->part_start + 1;
     int64_t written =
@@ -813,18 +1077,23 @@ bool Ccurl::File_Init(const char* filename) {
     }
     m_Easy_List[i]->file_ptr = m_pTrunck;
     m_Easy_List[i]->url = m_url.c_str();
-    m_Easy_List[i]->download_len = written;  /* 进度回调基数：续传时含已写部分 */
+    m_Easy_List[i]->download_len = written;  /* resume base for callbacks */
     m_Easy_List[i]->use_range = m_range_supported;
     m_Easy_List[i]->thread_created = false;
     m_Easy_List[i]->timeout = m_timeout;
     m_Easy_List[i]->referer = m_referer.c_str();
     m_Easy_List[i]->cookie = m_cookie.c_str();
-    /* GUI 进度/取消扩展（§4.2/§5.2） */
-    m_Easy_List[i]->part_total = m_Easy_List[i]->end - m_Easy_List[i]->part_start + 1;
+    /* GUI progress/cancel extension. */
+    m_Easy_List[i]->part_total =
+        m_Easy_List[i]->end - m_Easy_List[i]->part_start + 1;
     m_Easy_List[i]->last_len = 0;
     m_Easy_List[i]->last_t = 0;
     m_Easy_List[i]->cancel_flag = &m_cancel_flag;
     m_Easy_List[i]->on_progress = onProgress ? &onProgress : nullptr;
+    /* P2: strict 206 + single-stream degrade + periodic flush. */
+    m_Easy_List[i]->bGot206 = FALSE;
+    m_Easy_List[i]->range_denied = &m_range_denied;
+    m_Easy_List[i]->owner = this;
   }
   g_pInfoTable = m_Easy_List;
   g_resume_len = (double)m_resume_len;
@@ -864,22 +1133,24 @@ bool Ccurl::get_Download_FileSize() {
       "like Gecko) Chrome/115.0.0.0 Safari/537.36");
   curl_easy_setopt(m_easyHandle, CURLOPT_HEADER, 1);
   curl_easy_setopt(m_easyHandle, CURLOPT_NOBODY, 1);
-  /* 一次 HEAD 同时确认 Range 支持（Accept-Ranges: bytes）→ 省掉独立 Range 探测请求 */
-  bool accept_ranges = false;
-  curl_easy_setopt(m_easyHandle, CURLOPT_HEADERFUNCTION, AcceptRangesHeader);
-  curl_easy_setopt(m_easyHandle, CURLOPT_HEADERDATA, &accept_ranges);
+  /* One HEAD confirms Range support (Accept-Ranges: bytes) and captures
+   * ETag/Last-Modified for resume integrity. */
+  TProbeCtx ctxHead = {};
+  curl_easy_setopt(m_easyHandle, CURLOPT_HEADERFUNCTION, HeadProbeHeader);
+  curl_easy_setopt(m_easyHandle, CURLOPT_HEADERDATA, &ctxHead);
   curl_easy_setopt(m_easyHandle, CURLOPT_CONNECTTIMEOUT, 10L);
   if (m_timeout > 0) {
-    /* 探测请求同样受低速超时保护，避免服务器挂起时卡住 */
+    /* The probe is also protected by the low-speed timeout. */
     curl_easy_setopt(m_easyHandle, CURLOPT_LOW_SPEED_LIMIT, 1L);
     curl_easy_setopt(m_easyHandle, CURLOPT_LOW_SPEED_TIME, m_timeout);
   }
 
-  /* 尝试 1：HEAD 探测 —— 仅作候选（部分 CDN/代理对 HEAD 返回异常的 Content-Length，
-   * 例如 B站流在他机节点返回 18 字节，直接信任会按 18 字节下载导致文件损坏）。
-   * 要求 HTTP 200 才记入候选；最终大小以 Range GET 的 Content-Range 为准。 */
+  /* Attempt 1: HEAD probe - candidate only (some CDNs/proxies return a
+   * wrong Content-Length for HEAD, e.g. Bilibili streams returning 18 bytes
+   * on other nodes; trusting it directly would corrupt the download).
+   * Requires HTTP 200 to be a candidate; the final size comes from the
+   * Range GET Content-Range. */
   curl_off_t head_len = -1;
-  bool head_range = false;
   CURLcode res = curl_easy_perform(m_easyHandle);
   if (CHECK_CURL(res)) {
     long head_code = 0;
@@ -887,21 +1158,25 @@ bool Ccurl::get_Download_FileSize() {
     curl_easy_getinfo(m_easyHandle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
                       &head_len);
     if (head_code == 200 && head_len > 0) {
-      head_range = accept_ranges;
+      m_remote_etag = ctxHead.strEtag;
+      m_remote_last_modified = ctxHead.strLastModified;
       LOG_INFO("HEAD ok: content-length=%lld, accept-ranges=%s (candidate)\n",
-               (long long)head_len, head_range ? "yes" : "no");
+               (long long)head_len,
+               ctxHead.bAcceptRanges ? "yes" : "no");
     } else {
       LOG_INFO("HEAD ignored: code=%ld content-length=%lld, try Range GET\n",
                head_code, (long long)head_len);
     }
   } else {
-    AppendLog("[WARN] HEAD probe failed, fallback to Range GET: url=%s, curl error: %s",
+    AppendLog("[WARN] HEAD probe failed, fallback to Range GET: url=%s, "
+              "curl error: %s",
               m_url.c_str(), curl_easy_strerror(res));
   }
   curl_easy_cleanup(m_easyHandle);
   m_easyHandle = nullptr;
 
-  /* 尝试 2：Range GET bytes=0-0 —— 权威大小探测（服务器实际响应决定，避免 HEAD 假值） */
+  /* Attempt 2: Range GET bytes=0-0 - authoritative size probe (based on the
+   * actual response, avoids HEAD false values). */
   CURL* probe = curl_easy_init();
   if (probe != nullptr) {
     curl_easy_setopt(probe, CURLOPT_URL, m_url.c_str());
@@ -916,12 +1191,14 @@ bool Ccurl::get_Download_FileSize() {
         probe, CURLOPT_USERAGENT,
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
         "like Gecko) Chrome/115.0.0.0 Safari/537.36");
-    curl_easy_setopt(probe, CURLOPT_RANGE, "0-0"); /* 只请求第一个字节 */
+    curl_easy_setopt(probe, CURLOPT_RANGE, "0-0"); /* request one byte */
     curl_easy_setopt(probe, CURLOPT_WRITEFUNCTION, DummyWrite);
-    /* 从响应头 Content-Range 取总大小（形如 "bytes 0-0/12345"） */
-    curl_off_t probe_total = -1;
-    curl_easy_setopt(probe, CURLOPT_HEADERFUNCTION, ContentRangeHeader);
-    curl_easy_setopt(probe, CURLOPT_HEADERDATA, &probe_total);
+    /* Issue R2: cap the probe so a server that ignores Range cannot make us
+     * download the full body; the callback aborts on a 2xx non-206. */
+    curl_easy_setopt(probe, CURLOPT_MAXFILESIZE, (curl_off_t)(1 << 20));
+    TProbeCtx ctxRange = {};
+    curl_easy_setopt(probe, CURLOPT_HEADERFUNCTION, RangeProbeHeader);
+    curl_easy_setopt(probe, CURLOPT_HEADERDATA, &ctxRange);
     curl_easy_setopt(probe, CURLOPT_CONNECTTIMEOUT, 10L);
     if (m_timeout > 0) {
       curl_easy_setopt(probe, CURLOPT_LOW_SPEED_LIMIT, 1L);
@@ -931,27 +1208,34 @@ bool Ccurl::get_Download_FileSize() {
     long http_code = 0;
     curl_easy_getinfo(probe, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(probe);
-    if (CHECK_CURL(res2) && http_code == 206 && probe_total > 0) {
-      m_fileLen = probe_total;
-      LOG_INFO("dowload File length success (Range GET): %lld\n",
+    if (CHECK_CURL(res2) && ctxRange.bStatus206 && ctxRange.nTotal > 0) {
+      m_fileLen = ctxRange.nTotal;
+      LOG_INFO("download file length success (Range GET): %lld\n",
                (long long)m_fileLen);
-      /* 206 确认服务器支持 Range */
+      /* 206 confirms Range support; prefer the Range GET integrity fields. */
       m_range_supported = true;
       m_range_known = true;
+      if (!ctxRange.strEtag.empty()) {
+        m_remote_etag = ctxRange.strEtag;
+      }
+      if (!ctxRange.strLastModified.empty()) {
+        m_remote_last_modified = ctxRange.strLastModified;
+      }
       flag = true;
       g_filelen = (double)m_fileLen;
       return true;
     }
-    LOG_INFO("Range GET not confirmed (code=%ld total=%lld), use HEAD candidate\n",
-             http_code, (long long)probe_total);
+    LOG_INFO("Range GET not confirmed (code=%ld total=%lld), use HEAD "
+             "candidate\n",
+             http_code, (long long)ctxRange.nTotal);
   }
 
-  /* 兜底：GET 未确认（服务器不支持 Range / 探测失败）时回退 HEAD 候选 */
+  /* Fallback: when GET did not confirm, use the HEAD candidate. */
   if (head_len > 0) {
     m_fileLen = head_len;
-    LOG_INFO("dowload File length success (HEAD fallback): %lld\n",
+    LOG_INFO("download file length success (HEAD fallback): %lld\n",
              (long long)m_fileLen);
-    if (head_range) {
+    if (ctxHead.bAcceptRanges) {
       m_range_supported = true;
       m_range_known = true;
     }
@@ -983,8 +1267,13 @@ bool Ccurl::Check_Range_Support() {
   if (!m_cookie.empty()) {
     curl_easy_setopt(curl, CURLOPT_COOKIE, m_cookie.c_str());
   }
-  curl_easy_setopt(curl, CURLOPT_RANGE, "0-0");      /* 只请求第一个字节 */
+  curl_easy_setopt(curl, CURLOPT_RANGE, "0-0");      /* request one byte */
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DummyWrite);
+  /* Issue R2: cap the probe and abort on a 2xx non-206 response. */
+  curl_easy_setopt(curl, CURLOPT_MAXFILESIZE, (curl_off_t)(1 << 20));
+  TProbeCtx ctx = {};
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, RangeProbeHeader);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
   if (m_timeout > 0) {
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
@@ -994,18 +1283,38 @@ bool Ccurl::Check_Range_Support() {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
       "like Gecko) Chrome/115.0.0.0 Safari/537.36");
   CURLcode res = curl_easy_perform(curl);
-  long code = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
   curl_easy_cleanup(curl);
 
-  m_range_supported = (res == CURLE_OK && code == 206);
+  m_range_supported = (res == CURLE_OK && ctx.bStatus206);
+  if (!ctx.strEtag.empty()) {
+    m_remote_etag = ctx.strEtag;
+  }
+  if (!ctx.strLastModified.empty()) {
+    m_remote_last_modified = ctx.strLastModified;
+  }
   return m_range_supported;
 }
 
-void Ccurl::Destory() {
-  unique_lock<mutex> lock(m_lock);
-  for (int i = 0; i < m_thread_num; i++) 
-  {
+/**
+ * @brief Compute the SHA-256 digest of the downloaded file (issue O4).
+ * @param strDigest Output lowercase hex digest.
+ * @return TRUE on success (files over 4 GiB are rejected).
+ */
+bool Ccurl::VerifySha256(std::string& strDigest) {
+  if ((m_pTrunck == nullptr) || (m_fileLen <= 0)) {
+    return false;
+  }
+  TSha256Ctx tCtx;
+  u8 byDigest[32];
+  Sha256Init(tCtx);
+  Sha256Update(tCtx, (const u8*)m_pTrunck, (size_t)m_fileLen);
+  Sha256Final(tCtx, byDigest);
+  strDigest = Sha256Hex(byDigest);
+  return true;
+}
+
+void Ccurl::DestoryUnlocked() {
+  for (int i = 0; i < m_thread_num; i++) {
     if (m_Easy_List[i] != nullptr) {
       free(m_Easy_List[i]);
       m_Easy_List[i] = nullptr;
@@ -1034,4 +1343,9 @@ void Ccurl::Destory() {
     m_fd = -1;
   }
 #endif
+}
+
+void Ccurl::Destory() {
+  unique_lock<mutex> lock(m_lock);
+  DestoryUnlocked();
 }

@@ -7,11 +7,14 @@ Features:
   - ETag / Last-Modified response headers
   - optional bandwidth throttle (--throttle-bps)
   - optional mid-transfer truncation (--truncate-after, per request)
+  - optional lifetime byte budget (--truncate-total)
+  - optional single transient cut (--drop-first-request-after N bytes)
 
 Usage:
   python test_http_server.py [--port 0] [--size 1048576] [--seed 1]
                              [--ignore-range] [--throttle-bps N]
-                             [--truncate-after N]
+                             [--truncate-after N] [--truncate-total N]
+                             [--drop-first-request-after N]
 """
 
 import argparse
@@ -29,6 +32,10 @@ class TestConfig:
     ignore_range = False
     throttle_bps = 0
     truncate_after = 0
+    truncate_total = 0
+    bytes_served_total = 0
+    drop_first_after = 0
+    drop_done = False
 
 
 def MakeContent(dwSeed, u64Size):
@@ -49,8 +56,10 @@ class TestHandler(http.server.BaseHTTPRequestHandler):
     server_version = "BurstTestServer/1.0"
 
     def log_message(self, strFormat, *args):
-        print("[req] %s %s" % (self.address_string(), strFormat % args),
-              flush=True)
+        strRange = self.headers.get("Range", "")
+        print("[req] %s %s%s" % (
+            self.address_string(), strFormat % args,
+            (" | Range: " + strRange) if strRange else ""), flush=True)
 
     def do_GET(self):
         if self.path == "/health":
@@ -125,6 +134,23 @@ class TestHandler(http.server.BaseHTTPRequestHandler):
         if bIncludeBody:
             self._write_body(byBody)
 
+    def _abort_body(self):
+        """Close the response and connection cleanly so the client sees EOF
+        and the handler does not block reading the next request."""
+        self.close_connection = True
+        try:
+            self.wfile.flush()
+        except Exception:
+            pass
+        try:
+            self.wfile.close()
+        except Exception:
+            pass
+        try:
+            self.connection.close()
+        except Exception:
+            pass
+
     def _send_common_headers(self):
         self.send_header("ETag", TestConfig.etag)
         self.send_header("Last-Modified", "Mon, 01 Jan 2024 00:00:00 GMT")
@@ -137,9 +163,22 @@ class TestHandler(http.server.BaseHTTPRequestHandler):
         while nWritten < len(byBody):
             if (TestConfig.truncate_after > 0 and
                     nWritten >= TestConfig.truncate_after):
-                self.connection.close()
+                self._abort_body()
+                return
+            if (TestConfig.drop_first_after > 0 and
+                    not TestConfig.drop_done and
+                    nWritten >= TestConfig.drop_first_after):
+                TestConfig.drop_done = True
+                self._abort_body()
                 return
             nNext = min(nChunk, len(byBody) - nWritten)
+            if TestConfig.truncate_total > 0:
+                nBudget = (TestConfig.truncate_total -
+                           TestConfig.bytes_served_total)
+                if nBudget <= 0:
+                    self._abort_body()
+                    return
+                nNext = min(nNext, nBudget)
             if TestConfig.throttle_bps > 0:
                 time.sleep(nNext / float(TestConfig.throttle_bps))
             try:
@@ -148,6 +187,11 @@ class TestHandler(http.server.BaseHTTPRequestHandler):
             except (ConnectionError, BrokenPipeError):
                 return
             nWritten += nNext
+            TestConfig.bytes_served_total += nNext
+            if (TestConfig.truncate_total > 0 and
+                    TestConfig.bytes_served_total >= TestConfig.truncate_total):
+                self._abort_body()
+                return
 
 
 def main():
@@ -164,6 +208,11 @@ def main():
                          help="per-connection bandwidth limit in bytes/sec")
     tParser.add_argument("--truncate-after", type=int, default=0,
                          help="drop the connection after N bytes (per request)")
+    tParser.add_argument("--truncate-total", type=int, default=0,
+                         help="lifetime byte budget; close once served")
+    tParser.add_argument("--drop-first-request-after", type=int, default=0,
+                         help="cut the first body-request after N bytes "
+                              "(transient failure)")
     tArgs = tParser.parse_args()
 
     TestConfig.content = MakeContent(tArgs.seed, tArgs.size)
@@ -171,6 +220,10 @@ def main():
     TestConfig.ignore_range = tArgs.ignore_range
     TestConfig.throttle_bps = tArgs.throttle_bps
     TestConfig.truncate_after = tArgs.truncate_after
+    TestConfig.truncate_total = tArgs.truncate_total
+    TestConfig.bytes_served_total = 0
+    TestConfig.drop_first_after = tArgs.drop_first_request_after
+    TestConfig.drop_done = False
 
     with socketserver.TCPServer(("127.0.0.1", tArgs.port),
                                 TestHandler) as tServer:

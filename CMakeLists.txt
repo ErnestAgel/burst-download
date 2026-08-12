@@ -254,8 +254,10 @@ if(BURST_BUILD_TESTS)
     tests/test_framework.cpp
     tests/test_cli_parse.cpp
     tests/test_pathutil.cpp
+    tests/test_sha256.cpp
     src/cli_parse.cpp
-    src/pathutil.cpp)
+    src/pathutil.cpp
+    src/sha256.cpp)
   target_include_directories(burst-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src

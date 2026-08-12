@@ -207,6 +207,46 @@ static void TestCliParseUpdateParser(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionUpdateParser);
 }
 
+/** @brief Test: --verify flag and its optional sha256 value. */
+static void TestCliParseVerify(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: --verify");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgsFlag = {"burst", "u", "--verify"};
+    RunParse(vecArgsFlag, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.bVerify == TRUE);
+
+    std::vector<std::string> vecArgsValue =
+        {"burst", "u", "--verify", "sha256"};
+    RunParse(vecArgsValue, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.bVerify == TRUE);
+
+    std::vector<std::string> vecArgsBad =
+        {"burst", "u", "--verify", "md5"};
+    RunParse(vecArgsBad, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == FALSE);
+}
+
+/** @brief Test: --continue flag. */
+static void TestCliParseContinue(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: --continue");
+    std::vector<std::string> vecArgs = {"burst", "u", "-o", "f.bin",
+                                        "--continue"};
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+    RunParse(vecArgs, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.bContinue == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.bOutputSet == TRUE);
+}
+
 /** @brief Test: unknown options and malformed value pairs. */
 static void TestCliParseErrors(CTestReport& cReport)
 {
@@ -265,6 +305,8 @@ void RunCliParseTests(CTestReport& cReport)
     TestCliParseTimeout(cReport);
     TestCliParseVideoOptions(cReport);
     TestCliParseUpdateParser(cReport);
+    TestCliParseVerify(cReport);
+    TestCliParseContinue(cReport);
     TestCliParseErrors(cReport);
     TestCliParseVersionMidList(cReport);
 }

@@ -7,11 +7,13 @@
 
 extern void RunCliParseTests(CTestReport& cReport);
 extern void RunPathUtilTests(CTestReport& cReport);
+extern void RunSha256Tests(CTestReport& cReport);
 
 int main()
 {
     CTestReport cReport;
     RunCliParseTests(cReport);
     RunPathUtilTests(cReport);
+    RunSha256Tests(cReport);
     return cReport.Finish();
 }

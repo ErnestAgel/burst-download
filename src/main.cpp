@@ -149,6 +149,10 @@ static void PrintUsage(const char* pszProg)
            "version (needs network)\n");
     printf("  --no-auto-update  video mode: disable automatic parser update "
            "checks (default on, throttled to once per 24h)\n");
+    printf("  --verify [sha256] compute and print the SHA-256 digest of the "
+           "downloaded file after completion\n");
+    printf("  --continue   resume an existing file instead of renaming it "
+           "when the target already exists\n");
     printf("  -h, --help     show this help\n");
     printf("  -v, --version  show version\n");
     printf("Examples:\n");
@@ -316,7 +320,7 @@ int RunCli(int argc, char** argv)
         }
         tOpts.strFilename = "./" + StampName(strBase);
     }
-    else if (FileExists(tOpts.strFilename))
+    else if (FileExists(tOpts.strFilename) && (tOpts.bContinue == FALSE))
     {
         tOpts.strFilename = StampName(tOpts.strFilename);
         printf("target file already exists, using: %s\n",
@@ -339,6 +343,19 @@ int RunCli(int argc, char** argv)
         printf("download failed: some chunks are incomplete "
                "(see download.log)\n");
         return 1;
+    }
+    if (tOpts.bVerify == TRUE)
+    {
+        std::string strDigest;
+        if (ptr->VerifySha256(strDigest))
+        {
+            printf("sha256: %s\n", strDigest.c_str());
+        }
+        else
+        {
+            printf("sha256 verification failed\n");
+            return 1;
+        }
     }
 
     return 0;

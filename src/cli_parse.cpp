@@ -44,6 +44,8 @@ static void InitDefaultOptions(TCliOptions& tOpts, s32 nDefaultThreads)
     tOpts.strVideoUrl = "";
     tOpts.strFilename = "";
     tOpts.bOutputSet = FALSE;
+    tOpts.bVerify = FALSE;
+    tOpts.bContinue = FALSE;
     tOpts.nThreads = nDefaultThreads;
     tOpts.nTimeout = 60;
     tOpts.bVideoMode = FALSE;
@@ -126,6 +128,20 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
         else if (std::strcmp(pszArg, "--no-auto-update") == 0)
         {
             tOpts.bAutoUpdateParser = FALSE;
+        }
+        else if (std::strcmp(pszArg, "--verify") == 0)
+        {
+            tOpts.bVerify = TRUE;
+            /* Optional algorithm value: sha256 is the only supported one. */
+            if (NextArgIsValue(nArgc, nIndex, ppszArgv) &&
+                (std::strcmp(ppszArgv[nIndex + 1], "sha256") == 0))
+            {
+                ++nIndex;
+            }
+        }
+        else if (std::strcmp(pszArg, "--continue") == 0)
+        {
+            tOpts.bContinue = TRUE;
         }
         else if ((std::strcmp(pszArg, "--cookies-from-browser") == 0) &&
                  NextArgIsValue(nArgc, nIndex, ppszArgv))

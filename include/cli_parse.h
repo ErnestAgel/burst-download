@@ -30,6 +30,8 @@ typedef struct tagCliOptions
     std::string strVideoUrl;
     std::string strFilename;
     BOOL32      bOutputSet;
+    BOOL32      bVerify;
+    BOOL32      bContinue;
     s32         nThreads;
     s32         nTimeout;
     BOOL32      bVideoMode;
