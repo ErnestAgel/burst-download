@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-#include "../src/progress.h"
+#include "progress.h"
 #include "task.h"
 #include "taskqueue.h"
 #include "curlmulti.h"

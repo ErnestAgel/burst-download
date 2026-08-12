@@ -27,7 +27,7 @@
 #include <thread>
 #include <algorithm>
 
-#include "../src/progress.h"
+#include "progress.h"
 #include "burst_types.h"
 
 class CThreadPool;

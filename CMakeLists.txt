@@ -267,16 +267,17 @@ if(BURST_BUILD_TESTS)
     tests/test_threadpool.cpp
     tests/test_task.cpp
     tests/test_taskqueue.cpp
-    src/cli_parse.cpp
-    src/curlmulti.cpp
-    src/pathutil.cpp
-    src/sha256.cpp
-    src/threadpool.cpp
-    src/task.cpp
-    src/taskqueue.cpp)
+    src/infra/cli_parse.cpp
+    src/infra/pathutil.cpp
+    src/infra/sha256.cpp
+    src/infra/threadpool.cpp
+    src/infra/task.cpp
+    src/infra/taskqueue.cpp
+    src/engine/curlmulti.cpp)
   target_include_directories(burst-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
     ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   if(MSVC)
     # 新代码告警门禁：全告警 + 告警即错误（仅测试目标，存量代码另行治理）
@@ -353,7 +354,10 @@ if(BUILD_GUI)
     third_party/imgui/backends
     gui
     include
-    src)  # download_video.h / progress.h（视频模式）
+    src
+    src/infra
+    src/engine
+    src/workflow)  # 视频模式 / P9 模块（app.h、download_video.h、progress.h）
   target_compile_options(burst PRIVATE
     -finput-charset=UTF-8 -fexec-charset=UTF-8)
   target_link_libraries(burst glfw)

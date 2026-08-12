@@ -15,7 +15,7 @@
 #include <cstdio>
 #include <string>
 
-#include "../include/burst_types.h"
+#include "burst_types.h"
 
 /** @brief Records per-case pass/fail counts and prints failures. */
 class CTestReport
