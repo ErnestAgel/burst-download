@@ -67,38 +67,23 @@ char g_path[2048] = {0};
 int g_threads = BurstDefaultThreads();   /* default = sensible 2~4 */
 bool g_video_mode = false;
 
-/* Download control state machine (F9/F10): IDLE -> RUNNING -> PAUSED -> IDLE
- *  - the first Cancel while downloading = pause intent (abort the transfer,
- *    keep the cache file for resume)
- *  - when paused, button 1 = Resume (resume), button 2 = Stop (red, deletes
- *    the cache and refreshes the UI)
- *  - g_paused=true means paused; g_last_path/g_last_video are used by Stop
- *    to delete the cache */
-bool g_paused = false;
-std::string g_last_path;   /* last task target path/base name (Stop deletes
-                            * its cache) */
-bool g_last_video = false; /* whether the last task was video mode */
-
-/* Forward declarations (RenderForm is defined before OnStartClicked /
- * StartDownload). */
-void OnStartClicked(CDownloadWorker& worker);
-void StartDownload(CDownloadWorker& worker, const std::string& url,
-                   const std::string& path, int threads,
-                   bool preserve_snapshot = false);
-void StartVideoDownload(CDownloadWorker& worker, const std::string& url,
-                        const std::string& basename, int threads,
-                        bool preserve_snapshot = false);
-void StopAndClear(CDownloadWorker& worker);
+/* Forward declarations (RenderAddForm is defined before AddTaskFromForm;
+ * RenderTaskDetail needs the progress/log renderers). */
+void AddTaskFromForm(CTaskModel& cModel);
+void RenderTaskList(CTaskModel& cModel);
+void RenderTaskDetail(CTaskModel& cModel);
+void RenderProgress(const DownloadSnapshot& snap);
+void RenderLog(const std::vector<std::string>& log);
 
 /* Popup state */
-bool g_exists_open = false;
 bool g_error_open = false;
-bool g_done_open = false;
 std::string g_error_title, g_error_msg, g_error_guide;
 std::string g_error_partial_path;
 bool g_error_delete_requested = false;
-std::string g_done_path;
 bool g_about_open = false;
+
+/* Selected task row (detail panel). */
+u64 g_selected_model_id = 0;
 
 #ifndef _WIN32
 /* Linux built-in directory browser state (Windows uses the native
@@ -106,21 +91,6 @@ bool g_about_open = false;
 bool g_dirbrowse_open = false;
 std::string g_dirbrowse_dir;
 #endif
-
-/* Last snapshot stage (edge detection for done/canceled/error, avoids
- * duplicate popups). */
-int g_last_stage = STAGE_IDLE;
-bool g_started = false;   /* whether a task started this session (enables
-                           * edge detection) */
-
-/* Pending task (executed after the file-exists choice). */
-struct Pending {
-    bool active = false;
-    std::string url, path;
-    int threads = 1;
-    int exist_choice = 0;  /* 0 waiting; 1 Resume; 2 Overwrite; 3 Rename;
-                            * 4 Cancel */
-} g_pending;
 
 /* Log auto-scroll */
 bool g_log_autoscroll = true;
@@ -341,13 +311,11 @@ std::string ErrorGuide(const std::string& err) {
     return i18n::T("err.guide.generic");
 }
 
-/* ---- Form rendering ---- */
-void RenderForm(CDownloadWorker& worker) {
-    bool running = worker.IsRunning();
-
-    /* Mode toggle (F1): the URL placeholder follows the mode. */
-    bool toggled = ToggleMode(i18n::T("mode.file"), i18n::T("mode.video"),
-                              g_video_mode);
+/* ---- Add-task form (always usable; the queue decouples input from the
+ *      running tasks, P5-4) ---- */
+void RenderAddForm(CTaskModel& cModel) {
+    const bool toggled = ToggleMode(i18n::T("mode.file"), i18n::T("mode.video"),
+                                    g_video_mode);
 
     /* URL input (placeholder follows the mode). */
     ImGui::SetNextItemWidth(-1.0f);
@@ -357,23 +325,17 @@ void RenderForm(CDownloadWorker& worker) {
     ImGui::InputTextWithHint(
         "##url", g_video_mode ? i18n::T("placeholder.url.video")
                               : i18n::T("placeholder.url.file"),
-        g_url, sizeof(g_url),
-        running ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None);
+        g_url, sizeof(g_url), ImGuiInputTextFlags_None);
 
-    /* Save path + browse (Windows native GetSaveFileName).
-     * Video-mode path semantics = save directory (the output name is derived
-     * from the URL plus a timestamp). */
+    /* Save path + browse. */
     ImGui::SetNextItemWidth(-70.0f);
     ImGui::InputTextWithHint(
         "##path", g_video_mode ? i18n::T("placeholder.path.video")
                                : i18n::T("placeholder.path.file"),
-        g_path, sizeof(g_path),
-        running ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None);
+        g_path, sizeof(g_path), ImGuiInputTextFlags_None);
 #ifdef _WIN32
     ImGui::SameLine();
-    if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0)) && !running) {
-        /* Folder picker (IFileDialog FOS_PICKFOLDERS): returns a directory;
-         * the file name is appended from the URL. */
+    if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0))) {
         HRESULT hrCo = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         IFileDialog* pfd = nullptr;
         HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, NULL,
@@ -405,9 +367,7 @@ void RenderForm(CDownloadWorker& worker) {
     }
 #else
     ImGui::SameLine();
-    if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0)) && !running) {
-        /* Linux built-in directory browser (zero external deps, see
-         * dirbrowser.h). */
+    if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0))) {
         g_dirbrowse_open = true;
         g_dirbrowse_dir = (g_path[0] != '\0' && PathExists(g_path))
                               ? g_path
@@ -421,7 +381,7 @@ void RenderForm(CDownloadWorker& worker) {
     }
 #endif
 
-    /* Threads: combo 1..kHardwareMax (the cap adapts 4~8 to CPU cores). */
+    /* Threads: combo 1..kHardwareMax. */
     ImGui::Text("%s:", i18n::T("label.threads"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
@@ -441,88 +401,17 @@ void RenderForm(CDownloadWorker& worker) {
         ImGui::TextDisabled("%s", buf);
     }
 
-    /* Download / cancel buttons (F9/F10) + pause/resume/stop state machine:
-     *   IDLE:    [Start Download]        [Cancel(disabled)]
-     *   RUNNING: [Downloading...(disabled)] [Cancel = pause intent]
-     *   PAUSED:  [Resume]  [Stop(red, deletes cache, refreshes)] */
     ImGui::Separator();
-    float avail = ImGui::GetContentRegionAvail().x;
-    if (g_paused) {
-        /* Paused: resume / stop. */
-        if (ImGui::Button(i18n::T("button.resume"),
-                          ImVec2(avail * 0.5f - 4.0f, 0))) {
-            OnStartClicked(worker); /* resume branch (resume when paused) */
-        }
-        ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0xC0, 0x3A, 0x3A, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                              IM_COL32(0xD9, 0x4A, 0x4A, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                              IM_COL32(0xA0, 0x2E, 0x2E, 255));
-        if (ImGui::Button(i18n::T("button.stop"),
-                          ImVec2(avail * 0.5f - 4.0f, 0))) {
-            StopAndClear(worker);
-        }
-        ImGui::PopStyleColor(3);
-    } else {
-        ImGui::BeginDisabled(running || g_pending.active);
-        if (ImGui::Button(running ? i18n::T("button.downloading")
-                                  : i18n::T("button.download"),
-                          ImVec2(avail * 0.5f - 4.0f, 0))) {
-            OnStartClicked(worker);
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!running);
-        if (ImGui::Button(i18n::T("button.cancel"),
-                          ImVec2(avail * 0.5f - 4.0f, 0))) {
-            worker.Cancel();  /* first cancel = pause intent (cache kept) */
-            /* Issue R10: do not optimistically enter the paused state; the
-             * stage edge decides pause (download cancel) vs stop (parse/
-             * merge cancel) once the worker actually stops. */
-            worker.AddLog("[INFO] cancel requested, stopping...");
-        }
-        ImGui::EndDisabled();
+    if (ImGui::Button(i18n::T("button.add"), ImVec2(160, 0))) {
+        AddTaskFromForm(cModel);
     }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", i18n::T("label.add_hint"));
 }
 
-void OnStartClicked(CDownloadWorker& worker) {
+void AddTaskFromForm(CTaskModel& cModel) {
     std::string url(g_url);
     std::string path(g_path);
-
-    /* Clicked while paused -> resume: skip the existence check and the video
-     * rename; video mode must reuse the original basename (g_last_path) so
-     * the same file is resumed. */
-    if (g_paused) {
-        if (url.empty() || !UrlSchemeOk(url)) {
-            ShowErrorPopup(i18n::T("dialog.error.title"),
-                           i18n::T("err.url.invalid"));
-            return;
-        }
-        if (g_last_video) {
-            StartVideoDownload(worker, url, g_last_path, g_threads,
-                               true /* resume: keep progress snapshot */);
-        } else {
-            if (path.empty()) {
-                ShowErrorPopup(i18n::T("dialog.error.title"),
-                               i18n::T("err.path.empty"));
-                return;
-            }
-            /* Directory -> append the file name (same name when the URL is
-             * unchanged; local residue resumes). */
-            if (IsDirectoryPath(path)) {
-                std::string name = UrlFileName(url);
-                if (name.empty()) {
-                    name = CurrentTimeStamp() + ".download";
-                }
-                path = JoinPath(path, name);
-            }
-            StartDownload(worker, url, path, g_threads,
-                          true /* resume: keep progress snapshot */);
-        }
-        g_paused = false;
-        return;
-    }
 
     /* Decode thunder:// links to real URLs. */
     if (url.rfind("thunder://", 0) == 0) {
@@ -532,38 +421,12 @@ void OnStartClicked(CDownloadWorker& worker) {
                            i18n::T("err.thunder.invalid"));
             return;
         }
-        worker.AddLog("[INFO] detected a thunder link, decoded to: " +
-                      decoded);
         snprintf(g_url, sizeof(g_url), "%s", decoded.c_str());
         url = decoded;
     }
-
-    /* URL pre-check (http/https). */
     if (url.empty() || !UrlSchemeOk(url)) {
         ShowErrorPopup(i18n::T("dialog.error.title"),
                        i18n::T("err.url.invalid"));
-        return;
-    }
-    /* Video mode: the path is a save directory; the output base name is
-     * directory + URL name + timestamp (timestamp naming prevents
-     * overwrites, same semantics as the CLI without -o). */
-    if (g_video_mode) {
-        if (path.empty()) {
-            ShowErrorPopup(i18n::T("dialog.error.title"),
-                           i18n::T("err.path.empty"));
-            return;
-        }
-        std::string base = UrlFileName(url);
-        size_t dot = base.find_last_of('.');
-        if (dot != std::string::npos) {
-            base = base.substr(0, dot);  /* base name without extension */
-        }
-        if (base.empty()) {
-            base = "video";
-        }
-        std::string basename =
-            JoinPath(path, base + "_" + CurrentTimeStamp());
-        StartVideoDownload(worker, url, basename, g_threads);
         return;
     }
     if (path.empty()) {
@@ -572,101 +435,160 @@ void OnStartClicked(CDownloadWorker& worker) {
         return;
     }
 
-    /* When the save path is a directory, append the URL-derived file name
-     * (the user only needs to pick a folder). */
+    if (g_video_mode) {
+        std::string base = UrlFileName(url);
+        size_t dot = base.find_last_of('.');
+        if (dot != std::string::npos) {
+            base = base.substr(0, dot);
+        }
+        if (base.empty()) {
+            base = "video";
+        }
+        const std::string basename =
+            JoinPath(path, base + "_" + CurrentTimeStamp());
+        if (cModel.AddVideoTask(url, basename, g_threads, 60, FALSE) == 0) {
+            ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
+        }
+        return;
+    }
+
     if (IsDirectoryPath(path)) {
         std::string name = UrlFileName(url);
         if (name.empty()) {
-            name = CurrentTimeStamp() + ".download";  /* timestamp fallback */
+            name = CurrentTimeStamp() + ".download";
         }
         path = JoinPath(path, name);
     }
-
-    /* File exists (F11): show the four-choice dialog, then start. */
     if (PathExists(path)) {
-        g_pending.active = true;
-        g_pending.url = url;
-        g_pending.path = path;
-        g_pending.threads = g_threads;
-        g_pending.exist_choice = 0;
-        g_exists_open = true;
-        return;
+        path = StampName(path);
     }
-    StartDownload(worker, url, path, g_threads);
-}
-
-void StartDownload(CDownloadWorker& worker, const std::string& url,
-                   const std::string& path, int threads,
-                   bool preserve_snapshot) {
-    worker.AddLog(std::string("[INFO] URL: ") + url);
-    worker.AddLog(std::string("[INFO] saving to: ") + path);
-    if (preserve_snapshot) {
-        worker.AddLog("[INFO] resuming from the existing download progress");
-    }
-    g_last_path = path;
-    g_last_video = false;
-    g_last_stage = STAGE_IDLE;
-    if (!worker.StartFileDownload(url, path, threads, 60,
-                                  preserve_snapshot)) {
+    if (cModel.AddFileTask(url, path, g_threads, 60, FALSE) == 0) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
     }
 }
 
-void StartVideoDownload(CDownloadWorker& worker, const std::string& url,
-                        const std::string& basename, int threads,
-                        bool preserve_snapshot) {
-    worker.AddLog(std::string("[INFO] video URL: ") + url);
-    worker.AddLog(std::string("[INFO] output base name: ") + basename);
-    if (preserve_snapshot) {
-        worker.AddLog("[INFO] resuming from the existing download progress");
+/* ---- Task list (P5-4): one row per download task ---- */
+void RenderTaskList(CTaskModel& cModel) {
+    ImGui::Separator();
+    ImGui::Text("%s", i18n::T("label.tasks"));
+    ImGui::SameLine();
+    if (ImGui::SmallButton(i18n::T("label.clear_finished"))) {
+        cModel.ClearFinished();
     }
-    g_last_path = basename;
-    g_last_video = true;
-    g_last_stage = STAGE_IDLE;
-    if (!worker.StartVideoDownload(url, basename, threads, 60,
-                                   preserve_snapshot)) {
-        ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
+    ImGui::SameLine();
+    {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "%s: %u", i18n::T("label.active"),
+                 cModel.ActiveCount());
+        ImGui::TextDisabled("%s", buf);
     }
-}
 
-/** Delete download cache files (used by Stop): file mode = the target file;
- *  video mode = the basename's audio/video tracks and merged output. */
-void RemoveDownloadArtifacts(const std::string& base, bool video) {
-    if (base.empty()) {
+    const std::vector<CTaskModel::TTaskRow> vecRows = cModel.Rows();
+    if (vecRows.empty()) {
+        ImGui::TextDisabled("(%s)", i18n::T("label.no_tasks"));
         return;
     }
-    if (video) {
-        const char* exts[] = {".mp4", ".m4a", ".mkv", ".webm"};
-        for (const char* e : exts) {
-            RemoveFile(base + e);
-            RemoveFile(base + "_full" + e);
-            RemoveFile(base + e + ".curlbolt.part");
+    ImGui::BeginChild("##tasklist", ImVec2(0, 0), true);
+    ImGui::BeginTable("##tasks", 5,
+                      ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp);
+    ImGui::TableSetupColumn(i18n::T("label.state"), 0, 90.0f);
+    ImGui::TableSetupColumn(i18n::T("label.name"), 0, 220.0f);
+    ImGui::TableSetupColumn(i18n::T("label.progress"), 0, 140.0f);
+    ImGui::TableSetupColumn(i18n::T("label.speed"), 0, 80.0f);
+    ImGui::TableSetupColumn(i18n::T("label.actions"), 0, 130.0f);
+    ImGui::TableHeadersRow();
+
+    for (const CTaskModel::TTaskRow& tRow : vecRows) {
+        ImGui::PushID(static_cast<int>(tRow.dwModelId));
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        const char* pszState = i18n::T("task.pending");
+        switch (tRow.emState) {
+            case emTaskRunning: pszState = i18n::T("stage.downloading"); break;
+            case emTaskDone: pszState = i18n::T("stage.done"); break;
+            case emTaskError: pszState = i18n::T("stage.error"); break;
+            case emTaskCanceled: pszState = i18n::T("stage.canceled"); break;
+            default: break;
         }
-    } else {
-        RemoveFile(base);
-        RemoveFile(base + ".curlbolt.part");
+        ImGui::Text("%s", pszState);
+        ImGui::TableSetColumnIndex(1);
+        if (ImGui::Selectable(
+                tRow.strOutput.empty() ? tRow.strUrl.c_str()
+                                       : tRow.strOutput.c_str(),
+                g_selected_model_id == tRow.dwModelId,
+                ImGuiSelectableFlags_SpanAllColumns)) {
+            g_selected_model_id = tRow.dwModelId;
+        }
+        if (ImGui::IsItemHovered() && !tRow.strUrl.empty()) {
+            ImGui::SetTooltip("%s", tRow.strUrl.c_str());
+        }
+        ImGui::TableSetColumnIndex(2);
+        char szPct[32];
+        snprintf(szPct, sizeof(szPct), "%.0f%%", tRow.dPercent);
+        ImGui::ProgressBar(static_cast<float>(tRow.dPercent / 100.0),
+                           ImVec2(-FLT_MIN, 0.0f), szPct);
+        ImGui::TableSetColumnIndex(3);
+        {
+            char szSpeed[48];
+            snprintf(szSpeed, sizeof(szSpeed), "%.2f MB/s",
+                     tRow.dSpeed / (1024.0 * 1024.0));
+            ImGui::Text("%s", tRow.dSpeed > 0.0 ? szSpeed : "--");
+        }
+        ImGui::TableSetColumnIndex(4);
+        if ((tRow.emState == emTaskRunning) || (tRow.emState == emTaskPending)) {
+            if (ImGui::SmallButton(i18n::T("button.pause"))) {
+                cModel.CancelTask(tRow.dwModelId);
+            }
+        }
+        if (tRow.emState == emTaskCanceled) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(i18n::T("button.resume"))) {
+                cModel.ResumeTask(tRow.dwModelId);
+            }
+        }
+        if ((tRow.emState == emTaskRunning) ||
+            (tRow.emState == emTaskPending) ||
+            (tRow.emState == emTaskCanceled)) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(i18n::T("button.stop"))) {
+                cModel.StopTask(tRow.dwModelId);
+                if (g_selected_model_id == tRow.dwModelId) {
+                    g_selected_model_id = 0;
+                }
+            }
+        } else {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(i18n::T("button.remove"))) {
+                cModel.RemoveTask(tRow.dwModelId);
+                if (g_selected_model_id == tRow.dwModelId) {
+                    g_selected_model_id = 0;
+                }
+            }
+        }
+        if ((tRow.emState == emTaskError) && !tRow.strError.empty() &&
+            ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", tRow.strError.c_str());
+        }
+        ImGui::PopID();
     }
+    ImGui::EndTable();
+    ImGui::EndChild();
 }
 
-/** Stop the task (red button): delete cache files, reset the worker and
- *  refresh the UI to its initial state. */
-void StopAndClear(CDownloadWorker& worker) {
-    worker.AddLog("[INFO] task stopped, deleted cache files: " + g_last_path);
-    RemoveDownloadArtifacts(g_last_path, g_last_video);
-    /* Reset worker cache and snapshot/log (worker is idle now). */
-    worker.Reset();
-    /* Refresh the UI to its initial state: clear form, progress and pause. */
-    g_paused = false;
-    g_last_path.clear();
-    g_last_video = false;
-    g_started = false;
-    g_last_stage = STAGE_IDLE;
-    g_url[0] = '\0';
-    g_path[0] = '\0';
-    g_threads = kHardwareMax;
-    worker.AddLog("[INFO] task cleared, ready to start a new download");
+/* ---- Selected task detail (cylinder progress + its log) ---- */
+void RenderTaskDetail(CTaskModel& cModel) {
+    if (g_selected_model_id == 0) {
+        return;
+    }
+    DownloadSnapshot snap;
+    std::vector<std::string> vecLog;
+    if (cModel.TaskDetail(g_selected_model_id, snap, vecLog) == FALSE) {
+        g_selected_model_id = 0;
+        return;
+    }
+    RenderProgress(snap);
+    RenderLog(vecLog);
 }
-
 /* ---- Progress area rendering (F5/F6/F8) ---- */
 void RenderProgress(const DownloadSnapshot& snap) {
     ImGui::Separator();
@@ -841,9 +763,7 @@ void RenderProgress(const DownloadSnapshot& snap) {
         case STAGE_MERGING:     stage_txt = i18n::T("stage.merging"); break;
         case STAGE_DONE:        stage_txt = i18n::T("stage.done"); break;
         case STAGE_CANCELED:
-            /* Paused (first cancel) shows "Paused", otherwise "Canceled". */
-            stage_txt = g_paused ? i18n::T("stage.paused")
-                                 : i18n::T("stage.canceled");
+            stage_txt = i18n::T("stage.canceled");
             break;
         case STAGE_ERROR:       stage_txt = i18n::T("stage.error"); break;
         default: break;
@@ -1113,7 +1033,7 @@ void Init(GLFWwindow* window) {
     g_window = window;
 }
 
-bool Render(CDownloadWorker& worker) {
+bool Render(CTaskModel& cModel) {
 #ifdef _WIN32
     /* Custom title bar (Windows borderless window; Linux uses the system
      * title bar). */
@@ -1154,46 +1074,10 @@ bool Render(CDownloadWorker& worker) {
         ImGui::EndMenuBar();
     }
 
-    RenderForm(worker);
-
-    /* Snapshot read (once per frame, copied under lock). */
-    DownloadSnapshot snap;
-    int stage = worker.GetSnapshot(snap);
-
-    /* Stage edge -> popups (done F13 / error F12) and pause confirmation.
-     * CANCELED = user pause (cache kept, resume/stop available);
-     * DONE/ERROR exit the paused state. */
-    if (g_started && stage != g_last_stage) {
-        const int prev_stage = g_last_stage;
-        g_last_stage = stage;
-        if (stage == STAGE_DONE) {
-            g_done_path = snap.status;  /* completion path is in the log */
-            g_done_open = true;
-            g_paused = false;
-        } else if (stage == STAGE_ERROR) {
-            ShowErrorPopup(i18n::T("dialog.error.title"), snap.error,
-                           ErrorGuide(snap.error), g_last_path);
-            g_paused = false;
-        } else if (stage == STAGE_CANCELED) {
-            /* Issue R10: a cancel during download is a real pause (cache
-             * kept, resume possible); a cancel during parse/merge simply
-             * stops the task. */
-            if ((prev_stage == STAGE_DOWNLOADING) ||
-                (prev_stage == STAGE_VIDEO_DL) ||
-                (prev_stage == STAGE_AUDIO_DL)) {
-                g_paused = true;
-                worker.AddLog("[INFO] paused (cache kept): click Resume to "
-                              "continue or Stop to delete the cache");
-            } else {
-                g_paused = false;
-                worker.AddLog("[INFO] task stopped");
-            }
-        }
-    }
-    g_started = worker.IsRunning() || g_started;
-
-    RenderProgress(snap);
-    RenderLog(snap.log);
+    /* Always-usable add form + multi-task list + selected task detail. */
+    RenderAddForm(cModel);
+    RenderTaskList(cModel);
+    RenderTaskDetail(cModel);
 
 #ifdef _WIN32
     /* Bottom-right resize grip (Windows borderless window; draw before the
@@ -1203,54 +1087,18 @@ bool Render(CDownloadWorker& worker) {
 
     ImGui::End();
 
-    /* File-exists four-choice (F11) handling. */
-    if (g_pending.active && g_exists_open) {
-        dialogs::ExistsChoice c = dialogs::ShowFileExists(g_pending.path,
-                                                          g_exists_open);
-        if (c != dialogs::ExistsChoice::None) {
-            switch (c) {
-                case dialogs::ExistsChoice::Resume:
-                    StartDownload(worker, g_pending.url, g_pending.path,
-                                  g_pending.threads);
-                    break;
-                case dialogs::ExistsChoice::Overwrite:
-                    RemoveFile(g_pending.path);
-                    worker.AddLog("[INFO] old file deleted (overwrite): " +
-                                  g_pending.path);
-                    StartDownload(worker, g_pending.url, g_pending.path,
-                                  g_pending.threads);
-                    break;
-                case dialogs::ExistsChoice::Rename: {
-                    std::string newpath = StampName(g_pending.path);
-                    worker.AddLog("[INFO] renamed to: " + newpath);
-                    StartDownload(worker, g_pending.url, newpath,
-                                  g_pending.threads);
-                    break;
-                }
-                default:  /* Cancel */
-                    worker.AddLog("[INFO] canceled (file-exists dialog)");
-                    break;
-            }
-            g_pending.active = false;
-        }
-    }
-
-    /* Error popup (F12). */
+    /* Error popup (validation / task failures). */
     dialogs::ShowError(g_error_title, g_error_msg, g_error_guide,
                        g_error_open, g_error_partial_path,
                        &g_error_delete_requested);
     if (g_error_delete_requested) {
         g_error_delete_requested = false;
         if (!g_error_partial_path.empty()) {
-            RemoveDownloadArtifacts(g_error_partial_path, g_last_video);
-            worker.AddLog("[INFO] partial file deleted: " +
-                          g_error_partial_path);
+            RemoveFile(g_error_partial_path);
+            RemoveFile(g_error_partial_path + ".curlbolt.part");
         }
         g_error_partial_path.clear();
     }
-
-    /* Done popup (F13). */
-    dialogs::ShowDone(g_done_path, g_done_open);
 
     /* About popup. */
     dialogs::ShowAbout(BURST_VERSION_STRING, g_about_open);
@@ -1266,5 +1114,4 @@ bool Render(CDownloadWorker& worker) {
 
     return true;
 }
-
 }  // namespace ui

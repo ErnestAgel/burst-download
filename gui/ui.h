@@ -1,17 +1,13 @@
 /**
  * @file ui.h
- * @brief 主界面渲染（布局/控件/进度表/日志），见 gui-design.md §4
+ * @brief Main GUI rendering (form, task list, progress, logs), P5-4.
  *
- * 线程模型（R2）：本模块只在 UI 主线程（ImGui 渲染循环）调用；
- * 工作线程数据一律通过 CDownloadWorker::GetSnapshot 读取（mutex 保护）。
- *
- * @author ErnestAgel
- * @date 2026-08-07
- * @license SPDX-License-Identifier: MIT
+ * Thread rules (R2): this module runs only on the UI thread (ImGui loop);
+ * task data is read through CTaskModel (mutex protected).
  */
 #pragma once
 
-#include "worker.h"
+#include "taskmodel.h"
 
 struct GLFWwindow;  /* 前向声明，避免在 ui.h 引入 GLFW 头 */
 
@@ -24,10 +20,10 @@ namespace ui {
 void Init(GLFWwindow* window);
 
 /**
- * @brief 每帧渲染主界面（含自绘标题栏、表单、进度、日志、弹窗、设置菜单）
- * @param worker 后台下载工作线程（UI 只读快照 / 触发 Start/Cancel）
- * @return 是否请求退出（例如单实例检测失败等，main_gui 据此关闭窗口）
+ * @brief Render the main interface each frame.
+ * @param cModel Multi-task queue model (UI reads rows / issues actions).
+ * @return TRUE while the window should stay open.
  */
-bool Render(CDownloadWorker& worker);
+bool Render(CTaskModel& cModel);
 
 }  // namespace ui

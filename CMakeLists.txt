@@ -307,7 +307,7 @@ if(BUILD_GUI)
     gui/ui.cpp
     gui/toggle.cpp
     gui/i18n.cpp
-    gui/worker.cpp
+    gui/taskmodel.cpp
     gui/dialogs.cpp
     gui/crashguard.cpp
     gui/theme.cpp

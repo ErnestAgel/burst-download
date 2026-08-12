@@ -31,7 +31,7 @@
 #include "i18n.h"
 #include "theme.h"
 #include "ui.h"
-#include "worker.h"
+#include "taskmodel.h"
 
 #ifdef _WIN32
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -234,7 +234,7 @@ int RunGui(int argc, char** argv) {
     }
 
     /* ---- Main loop ---- */
-    CDownloadWorker worker;
+    CTaskModel cModel;
     ui::Init(window);
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -248,23 +248,17 @@ int RunGui(int argc, char** argv) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ui::Render(worker);
+        ui::Render(cModel);
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
     }
 
-    /* ---- Exit flow: cancel -> join (bounded) -> cleanup ---- */
-    if (worker.IsRunning()) {
-        worker.Cancel();
-        if (!worker.Join(5)) {
-            /* Issue R1: never let the worker's destructor terminate; wait
-             * for it to finish (cancel checkpoints make this bounded). */
-            printf("[gui] worker still running, waiting for it to finish\n");
-            worker.Join(0);
-        }
-    }
+    /* ---- Exit flow: cancel all tasks, then wait (cancel checkpoints and
+     *      timeouts make the wait bounded, R1/R12) ---- */
+    cModel.CancelAll();
+    cModel.WaitAll();
 
     /* The embedded Python interpreter is intentionally NOT finalized:
      * Py_FinalizeEx can hang for a long time after yt_dlp loads many
