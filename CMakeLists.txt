@@ -44,6 +44,11 @@ file(GLOB SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
 add_executable(burst WIN32 ${SRC})
 target_include_directories(burst PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+if(NOT MSVC)
+  # 新模块含 UTF-8 中文字符串（CLI 错误信息），确保 Windows/Linux 输出一致
+  target_compile_options(burst PRIVATE
+    -finput-charset=UTF-8 -fexec-charset=UTF-8)
+endif()
 
 # Debug：保留调试信息（便于 gdb/调试器）；Release：不带 -g 且剥离符号，
 # 减小体积并提高逆向门槛（Release 加固）。
@@ -238,6 +243,33 @@ function(burst_copy_mingw_runtime_dlls TARGET)
   endif()
 endfunction()
 burst_copy_mingw_runtime_dlls(burst)
+
+# ==================== 单元测试（纯逻辑，无 curl/Python/FFmpeg 依赖） ====================
+# 覆盖 CLI 参数解析、URL 命名的纯函数；作为 P0 回归网，后续修复均需补充测试。
+option(BURST_BUILD_TESTS "Build the unit test binary" ON)
+if(BURST_BUILD_TESTS)
+  enable_testing()
+  add_executable(burst-tests
+    tests/test_main.cpp
+    tests/test_framework.cpp
+    tests/test_cli_parse.cpp
+    tests/test_pathutil.cpp
+    src/cli_parse.cpp
+    src/pathutil.cpp)
+  target_include_directories(burst-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  if(MSVC)
+    # 新代码告警门禁：全告警 + 告警即错误（仅测试目标，存量代码另行治理）
+    target_compile_options(burst-tests PRIVATE /W4 /WX)
+  else()
+    target_compile_options(burst-tests PRIVATE
+      -Wall -Wextra -Werror
+      -finput-charset=UTF-8 -fexec-charset=UTF-8)
+  endif()
+  add_test(NAME burst-tests COMMAND burst-tests)
+endif()
 
 # ==================== GUI（burst-gui 正式目标 + burst-gui-smoke 开发冒烟） ====================
 # 依赖：Dear ImGui（third_party/imgui，MIT）+ GLFW（third_party/glfw，zlib）+ Noto Sans SC 子集字体

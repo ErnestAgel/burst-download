@@ -50,7 +50,7 @@ static std::wstring Utf8ToWide(const std::string& s) {
 #endif
 
 /** @brief 将 libcurl 返回码转换为布尔值 */
-#define CHECK_CURL(value) value == CURLE_OK ? true : false
+#define CHECK_CURL(value) ((value) == CURLE_OK)
 
 extern "C" {
 /** @brief 打印错误日志（含文件、行号与 errno 描述） */

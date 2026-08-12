@@ -1,0 +1,268 @@
+/**
+ * @file test_cli_parse.cpp
+ * @brief Unit tests for the pure CLI argument parser.
+ *
+ * The tests document the legacy parser contract, including the "./test"
+ * output sentinel (issue R11) which P1 will replace with an explicit flag.
+ */
+
+#include <string>
+#include <vector>
+
+#include "cli_parse.h"
+#include "test_framework.h"
+
+/**
+ * @brief Run the parser with a plain argument list.
+ * @param vecArgs Arguments including the program name.
+ * @param tOpts Output options.
+ * @param bOk Output parse result.
+ * @param strError Output error text.
+ */
+static void RunParse(const std::vector<std::string>& vecArgs,
+                     TCliOptions& tOpts, BOOL32& bOk, std::string& strError)
+{
+    std::vector<char*> vecArgv;
+    for (s32 nIndex = 0; nIndex < (s32)vecArgs.size(); ++nIndex)
+    {
+        vecArgv.push_back(const_cast<char*>(vecArgs[nIndex].c_str()));
+    }
+    bOk = CliParseArgs((s32)vecArgv.size(), vecArgv.data(), tOpts,
+                       4, 8, strError);
+}
+
+/** @brief Test: no arguments is a usage error without an error message. */
+static void TestCliParseNoArgs(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: no args");
+    std::vector<std::string> vecArgs = {"burst"};
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+    RunParse(vecArgs, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == FALSE);
+    BURST_EXPECT_TRUE(cReport, strError.empty());
+}
+
+/** @brief Test: -v / --version only at the first argument. */
+static void TestCliParseVersion(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: version");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgsShort = {"burst", "-v"};
+    RunParse(vecArgsShort, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionVersion);
+
+    std::vector<std::string> vecArgsLong = {"burst", "--version"};
+    RunParse(vecArgsLong, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionVersion);
+}
+
+/** @brief Test: -h / --help first or mid-argument-list. */
+static void TestCliParseHelp(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: help");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgsFirst = {"burst", "-h"};
+    RunParse(vecArgsFirst, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionHelp);
+
+    std::vector<std::string> vecArgsMid = {"burst", "--video", "u", "--help"};
+    RunParse(vecArgsMid, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionHelp);
+}
+
+/** @brief Test: plain download defaults. */
+static void TestCliParseDownloadDefaults(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: download defaults");
+    std::vector<std::string> vecArgs = {"burst", "https://example.com/a.iso"};
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+    RunParse(vecArgs, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionDownload);
+    BURST_EXPECT_STR_EQ(cReport, "https://example.com/a.iso", tOpts.strUrl);
+    BURST_EXPECT_STR_EQ(cReport, BURST_CLI_DEFAULT_FILENAME,
+                        tOpts.strFilename);
+    BURST_EXPECT_TRUE(cReport, tOpts.nThreads == 4);
+    BURST_EXPECT_TRUE(cReport, tOpts.nTimeout == 60);
+    BURST_EXPECT_TRUE(cReport, tOpts.bVideoMode == FALSE);
+    BURST_EXPECT_TRUE(cReport, tOpts.bAutoUpdateParser == TRUE);
+}
+
+/** @brief Test: -o and explicit "./test" (legacy sentinel behavior, R11). */
+static void TestCliParseOutputOption(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: -o option");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgsOut = {"burst", "u", "-o", "out.bin"};
+    RunParse(vecArgsOut, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_STR_EQ(cReport, "out.bin", tOpts.strFilename);
+
+    std::vector<std::string> vecArgsSentinel =
+        {"burst", "u", "-o", "./test"};
+    RunParse(vecArgsSentinel, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_STR_EQ(cReport, "./test", tOpts.strFilename);
+}
+
+/** @brief Test: -t thread clamping. */
+static void TestCliParseThreads(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: -t clamp");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgsLow = {"burst", "u", "-t", "0"};
+    RunParse(vecArgsLow, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.nThreads == 1);
+
+    std::vector<std::string> vecArgsHigh = {"burst", "u", "-t", "99"};
+    RunParse(vecArgsHigh, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.nThreads == 8);
+
+    std::vector<std::string> vecArgsNormal = {"burst", "u", "-t", "3"};
+    RunParse(vecArgsNormal, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.nThreads == 3);
+}
+
+/** @brief Test: --timeout / --no-timeout (including atoi fallback). */
+static void TestCliParseTimeout(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: timeout");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgsZero = {"burst", "u", "--timeout", "0"};
+    RunParse(vecArgsZero, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.nTimeout == 0);
+
+    std::vector<std::string> vecArgsNo = {"burst", "u", "--no-timeout"};
+    RunParse(vecArgsNo, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.nTimeout == 0);
+
+    std::vector<std::string> vecArgsText = {"burst", "u", "--timeout", "abc"};
+    RunParse(vecArgsText, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.nTimeout == 0);
+}
+
+/** @brief Test: --video, cookies, and --no-auto-update options. */
+static void TestCliParseVideoOptions(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: video options");
+    std::vector<std::string> vecArgs =
+        {"burst", "--video", "https://bili/BV1", "-o", "movie",
+         "--cookies-from-browser", "chrome", "--cookie", "SESSDATA=x",
+         "--no-auto-update"};
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+    RunParse(vecArgs, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionDownload);
+    BURST_EXPECT_TRUE(cReport, tOpts.bVideoMode == TRUE);
+    BURST_EXPECT_STR_EQ(cReport, "https://bili/BV1", tOpts.strVideoUrl);
+    BURST_EXPECT_STR_EQ(cReport, "movie", tOpts.strFilename);
+    BURST_EXPECT_STR_EQ(cReport, "chrome", tOpts.strCookiesFromBrowser);
+    BURST_EXPECT_STR_EQ(cReport, "SESSDATA=x", tOpts.strCookie);
+    BURST_EXPECT_TRUE(cReport, tOpts.bAutoUpdateParser == FALSE);
+}
+
+/** @brief Test: --update-parser action. */
+static void TestCliParseUpdateParser(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: update parser");
+    std::vector<std::string> vecArgs = {"burst", "--update-parser"};
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+    RunParse(vecArgs, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionUpdateParser);
+}
+
+/** @brief Test: unknown options and malformed value pairs. */
+static void TestCliParseErrors(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: errors");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgsUnknown = {"burst", "--bogus"};
+    RunParse(vecArgsUnknown, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == FALSE);
+    BURST_EXPECT_TRUE(cReport, strError.find("未知参数") !=
+                                std::string::npos);
+
+    std::vector<std::string> vecArgsSecondUrl = {"burst", "a", "b"};
+    RunParse(vecArgsSecondUrl, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == FALSE);
+
+    std::vector<std::string> vecArgsMissingOutput = {"burst", "u", "-o"};
+    RunParse(vecArgsMissingOutput, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == FALSE);
+    BURST_EXPECT_TRUE(cReport, strError.find("-o") != std::string::npos);
+
+    std::vector<std::string> vecArgsMissingVideo = {"burst", "--video"};
+    RunParse(vecArgsMissingVideo, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == FALSE);
+    BURST_EXPECT_TRUE(cReport, strError.find("--video") !=
+                                std::string::npos);
+
+    std::vector<std::string> vecArgsDashValue = {"burst", "u", "-t", "-1"};
+    RunParse(vecArgsDashValue, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == FALSE);
+}
+
+/** @brief Test: --version is rejected when not the first argument. */
+static void TestCliParseVersionMidList(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: version mid list");
+    std::vector<std::string> vecArgs = {"burst", "u", "--version"};
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+    RunParse(vecArgs, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == FALSE);
+}
+
+/** @brief Run all CLI parser tests. */
+void RunCliParseTests(CTestReport& cReport)
+{
+    TestCliParseNoArgs(cReport);
+    TestCliParseVersion(cReport);
+    TestCliParseHelp(cReport);
+    TestCliParseDownloadDefaults(cReport);
+    TestCliParseOutputOption(cReport);
+    TestCliParseThreads(cReport);
+    TestCliParseTimeout(cReport);
+    TestCliParseVideoOptions(cReport);
+    TestCliParseUpdateParser(cReport);
+    TestCliParseErrors(cReport);
+    TestCliParseVersionMidList(cReport);
+}

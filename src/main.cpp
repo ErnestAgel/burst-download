@@ -35,6 +35,8 @@
 #include "avmerge.h"
 #include "download_video.h"
 #include "version.h"
+#include "cli_parse.h"
+#include "pathutil.h"
 
 using namespace std;
 
@@ -71,20 +73,6 @@ static string CurrentTimeStamp() {
     snprintf(buf, sizeof(buf), "%ld", (long)t);
   }
   return string(buf);
-}
-
-/**
- * @brief 从 URL 推断基础名称：取最后一个路径段，去掉查询串与片段
- * @param url 下载地址（普通文件或视频页）
- * @return 推断名（可能带扩展名；无法推断时返回空串）
- */
-static string UrlBaseName(const string& url) {
-  string u = url;
-  size_t q = u.find_first_of("?#");
-  if (q != string::npos) u = u.substr(0, q);
-  while (!u.empty() && u.back() == '/') u.pop_back();
-  size_t slash = u.find_last_of("/\\");
-  return (slash != string::npos) ? u.substr(slash + 1) : u;
 }
 
 /**
@@ -159,11 +147,18 @@ static bool DownloadVideo(const string& video_url, const string& basename,
  * @return 程序退出码（0 成功，1 失败或用法错误）
  */
 int RunCli(int argc, char** argv) {
-  if (argc < 2) {
+  TCliOptions tOpts = {};
+  std::string strError;
+  if (!CliParseArgs((s32)argc, argv, tOpts, BurstDefaultThreads(),
+                    BurstMaxThreads(), strError)) {
+    if (!strError.empty()) {
+      printf("%s\n", strError.c_str());
+    }
     PrintUsage(argv[0]);
     return 1;
   }
-  if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
+
+  if (tOpts.emAction == emCliActionVersion) {
     printf("burst %s (Burst Download)\n", BURST_VERSION_STRING);
     printf("platform: ");
 #ifdef _WIN32
@@ -175,8 +170,17 @@ int RunCli(int argc, char** argv) {
 #endif
     return 0;
   }
-  if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
+  if (tOpts.emAction == emCliActionHelp) {
     PrintUsage(argv[0]);
+    return 0;
+  }
+  if (tOpts.emAction == emCliActionUpdateParser) {
+    std::string strMsg;
+    if (!EmbedUpdateParser(argv[0], strMsg)) {
+      printf("更新失败: %s\n", strMsg.c_str());
+      return 1;
+    }
+    printf("%s\n", strMsg.c_str());
     return 0;
   }
 
@@ -184,110 +188,70 @@ int RunCli(int argc, char** argv) {
    * → 环境变量 CURLBOLT_PYHOME → 编译期宏源码树） */
   EmbedPythonInit();
 
-  string url;
-  string filename = "./test";
-  int threads = BurstDefaultThreads();
-  int timeout = 60;
-  bool video_mode = false;
-  string video_url;
-  string cookies_from_browser;
-  string cookie_str;
-  bool auto_update_parser = true;
-
-  for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--video") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
-      video_mode = true;
-      video_url = argv[++i];
-    } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
-      filename = argv[++i];
-    } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
-      threads = atoi(argv[++i]);
-      if (threads < 1) threads = 1;
-      if (threads > BurstMaxThreads()) threads = BurstMaxThreads();
-    } else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
-      timeout = atoi(argv[++i]);
-    } else if (strcmp(argv[i], "--no-timeout") == 0) {
-      timeout = 0;  /* 强制下载，不自动中断 */
-    } else if (strcmp(argv[i], "--update-parser") == 0) {
-      string msg;
-      if (!EmbedUpdateParser(argv[0], msg)) {
-        printf("更新失败: %s\n", msg.c_str());
-        return 1;
-      }
-      printf("%s\n", msg.c_str());
-      return 0;
-    } else if (strcmp(argv[i], "--no-auto-update") == 0) {
-      auto_update_parser = false;
-    } else if (strcmp(argv[i], "--cookies-from-browser") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
-      cookies_from_browser = argv[++i];
-    } else if (strcmp(argv[i], "--cookie") == 0 && i + 1 < argc && argv[i + 1][0] != '-') {
-      cookie_str = argv[++i];
-    } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      PrintUsage(argv[0]);
-      return 0;
-    } else if (argv[i][0] != '-' && url.empty()) {
-      url = argv[i];  /* 第一个位置参数作为下载地址 */
-    } else {
-      printf("未知参数: %s\n", argv[i]);
-      PrintUsage(argv[0]);
-      return 1;
-    }
-  }
-
   /* 视频下载模式 */
-  if (video_mode) {
-    if (video_url.empty()) {
+  if (tOpts.bVideoMode == TRUE) {
+    if (tOpts.strVideoUrl.empty()) {
       printf("缺少 --video 参数值\n");
       return 1;
     }
     /* 未指定 -o 时：视频模式按视频页 URL 推断基础名 + 时间戳自动命名（防覆盖）
      * 指定 -o 但同名输出已存在时：基础名追加时间戳避让 */
-    if (filename == "./test") {
-      string base = UrlBaseName(video_url);
-      size_t dot = base.find_last_of('.');
-      if (dot != string::npos) base = base.substr(0, dot);  /* basename 不带扩展名 */
-      if (base.empty()) base = "video";
-      filename = base + "_" + CurrentTimeStamp();
-    } else if (VideoOutputExists(filename)) {
-      filename += "_" + CurrentTimeStamp();
-      printf("同名输出已存在，为避免覆盖改用: %s\n", filename.c_str());
+    if (tOpts.strFilename == BURST_CLI_DEFAULT_FILENAME) {
+      std::string strBase = UrlBaseName(tOpts.strVideoUrl);
+      size_t nDot = strBase.find_last_of('.');
+      if (nDot != std::string::npos) {
+        strBase = strBase.substr(0, nDot);  /* basename 不带扩展名 */
+      }
+      if (strBase.empty()) {
+        strBase = "video";
+      }
+      tOpts.strFilename = strBase + "_" + CurrentTimeStamp();
+    } else if (VideoOutputExists(tOpts.strFilename)) {
+      tOpts.strFilename += "_" + CurrentTimeStamp();
+      printf("同名输出已存在，为避免覆盖改用: %s\n",
+             tOpts.strFilename.c_str());
     }
     /* 自动更新解析组件（24h 节流；失败静默，不阻塞解析） */
-    if (auto_update_parser) {
-      string up_msg;
-      if (EmbedAutoUpdateParser(up_msg) && !up_msg.empty()) {
-        printf("%s\n", up_msg.c_str());
+    if (tOpts.bAutoUpdateParser == TRUE) {
+      std::string strUpMsg;
+      if (EmbedAutoUpdateParser(strUpMsg) && !strUpMsg.empty()) {
+        printf("%s\n", strUpMsg.c_str());
       }
     }
-    if (!DownloadVideo(video_url, filename, threads, timeout,
-                       cookies_from_browser, cookie_str)) {
+    if (!DownloadVideo(tOpts.strVideoUrl, tOpts.strFilename, tOpts.nThreads,
+                       tOpts.nTimeout, tOpts.strCookiesFromBrowser,
+                       tOpts.strCookie)) {
       printf("视频下载失败（详见 download.log）\n");
       return 1;
     }
     return 0;
   }
 
-  if (url.empty()) {
+  if (tOpts.strUrl.empty()) {
     PrintUsage(argv[0]);
     return 1;
   }
 
   /* 未指定 -o 时：普通下载按 URL 推断 + 时间戳自动命名（防覆盖，便于多次下载不同文件）
    * 指定 -o 但目标文件已存在时：追加时间戳避让，避免覆盖已有文件 */
-  if (filename == "./test") {
-    string base = UrlBaseName(url);
-    if (base.empty()) base = "download.dat";
-    filename = "./" + StampName(base);
-  } else if (FileExists(filename)) {
-    filename = StampName(filename);
-    printf("目标文件已存在，为避免覆盖改用: %s\n", filename.c_str());
+  if (tOpts.strFilename == BURST_CLI_DEFAULT_FILENAME) {
+    std::string strBase = UrlBaseName(tOpts.strUrl);
+    if (strBase.empty()) {
+      strBase = "download.dat";
+    }
+    tOpts.strFilename = "./" + StampName(strBase);
+  } else if (FileExists(tOpts.strFilename)) {
+    tOpts.strFilename = StampName(tOpts.strFilename);
+    printf("目标文件已存在，为避免覆盖改用: %s\n",
+           tOpts.strFilename.c_str());
   }
 
   unique_ptr<Ccurl> ptr = make_unique<Ccurl>();
-  if (!cookie_str.empty()) {
-    ptr->SetCookie(cookie_str);  /* 普通下载也可携带 Cookie（如需登录的文件） */
+  if (!tOpts.strCookie.empty()) {
+    ptr->SetCookie(tOpts.strCookie);  /* 普通下载也可携带 Cookie（如需登录的文件） */
   }
-  if (!ptr->Init(url, filename, threads, timeout)) {
+  if (!ptr->Init(tOpts.strUrl, tOpts.strFilename, tOpts.nThreads,
+                 tOpts.nTimeout)) {
     return 1;
   }
   if (!ptr->Download_Task()) {

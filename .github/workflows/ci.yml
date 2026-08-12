@@ -91,3 +91,35 @@ jobs:
 
       - name: Smoke test — help
         run: ./build/burst.exe --help | head -n 40
+
+  tests:
+    name: Unit tests (C++17, pure logic)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake -B build-tests -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF .
+
+      - name: Build tests
+        run: cmake --build build-tests --target burst-tests --parallel 2
+
+      - name: Run tests
+        run: ctest --test-dir build-tests --output-on-failure
+
+  download-regression:
+    name: Download regression (local HTTP server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF .
+
+      - name: Build burst CLI
+        run: cmake --build build --target burst --parallel 2
+
+      - name: Run download regression
+        run: python3 scripts/run_download_regression.py --burst ./build/burst
