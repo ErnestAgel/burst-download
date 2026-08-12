@@ -407,7 +407,7 @@ std::string ExtractJsonStr(const std::string& strContent,
 /** @brief Run the yt_dlp online check/update for the given runtime home
  *         (shared by the manual --update-parser and the auto update). */
 bool UpdateParserAt(const std::string& strHome, std::string& strMsg,
-                    const std::atomic<bool>* pbCancel)
+                    const std::atomic<bool>* pbCancel, long nTimeoutSec)
 {
     /* Current parser version; empty when no marker file exists, in which
      * case the version comparison is skipped and an update is attempted. */
@@ -547,7 +547,7 @@ bool UpdateParserAt(const std::string& strHome, std::string& strMsg,
         [pRc, strScriptCopy] {
             *pRc = PyRun_SimpleString(strScriptCopy.c_str());
         },
-        60L, pbCancel);
+        nTimeoutSec, pbCancel);
     if (!bRan)
     {
         if ((pbCancel != nullptr) && pbCancel->load())
@@ -852,7 +852,7 @@ bool EmbedUpdateParser(const std::string& strExePath, std::string& strMsg)
                  "next to the executable)";
         return false;
     }
-    return UpdateParserAt(strHome, strMsg, nullptr);
+    return UpdateParserAt(strHome, strMsg, nullptr, 60L);
 }
 
 bool EmbedAutoUpdateParser(std::string& strMsg,
@@ -896,7 +896,7 @@ bool EmbedAutoUpdateParser(std::string& strMsg,
         strMsg.clear();  /* failed recently: skip to avoid hammering GitHub */
         return true;
     }
-    const bool bOk = UpdateParserAt(strHome, strMsg, pbCancel);
+    const bool bOk = UpdateParserAt(strHome, strMsg, pbCancel, 10L);
     if (bOk)
     {
         { std::ofstream f(strCheckStamp.c_str(), std::ios::app); }

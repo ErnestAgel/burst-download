@@ -352,10 +352,17 @@ void DownloadWorker::VideoWorkerFunc(const std::string& url,
 
     /* Auto-update the video parser (24h throttle; failures are silent and do
      * not block parsing).  The call is cancel-aware (issue R6). */
+    AddLog("[INFO] checking parser update (24h throttle, GitHub budget "
+           "10s)...");
     {
         std::string up_msg;
-        if (EmbedAutoUpdateParser(up_msg, &m_cancel) && !up_msg.empty()) {
-            AddLog("[INFO] " + up_msg);
+        if (EmbedAutoUpdateParser(up_msg, &m_cancel)) {
+            if (!up_msg.empty()) {
+                AddLog("[INFO] " + up_msg);
+            }
+        } else {
+            AddLog("[WARN] parser update check failed or timed out, "
+                   "continuing with the bundled parser");
         }
     }
     /* Cancellation checkpoint: do not start parsing after a cancel during
