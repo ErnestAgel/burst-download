@@ -13,30 +13,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x86_64 (Release CLI)
-            os: ubuntu-latest
-            shell: bash
-            generator: ""
-            binary: build/burst
-          - name: Windows x86_64 (Release CLI, MinGW)
-            os: windows-latest
-            shell: "msys2 {0}"
-            generator: "-G Ninja"
-            binary: build/burst.exe
-
+  linux:
+    name: Linux x86_64 (Release CLI)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up MSYS2 (Windows)
-        if: runner.os == 'Windows'
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF .
+
+      - name: Build
+        run: cmake --build build --target burst --parallel 2
+
+      - name: Smoke test — version
+        run: ./build/burst --version
+
+      - name: Smoke test — help
+        run: ./build/burst --help | head -n 40
+
+  windows:
+    name: Windows x86_64 (Release CLI, MinGW)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -47,17 +53,13 @@ jobs:
             mingw-w64-x86_64-ninja
 
       - name: Configure
-        shell: ${{ matrix.shell }}
-        run: cmake -B build ${{ matrix.generator }} -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF .
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF .
 
       - name: Build
-        shell: ${{ matrix.shell }}
         run: cmake --build build --target burst --parallel 2
 
       - name: Smoke test — version
-        shell: ${{ matrix.shell }}
-        run: ${{ matrix.binary }} --version
+        run: ./build/burst.exe --version
 
       - name: Smoke test — help
-        shell: ${{ matrix.shell }}
-        run: ${{ matrix.binary }} --help | head -n 40
+        run: ./build/burst.exe --help | head -n 40
