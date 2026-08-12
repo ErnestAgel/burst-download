@@ -35,6 +35,31 @@ jobs:
       - name: Smoke test — help
         run: ./build/burst --help | head -n 40
 
+  linux-arm64:
+    name: Linux ARM64 (Release CLI, cross-compile)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cross toolchain and qemu
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu qemu-user-static
+
+      - name: Configure (cross-compile, CLI only)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DBUILD_GUI=OFF .
+
+      - name: Build
+        run: cmake --build build --target burst --parallel 2
+
+      - name: Verify architecture
+        run: file build/burst | grep aarch64
+
+      - name: Smoke test — version (qemu)
+        run: QEMU_LD_PREFIX=/usr/aarch64-linux-gnu qemu-aarch64-static ./build/burst --version
+
+      - name: Smoke test — help (qemu)
+        run: QEMU_LD_PREFIX=/usr/aarch64-linux-gnu qemu-aarch64-static ./build/burst --help | head -n 40
+
   windows:
     name: Windows x86_64 (Release CLI, MinGW)
     runs-on: windows-latest
