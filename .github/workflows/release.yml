@@ -136,6 +136,25 @@ jobs:
           cd assets
           sha256sum burst-* | tee SHA256SUMS.txt
 
+      - name: Import GPG signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: Sign release artifacts
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          cd assets
+          for f in burst-* SHA256SUMS.txt; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+                --armor --detach-sign --output "$f.sig" "$f"
+          done
+
+      - name: Add public key to release assets
+        run: cp burst-public-key.asc assets/
+
       - name: Generate release notes
         run: |
           PREV=$(git tag --sort=-version:refname | sed -n '2p')

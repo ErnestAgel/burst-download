@@ -49,6 +49,25 @@ Grab the latest binaries from the [Releases page](https://github.com/ErnestAgel/
 
 ---
 
+## 🔐 Release integrity & Windows SmartScreen
+
+Windows binaries are **not Authenticode-signed** (open-source project without a paid certificate), so Windows may show a SmartScreen *"Windows protected your PC"* prompt on first run — click **More info → Run anyway**. The [public key](burst-public-key.asc) and per-file GPG signatures (`.sig`) verify each release's authenticity and integrity:
+
+```bash
+# import the release signing public key (also attached to every release)
+gpg --import burst-public-key.asc
+
+# verify a file against its detached signature
+gpg --verify burst-windows-x86_64.zip.sig burst-windows-x86_64.zip
+
+# verify checksums
+sha256sum -c SHA256SUMS.txt
+```
+
+Release signing key fingerprint: `1C5F F3B1 7A21 6A32 1AE1 7566 4A8E 6102 2774 824C`
+
+---
+
 ## ✨ Features
 
 | | Description |

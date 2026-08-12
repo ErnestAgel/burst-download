@@ -215,6 +215,22 @@ cmake --build build --target burst      # 产出 burst
 
 ---
 
+## 🔐 发布签名与安全校验 Release Signing
+
+Windows 版未做 Authenticode 商业签名（开源项目未购买付费证书），首次运行可能弹出 SmartScreen「Windows 已保护你的电脑」提示，点击 **更多信息 → 仍要运行** 即可放行。
+
+每个发布文件附带 GPG 签名（`.sig` 文件）与校验清单 `SHA256SUMS.txt`，可验证真实性与完整性：
+
+```bash
+gpg --import burst-public-key.asc          # 导入发布公钥（每个 Release 也附带）
+gpg --verify burst-windows-x86_64.zip.sig burst-windows-x86_64.zip  # 验签
+sha256sum -c SHA256SUMS.txt                # 校验哈希
+```
+
+发布签名公钥指纹：`1C5F F3B1 7A21 6A32 1AE1 7566 4A8E 6102 2774 824C`
+
+---
+
 ## ⚠️ 免责声明 Disclaimer
 
 本工具仅用于下载**您有权获取**的内容（如个人备份、学习研究、公有领域或 CC 协议素材）。请勿用于下载、传播或商用受版权保护的内容，也不得用于任何违法行为。**使用者应自行承担全部法律责任，作者不对任何使用行为负责。**
