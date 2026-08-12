@@ -106,6 +106,7 @@ private:
         BOOL32             bVideo;
         u64                dwQueueTaskId;
         BOOL32             bPreserveSnapshot;
+        BOOL32             bPendingRemove;
         DownloadSnapshot   tSnap;
         std::vector<std::string> vecLog;
     } TModelTask;

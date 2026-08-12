@@ -58,6 +58,7 @@ u64 CTaskModel::AddFileTask(const std::string& strUrl,
     pTask->bVideo = FALSE;
     pTask->dwQueueTaskId = dwQueueId;
     pTask->bPreserveSnapshot = bPreserveSnapshot;
+    pTask->bPendingRemove = FALSE;
     m_mapTasks.emplace(dwModelId, pTask);
     m_mapQueueToModel.emplace(dwQueueId, dwModelId);
     return dwModelId;
@@ -89,6 +90,7 @@ u64 CTaskModel::AddVideoTask(const std::string& strUrl,
     pTask->bVideo = TRUE;
     pTask->dwQueueTaskId = dwQueueId;
     pTask->bPreserveSnapshot = bPreserveSnapshot;
+    pTask->bPendingRemove = FALSE;
     m_mapTasks.emplace(dwModelId, pTask);
     m_mapQueueToModel.emplace(dwQueueId, dwModelId);
     return dwModelId;
@@ -156,38 +158,42 @@ void CTaskModel::StopTask(u64 dwModelId)
         }
         pTask = it->second;
         dwQueueId = pTask->dwQueueTaskId;
-        m_mapTasks.erase(it);
-        m_mapQueueToModel.erase(dwQueueId);
     }
-    if (dwQueueId != 0)
+    if (dwQueueId == 0)
     {
-        m_cQueue.CancelTask(dwQueueId);
-        /* Wait (bounded) until the executor returns so no worker still
-         * touches the artifacts. */
-        for (int nTry = 0; nTry < 200; ++nTry)
+        return;
+    }
+
+    /* Still queued (not running): cancel marks it terminal synchronously,
+     * so remove and delete artifacts right away. */
+    TTaskState em = emTaskRunning;
+    for (const TDownloadTask& tQueueTask : m_cQueue.Snapshot())
+    {
+        if (tQueueTask.dwId == dwQueueId)
         {
-            bool bTerminal = true;
-            const std::vector<TDownloadTask> vecTasks = m_cQueue.Snapshot();
-            for (const TDownloadTask& tQueueTask : vecTasks)
-            {
-                if (tQueueTask.dwId == dwQueueId)
-                {
-                    const TTaskState em = tQueueTask.emState;
-                    if ((em == emTaskPending) || (em == emTaskRunning))
-                    {
-                        bTerminal = false;
-                    }
-                    break;
-                }
-            }
-            if (bTerminal)
-            {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            em = tQueueTask.emState;
+            break;
         }
     }
-    DeleteArtifacts(*pTask);
+    if (em == emTaskPending)
+    {
+        m_cQueue.CancelTask(dwQueueId);
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_mapQueueToModel.erase(dwQueueId);
+            m_mapTasks.erase(dwModelId);
+        }
+        DeleteArtifacts(*pTask);
+        return;
+    }
+
+    /* Running: mark for removal and cancel; the executor deletes artifacts
+     * and drops the row when the task ends (no UI blocking). */
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        pTask->bPendingRemove = TRUE;
+    }
+    m_cQueue.CancelTask(dwQueueId);
 }
 
 void CTaskModel::RemoveTask(u64 dwModelId)
@@ -354,6 +360,10 @@ BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
                               ? "[INFO] video task started: " + pTask->strUrl
                               : "[INFO] task started: " + pTask->strUrl);
     }
+    /* Immediate stage feedback so the UI does not look frozen during slow
+     * parsing (2026-08-12). */
+    SetStage(*pTask, pTask->bVideo != FALSE ? STAGE_PARSING : STAGE_DOWNLOADING,
+             pTask->bVideo != FALSE ? "parsing" : "downloading");
 
     TTaskExecOptions tOpts;
     tOpts.strUrl = pTask->strUrl;
@@ -367,16 +377,15 @@ BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
         std::lock_guard<std::mutex> lock(m_mutex);
         tOpts.pChunkPool = m_pChunkPool.get();
     }
-    /* Fair chunk budget (2026-08-12): when several tasks are active, cap
-     * this task's chunks to pool_size / active_tasks (at least 1) so the
-     * shared download pool is not hogged by the first task and multiple
-     * files actually download concurrently. */
+    /* Fair chunk budget (2026-08-12): cap every task to
+     * pool_size / task_slots so the first task cannot hog the shared pool
+     * and multiple files download concurrently from the start. */
     if (tOpts.pChunkPool != nullptr)
     {
-        const u32 dwActive = m_cQueue.ActiveCount();
-        if (dwActive > 1u)
+        const u32 dwSlots = m_cExecPool.ThreadCount();
+        if (dwSlots > 1u)
         {
-            u32 dwBudget = tOpts.pChunkPool->ThreadCount() / dwActive;
+            u32 dwBudget = tOpts.pChunkPool->ThreadCount() / dwSlots;
             if (dwBudget < 1u)
             {
                 dwBudget = 1u;
@@ -424,6 +433,8 @@ BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
     std::string strError;
     const BOOL32 bOk = TaskExecRun(tOpts, tCb, strOutput, strError);
 
+    int nFinalStage = STAGE_ERROR;
+    std::string strStatus = "error";
     if (bOk != FALSE)
     {
         {
@@ -441,21 +452,31 @@ BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
             }
             pTask->strOutput = strOutput;
         }
-        SetStage(*pTask, STAGE_DONE, strOutput);
-        return TRUE;
+        nFinalStage = STAGE_DONE;
+        strStatus = strOutput;
     }
-
-    if (cCtx.IsCanceled() == TRUE)
+    else if (cCtx.IsCanceled() == TRUE)
     {
-        SetStage(*pTask, STAGE_CANCELED, "canceled");
-        return FALSE;
+        nFinalStage = STAGE_CANCELED;
+        strStatus = "canceled";
     }
+    else
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         pTask->tSnap.error = strError.empty() ? "task failed" : strError;
     }
-    SetStage(*pTask, STAGE_ERROR, "error");
-    return FALSE;
+    SetStage(*pTask, nFinalStage, strStatus);
+
+    /* Stop requested while running: delete artifacts and drop the row now
+     * that the executor has finished (non-blocking from the UI). */
+    if (pTask->bPendingRemove != FALSE)
+    {
+        DeleteArtifacts(*pTask);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mapQueueToModel.erase(pTask->dwQueueTaskId);
+        m_mapTasks.erase(pTask->dwModelId);
+    }
+    return (bOk != FALSE) ? TRUE : FALSE;
 }
 
 void CTaskModel::LogLocked(TModelTask& tTask, const std::string& strMsg)

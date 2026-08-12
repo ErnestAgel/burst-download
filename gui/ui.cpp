@@ -470,6 +470,8 @@ void AddTaskFromForm(CTaskModel& cModel) {
             JoinPath(path, base + "_" + CurrentTimeStamp());
         if (cModel.AddVideoTask(url, basename, g_threads, 60, FALSE) == 0) {
             ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
+        } else {
+            g_url[0] = '\0';  /* clear the URL after a successful add */
         }
         return;
     }
@@ -486,6 +488,8 @@ void AddTaskFromForm(CTaskModel& cModel) {
     }
     if (cModel.AddFileTask(url, path, g_threads, 60, FALSE) == 0) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
+    } else {
+        g_url[0] = '\0';  /* clear the URL after a successful add */
     }
 }
 
