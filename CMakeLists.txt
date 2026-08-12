@@ -40,10 +40,16 @@ endif()
 set(CURL_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CURL_INCLUDE_DIR})
 
-file(GLOB SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+file(GLOB_RECURSE SRC CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
 add_executable(burst WIN32 ${SRC})
-target_include_directories(burst PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_include_directories(burst PRIVATE
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/infra
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/workflow
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/entry)
 if(NOT MSVC)
   # 新模块含 UTF-8 中文字符串（CLI 错误信息），确保 Windows/Linux 输出一致
   target_compile_options(burst PRIVATE
