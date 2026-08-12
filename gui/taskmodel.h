@@ -2,7 +2,7 @@
  * @file taskmodel.h
  * @brief Multi-task queue model for the GUI (P5-4).
  *
- * CTaskModel owns the shared CThreadPool + CTaskQueue and one UI-facing
+ * CTaskModel owns the shared CCurlMultiEngine + CTaskQueue and one UI-facing
  * task entry per download.  Each entry keeps its own DownloadSnapshot and
  * ring log; the UI reads Rows()/TaskDetail() under a mutex and issues
  * Add/Cancel/Resume/Stop/Remove through the model.  Executor bodies run on
@@ -20,6 +20,7 @@
 #include "../src/progress.h"
 #include "task.h"
 #include "taskqueue.h"
+#include "curlmulti.h"
 #include "threadpool.h"
 
 /** @brief Multi-task queue model for the GUI. */
@@ -76,7 +77,7 @@ public:
     /** @brief Remove every terminal task. */
     void ClearFinished();
 
-    /** @brief UI housekeeping: destroy the idle download pool (P8). */
+    /** @brief UI housekeeping: destroy the idle multi engine (P8-4). */
     void OnUiTick();
 
     /** @brief Cancel all running tasks (exit path). */
@@ -115,8 +116,8 @@ private:
     BOOL32 RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
                        CTaskContext& cCtx);
 
-    /** @brief Lazily create the shared download pool (size = thread setting). */
-    void EnsureChunkPool(int nThreads);
+    /** @brief Lazily create the shared multi engine (lanes = thread setting). */
+    void EnsureChunkEngine(int nThreads);
 
     /** @brief Append a timestamped log line (caller holds m_mutex). */
     void LogLocked(TModelTask& tTask, const std::string& strMsg);
@@ -133,7 +134,7 @@ private:
 
     CThreadPool m_cExecPool{2};               /**< task orchestration pool */
     CTaskQueue  m_cQueue;
-    std::unique_ptr<CThreadPool> m_pChunkPool; /**< shared download pool (P8) */
+    std::unique_ptr<CCurlMultiEngine> m_pChunkEngine; /**< shared engine (P8-4) */
     mutable std::mutex m_mutex;
     std::map<u64, std::shared_ptr<TModelTask> > m_mapTasks;
     std::map<u64, u64> m_mapQueueToModel;

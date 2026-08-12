@@ -31,7 +31,7 @@
 #include "burst_types.h"
 #include "progress.h"
 
-class CThreadPool;
+class CCurlMultiEngine;
 
 /** @brief Video download result. */
 enum class VideoResult {
@@ -87,11 +87,11 @@ public:
     BOOL32 ParseOk() const;
 
     /**
-     * @brief Attach the shared download pool (P8): each stream's Ccurl uses
-     *        it for chunk jobs.
-     * @param pPool Shared download pool; may be null.
+     * @brief Attach the shared curl_multi engine (P8-4): each stream's
+     *        Ccurl runs its chunk transfers non-blockingly on the engine.
+     * @param pEngine Shared multi engine; may be null.
      */
-    void SetChunkPool(CThreadPool* pPool);
+    void SetChunkEngine(CCurlMultiEngine* pEngine);
 
     /**
      * @brief Most recent failure reason (read after Result == Error).
@@ -135,6 +135,6 @@ private:
     std::atomic<bool> m_cancel{false};  /**< Cancellation flag */
     std::string m_last_error;           /**< Failure reason (LastError()) */
     std::string m_output_path;          /**< Final artifact path */
-    CThreadPool* m_pChunkPool = nullptr; /**< Shared download pool (P8) */
+    CCurlMultiEngine* m_pChunkEngine = nullptr; /**< Shared multi engine */
     BOOL32 m_bParseOk = FALSE;           /**< Latest parse succeeded */
 };

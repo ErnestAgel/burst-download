@@ -20,6 +20,7 @@
 #include "../src/progress.h"
 
 class CThreadPool;
+class CCurlMultiEngine;
 
 /** @brief Options for one download task (file or video). */
 typedef struct tagTaskExecOptions
@@ -33,7 +34,7 @@ typedef struct tagTaskExecOptions
     BOOL32        bVideo;
     BOOL32        bVerifySha256;
     BOOL32        bDeletePartial;
-    CThreadPool*  pChunkPool;     /**< shared download pool (P8), may be null */
+    CCurlMultiEngine* pChunkEngine; /**< shared curl_multi engine (P8-4) */
 } TTaskExecOptions;
 
 /** @brief Callbacks used by the executor to report progress and events. */

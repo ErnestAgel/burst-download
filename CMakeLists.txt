@@ -253,12 +253,14 @@ if(BURST_BUILD_TESTS)
     tests/test_main.cpp
     tests/test_framework.cpp
     tests/test_cli_parse.cpp
+    tests/test_curlmulti.cpp
     tests/test_pathutil.cpp
     tests/test_sha256.cpp
     tests/test_threadpool.cpp
     tests/test_task.cpp
     tests/test_taskqueue.cpp
     src/cli_parse.cpp
+    src/curlmulti.cpp
     src/pathutil.cpp
     src/sha256.cpp
     src/threadpool.cpp
@@ -275,6 +277,31 @@ if(BURST_BUILD_TESTS)
     target_compile_options(burst-tests PRIVATE
       -Wall -Wextra -Werror
       -finput-charset=UTF-8 -fexec-charset=UTF-8)
+  endif()
+  # ---- curl_multi engine tests need libcurl (P8-4) ----
+  if(WIN32)
+    set(CURL_TEST_WIN_DIR
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/windows-x86_64/dynamic)
+    if(EXISTS ${CURL_TEST_WIN_DIR}/libcurl.dll.a)
+      target_link_libraries(burst-tests ${CURL_TEST_WIN_DIR}/libcurl.dll.a)
+    else()
+      find_package(CURL REQUIRED)
+      target_link_libraries(burst-tests CURL::libcurl)
+    endif()
+    if(MINGW)
+      target_link_libraries(burst-tests bcrypt ws2_32)
+    endif()
+    if(MSVC)
+      target_link_libraries(burst-tests ws2_32 crypt32 wldap32 normaliz)
+    endif()
+    if(EXISTS ${CURL_TEST_WIN_DIR}/libcurl-4.dll)
+      add_custom_command(TARGET burst-tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CURL_TEST_WIN_DIR}/libcurl-4.dll $<TARGET_FILE_DIR:burst-tests>)
+    endif()
+  else()
+    target_link_libraries(burst-tests pthread
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${PLATFORM_DIR}/dynamic/libcurl.so)
   endif()
   add_test(NAME burst-tests COMMAND burst-tests)
 endif()

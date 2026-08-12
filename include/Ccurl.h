@@ -18,6 +18,7 @@
 #include <curl/curl.h>
 #include <string>
 #include <mutex>
+#include <condition_variable>
 #include <vector>
 #include <atomic>
 #include <functional>
@@ -30,6 +31,7 @@
 #include "burst_types.h"
 
 class CThreadPool;
+class CCurlMultiEngine;
 
 #ifndef _WIN32
 #include <pthread.h>
@@ -82,6 +84,8 @@ typedef struct tagEasyList {
     long timeout;          /**< Low-speed timeout seconds (0 = disabled) */
     const char* referer;   /**< Anti-hotlink Referer (may be empty) */
     const char* cookie;    /**< Cookie string (may be empty) */
+    int  attempt;          /**< Current attempt index (0-based, P8-4) */
+    u32  dwLane;           /**< Engine lane for this chunk (P8-4) */
     /* ---- GUI progress/cancel extension ---- */
     int64_t part_start;    /**< Initial chunk start (resume base) */
     int64_t part_total;    /**< Chunk length (end - start + 1) */
@@ -153,6 +157,16 @@ public:
      */
     void SetChunkPool(CThreadPool* pPool);
 
+    /**
+     * @brief Attach the shared curl_multi engine (P8-4): chunk transfers
+     *        run non-blockingly on the engine's driver threads, so a task
+     *        keeps its full chunk count in flight while tasks share the
+     *        same fixed lane count.
+     * @param pEngine Shared multi engine; null falls back to the pool /
+     *                per-chunk-thread paths.
+     */
+    void SetChunkEngine(CCurlMultiEngine* pEngine);
+
     /** @brief Request cancellation (write/progress callback checkpoints). */
     void Cancel();
 
@@ -223,6 +237,23 @@ private:
     /** @brief Create and join chunk threads; return whether all succeeded. */
     bool RunChunks();
 
+    /** @brief Run chunks through the shared multi engine (P8-4). */
+    bool RunChunksMulti();
+
+    /** @brief Submit one chunk attempt (or a delayed retry) to the engine. */
+    void SubmitChunkAttempt(st_EasyList* pInfo, BOOL32 bDelayed);
+
+    /** @brief Engine completion callback: retry or finalize a chunk. */
+    void OnChunkDone(st_EasyList* pInfo, CURLcode res, long lHttpCode);
+
+    /** @brief Mark a chunk terminal and wake the RunChunksMulti waiter. */
+    void FinishChunk(st_EasyList* pInfo, BOOL32 bOk);
+
+    /** @brief Configure a fresh easy handle for one chunk attempt
+     *         (instance-independent; uses only per-chunk state). */
+    static void ConfigureEasyHandle(CURL* curl, st_EasyList* pInfo,
+                                    const char* pszRange);
+
     /** @brief Verify every chunk wrote its full range. */
     bool VerifyAllPartsWritten() const;
 
@@ -251,7 +282,11 @@ private:
     string m_referer;               /**< Anti-hotlink Referer */
     string m_cookie;                /**< Request Cookie */
     CThreadPool* m_pChunkPool = nullptr;  /**< shared download pool (P8) */
+    CCurlMultiEngine* m_pChunkEngine = nullptr;  /**< shared multi engine */
     std::atomic<bool> m_cancel_flag{false};  /**< Cancellation flag */
+    std::atomic<int> m_nChunksLeft{0};   /**< Chunks awaiting completion */
+    std::mutex m_waitMutex;              /**< Protects the chunk wait */
+    std::condition_variable m_waitCv;    /**< Wakes RunChunksMulti */
     std::string m_last_error;       /**< Most recent failure reason */
     bool m_range_known = false;     /**< Range confirmed via HEAD/
                                      *  Accept-Ranges */

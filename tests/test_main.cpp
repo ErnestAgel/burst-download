@@ -11,6 +11,7 @@ extern void RunSha256Tests(CTestReport& cReport);
 extern void RunThreadPoolTests(CTestReport& cReport);
 extern void RunTaskTests(CTestReport& cReport);
 extern void RunTaskQueueTests(CTestReport& cReport);
+extern void RunCurlMultiTests(CTestReport& cReport);
 
 int main()
 {
@@ -21,5 +22,6 @@ int main()
     RunThreadPoolTests(cReport);
     RunTaskTests(cReport);
     RunTaskQueueTests(cReport);
+    RunCurlMultiTests(cReport);
     return cReport.Finish();
 }

@@ -35,6 +35,7 @@
 
 #include "Ccurl.h"
 #include "curl/mprintf.h"
+#include "curlmulti.h"
 #include "threadpool.h"
 #include "sha256.h"
 
@@ -467,6 +468,10 @@ void Ccurl::SetChunkPool(CThreadPool* pPool) {
   m_pChunkPool = pPool;
 }
 
+void Ccurl::SetChunkEngine(CCurlMultiEngine* pEngine) {
+  m_pChunkEngine = pEngine;
+}
+
 void* Ccurl::Downloading(void* arg) {
   st_EasyList* info = (st_EasyList*)arg;
   const int max_retry = 3;
@@ -512,36 +517,7 @@ void* Ccurl::Downloading(void* arg) {
       LOG_ERR("curl Easy init failed\n");
       break;
     }
-    curl_easy_setopt(curl, CURLOPT_URL, info->url);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                     "Chrome/115.0.0.0 Safari/537.36");
-    if (info->referer != nullptr && info->referer[0] != '\0') {
-      curl_easy_setopt(curl, CURLOPT_REFERER, info->referer);
-    }
-    if (info->cookie != nullptr && info->cookie[0] != '\0') {
-      curl_easy_setopt(curl, CURLOPT_COOKIE, info->cookie);
-    }
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, File_Write);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, info);
-    /* Strict 206: track/abort a Range request answered with 200. */
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ChunkStatusHeader);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, info);
-
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progressFunc);
-    curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, info);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    if (info->use_range) {
-      curl_easy_setopt(curl, CURLOPT_RANGE, range);
-    }
-    if (info->timeout > 0) {
-      /* Low-speed timeout: abort after timeout seconds without progress. */
-      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
-      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, info->timeout);
-    }
+    ConfigureEasyHandle(curl, info, info->use_range ? range : nullptr);
 
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
@@ -609,8 +585,205 @@ void* Ccurl::Downloading(void* arg) {
   return nullptr;
 }
 
+void Ccurl::ConfigureEasyHandle(CURL* curl, st_EasyList* pInfo,
+                                const char* pszRange) {
+  curl_easy_setopt(curl, CURLOPT_URL, pInfo->url);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/115.0.0.0 Safari/537.36");
+  if (pInfo->referer != nullptr && pInfo->referer[0] != '\0') {
+    curl_easy_setopt(curl, CURLOPT_REFERER, pInfo->referer);
+  }
+  if (pInfo->cookie != nullptr && pInfo->cookie[0] != '\0') {
+    curl_easy_setopt(curl, CURLOPT_COOKIE, pInfo->cookie);
+  }
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, File_Write);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, pInfo);
+  /* Strict 206: track/abort a Range request answered with 200. */
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ChunkStatusHeader);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, pInfo);
+  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progressFunc);
+  curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, pInfo);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  if (pszRange != nullptr && pszRange[0] != '\0') {
+    curl_easy_setopt(curl, CURLOPT_RANGE, pszRange);
+  }
+  if (pInfo->timeout > 0) {
+    /* Low-speed timeout: abort after timeout seconds without progress. */
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, pInfo->timeout);
+  }
+}
+
+/* ---- P8-4: curl_multi non-blocking chunk execution ---- */
+
+bool Ccurl::RunChunksMulti() {
+  for (int i = 0; i < m_thread_num; i++) {
+    if (m_Easy_List[i]->success) {
+      continue;  /* chunk-level resume: already full, skip */
+    }
+    st_EasyList* pInfo = m_Easy_List[i];
+    pInfo->attempt = 0;
+    pInfo->dwLane = kChunkLaneUnset;
+    m_nChunksLeft.fetch_add(1);
+    SubmitChunkAttempt(pInfo, FALSE);
+  }
+
+  std::unique_lock<std::mutex> lock(m_waitMutex);
+  m_waitCv.wait(lock, [this]() { return m_nChunksLeft.load() == 0; });
+  lock.unlock();
+
+  bool all_ok = true;
+  for (int i = 0; i < m_thread_num; i++) {
+    if (!m_Easy_List[i]->success) {
+      all_ok = false;
+    }
+  }
+  return all_ok;
+}
+
+void Ccurl::SubmitChunkAttempt(st_EasyList* pInfo, BOOL32 bDelayed) {
+  if (m_pChunkEngine == nullptr) {
+    FinishChunk(pInfo, FALSE);
+    return;
+  }
+  /* Cancellation checkpoint: no new attempt after cancel. */
+  if (pInfo->cancel_flag != nullptr && pInfo->cancel_flag->load()) {
+    FinishChunk(pInfo, FALSE);
+    return;
+  }
+  /* Issue O1: the chunk may already be complete from a partial attempt. */
+  if (pInfo->offset > pInfo->end) {
+    FinishChunk(pInfo, TRUE);
+    return;
+  }
+
+  /* Resume from the current written offset (issue O1), not the base. */
+  char range[64] = {0};
+  if (pInfo->use_range) {
+    snprintf(range, sizeof(range), "%lld-%lld", (long long)pInfo->offset,
+             (long long)pInfo->end);
+  }
+
+  TChunkJob tJob;
+  tJob.pUserData = pInfo;
+  tJob.dwLane = pInfo->dwLane;
+  tJob.pCancelFlag = &m_cancel_flag;
+  const std::string strRange = pInfo->use_range ? range : "";
+  tJob.fnCreateEasy = [this, pInfo, strRange]() -> CURL* {
+    if (pInfo->cancel_flag != nullptr && pInfo->cancel_flag->load()) {
+      return nullptr;
+    }
+    CURL* curl = curl_easy_init();
+    if (curl == nullptr) {
+      return nullptr;
+    }
+    pInfo->bGot206 = FALSE;  /* reset per attempt */
+    ConfigureEasyHandle(curl, pInfo,
+                        strRange.empty() ? nullptr : strRange.c_str());
+    return curl;
+  };
+  tJob.fnDone = [this, pInfo](CURLcode res, long lHttpCode) {
+    OnChunkDone(pInfo, res, lHttpCode);
+  };
+
+  const BOOL32 bOk = (bDelayed != FALSE)
+                         ? m_pChunkEngine->SubmitChunkDelayed(tJob, 1000)
+                         : m_pChunkEngine->SubmitChunk(tJob);
+  pInfo->dwLane = tJob.dwLane;  /* remember the lane for retries */
+  if (bOk == FALSE) {
+    FinishChunk(pInfo, FALSE);
+  }
+}
+
+void Ccurl::OnChunkDone(st_EasyList* pInfo, CURLcode res, long lHttpCode) {
+  /* Cancellation checkpoint: cancel-aborted transfers are not failures. */
+  if (pInfo->cancel_flag != nullptr && pInfo->cancel_flag->load()) {
+    FinishChunk(pInfo, FALSE);
+    return;
+  }
+  if (res == CURLE_ABORTED_BY_CALLBACK) {
+    /* Canceled before start or easy-handle init failed. */
+    FinishChunk(pInfo, FALSE);
+    return;
+  }
+
+  const bool b2xx = (lHttpCode >= 200) && (lHttpCode <= 299);
+  if (pInfo->use_range && b2xx && (lHttpCode != 206)) {
+    /* Server ignored Range (200): degrade to a single full-body stream. */
+    if (pInfo->range_denied != nullptr) {
+      pInfo->range_denied->store(true);
+    }
+    LOG_ERR("server ignored Range (HTTP %ld) on part %lld-%lld, "
+            "restarting single-stream (url=%s)\n",
+            lHttpCode, (long long)pInfo->offset, (long long)pInfo->end,
+            pInfo->url);
+    AppendLog("[ERROR] server ignored Range (HTTP %ld) on part %lld-%lld, "
+              "restarting single-stream (url=%s)",
+              lHttpCode, (long long)pInfo->offset, (long long)pInfo->end,
+              pInfo->url);
+    FinishChunk(pInfo, FALSE);
+    return;
+  }
+  if (b2xx && CHECK_CURL(res) && pInfo->offset >= pInfo->end + 1) {
+    FinishChunk(pInfo, TRUE);  /* chunk complete and full */
+    return;
+  }
+  if (res == CURLE_OPERATION_TIMEDOUT) {
+    LOG_ERR("part %lld-%lld timeout (no progress for %ld s)\n",
+            (long long)pInfo->offset, (long long)pInfo->end, pInfo->timeout);
+    AppendLog("[WARN] timeout on part %lld-%lld (url=%s, no progress for "
+              "%ld s)",
+              (long long)pInfo->offset, (long long)pInfo->end, pInfo->url,
+              pInfo->timeout);
+    FinishChunk(pInfo, FALSE);
+    return;
+  }
+  if (!b2xx) {
+    /* HTTP error (403/404 etc.): fail without retrying. */
+    LOG_ERR("HTTP %ld on part %lld-%lld (url=%s)\n", lHttpCode,
+            (long long)pInfo->offset, (long long)pInfo->end, pInfo->url);
+    AppendLog("[ERROR] HTTP %ld on part %lld-%lld (url=%s)", lHttpCode,
+              (long long)pInfo->offset, (long long)pInfo->end, pInfo->url);
+    FinishChunk(pInfo, FALSE);
+    return;
+  }
+
+  /* Transient failure: retry with a 1s backoff (max 3 attempts total). */
+  if (pInfo->attempt < 2) {
+    LOG_ERR("res:%s, retry %d/3 from offset %lld\n",
+            curl_easy_strerror(res), pInfo->attempt + 1,
+            (long long)pInfo->offset);
+    pInfo->attempt++;
+    SubmitChunkAttempt(pInfo, TRUE);
+    return;
+  }
+  AppendLog("[ERROR] part %lld-%lld failed after 3 retries (url=%s)",
+            (long long)pInfo->part_start, (long long)pInfo->end, pInfo->url);
+  FinishChunk(pInfo, FALSE);
+}
+
+void Ccurl::FinishChunk(st_EasyList* pInfo, BOOL32 bOk) {
+  pInfo->success = (bOk != FALSE);
+  std::lock_guard<std::mutex> lock(m_waitMutex);
+  const int nLeft = m_nChunksLeft.fetch_sub(1) - 1;
+  if (nLeft <= 0) {
+    m_waitCv.notify_all();
+  }
+}
+
 bool Ccurl::RunChunks() {
   bool all_ok = true;
+
+  /* P8-4: with the shared curl_multi engine, chunk transfers run
+   * non-blockingly on the engine's driver threads; each task keeps its
+   * full chunk count in flight and tasks share the fixed lane count. */
+  if (m_pChunkEngine != nullptr) {
+    return RunChunksMulti();
+  }
 
   /* P8: with a shared download pool, each chunk is one pool job; chunks
    * queue when the pool is saturated, and no per-chunk threads are created.
@@ -1131,6 +1304,9 @@ bool Ccurl::File_Init(const char* filename) {
     m_Easy_List[i]->bGot206 = FALSE;
     m_Easy_List[i]->range_denied = &m_range_denied;
     m_Easy_List[i]->owner = this;
+    /* P8-4: per-chunk attempt state for the multi engine. */
+    m_Easy_List[i]->attempt = 0;
+    m_Easy_List[i]->dwLane = kChunkLaneUnset;
   }
   m_pInfoTable = m_Easy_List;
   m_dResumeLen = (double)m_resume_len;

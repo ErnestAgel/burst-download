@@ -41,7 +41,7 @@ u64 CTaskModel::AddFileTask(const std::string& strUrl,
         return 0;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    EnsureChunkPool(nThreads);
+    EnsureChunkEngine(nThreads);
     const u64 dwQueueId =
         m_cQueue.AddTask(strUrl, strPath, nThreads, nTimeout, FALSE);
     if (dwQueueId == 0)
@@ -73,7 +73,7 @@ u64 CTaskModel::AddVideoTask(const std::string& strUrl,
         return 0;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    EnsureChunkPool(nThreads);
+    EnsureChunkEngine(nThreads);
     const u64 dwQueueId =
         m_cQueue.AddTask(strUrl, strBasename, nThreads, nTimeout, TRUE);
     if (dwQueueId == 0)
@@ -375,27 +375,10 @@ BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,
     tOpts.bDeletePartial = FALSE;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        tOpts.pChunkPool = m_pChunkPool.get();
+        tOpts.pChunkEngine = m_pChunkEngine.get();
     }
-    /* Fair chunk budget (2026-08-12): cap every task to
-     * pool_size / task_slots so the first task cannot hog the shared pool
-     * and multiple files download concurrently from the start. */
-    if (tOpts.pChunkPool != nullptr)
-    {
-        const u32 dwSlots = m_cExecPool.ThreadCount();
-        if (dwSlots > 1u)
-        {
-            u32 dwBudget = tOpts.pChunkPool->ThreadCount() / dwSlots;
-            if (dwBudget < 1u)
-            {
-                dwBudget = 1u;
-            }
-            if (tOpts.nThreads > static_cast<s32>(dwBudget))
-            {
-                tOpts.nThreads = static_cast<s32>(dwBudget);
-            }
-        }
-    }
+    /* P8-4: no fair-split budget.  Every task keeps its full chunk count
+     * in flight; the shared engine's lanes advance all tasks concurrently. */
 
     TTaskExecCallbacks tCb;
     tCb.fnOnStage = [this, pTask](int nStage) {
@@ -533,14 +516,14 @@ std::string CTaskModel::FormatEta(double dRemain, double dSpeed)
     return std::string(szBuf);
 }
 
-void CTaskModel::EnsureChunkPool(int nThreads)
+void CTaskModel::EnsureChunkEngine(int nThreads)
 {
-    if (m_pChunkPool != nullptr)
+    if (m_pChunkEngine != nullptr)
     {
         return;
     }
     int n = nThreads < 1 ? 1 : (nThreads > 8 ? 8 : nThreads);
-    m_pChunkPool = std::make_unique<CThreadPool>(static_cast<u32>(n));
+    m_pChunkEngine = std::make_unique<CCurlMultiEngine>(static_cast<u32>(n));
 }
 
 void CTaskModel::OnUiTick()
@@ -548,7 +531,7 @@ void CTaskModel::OnUiTick()
     if (m_cQueue.ActiveCount() == 0u)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_pChunkPool.reset();
+        m_pChunkEngine.reset();
     }
 }
 void CTaskModel::DeleteArtifacts(const TModelTask& tTask) const

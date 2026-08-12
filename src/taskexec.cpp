@@ -40,9 +40,9 @@ BOOL32 RunFileExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
     }
 
     std::unique_ptr<Ccurl> cc = std::make_unique<Ccurl>();
-    if (tOpts.pChunkPool != nullptr)
+    if (tOpts.pChunkEngine != nullptr)
     {
-        cc->SetChunkPool(tOpts.pChunkPool);
+        cc->SetChunkEngine(tOpts.pChunkEngine);
     }
     if (!tOpts.strCookie.empty())
     {
@@ -222,7 +222,7 @@ BOOL32 RunVideoExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
     auto fnRunOnce = [&](VideoResult& rOut, std::string& strOutPathOut,
                          std::string& strLastErr, BOOL32& bParseOkOut) {
         VideoDownloader vd;
-        vd.SetChunkPool(tOpts.pChunkPool);
+        vd.SetChunkEngine(tOpts.pChunkEngine);
         if (tCb.fnOnStage)
         {
             vd.onStage = [&tCb, vd_ptr = &vd](int nStage) {
