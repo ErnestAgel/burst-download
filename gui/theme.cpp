@@ -108,7 +108,7 @@ void ApplyOneDark() {
     s.FramePadding      = ImVec2(7, 3);
     s.ItemSpacing       = ImVec2(8, 5);
     s.ItemInnerSpacing  = ImVec2(5, 3);
-    s.ScrollbarSize     = 12.0f;
+    s.ScrollbarSize     = 8.0f;   /* 细滚动条，贴近网页 */
     s.GrabMinSize       = 10.0f;
     s.WindowTitleAlign  = ImVec2(0.5f, 0.5f);
     s.AntiAliasedLines  = true;

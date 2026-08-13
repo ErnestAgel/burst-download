@@ -22,8 +22,8 @@ void Init(GLFWwindow* window);
 
 /**
  * @brief 注入主/次级字体指针（由 main_gui.cpp 加载后调用）
- * @param pFontMain 主字号（14px，输入框/按钮/文件名）
- * @param pFontSmall 次级字号（11px，标签/徽标/状态栏/工具卡）
+ * @param pFontMain 主字号（16px，输入框/按钮/文件名）
+ * @param pFontSmall 次级字号（12px，标签/徽标/状态栏/工具卡）
  */
 void SetFonts(ImFont* pFontMain, ImFont* pFontSmall);
 
