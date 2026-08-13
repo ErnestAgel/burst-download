@@ -20,7 +20,7 @@
 > ⚡ **多线程加速**：HTTP Range 分片，1~8 线程并发（默认按 CPU 核数自适应），榨干带宽
 > 📦 **断点续传**：中断后从断点继续，不重头来
 > 🖥 **三平台构建**：Linux x86_64 / ARM64 / Windows，Release 单文件发布
-> 🌐 **官网**：[burstdownload.com](https://burstdownload.com/) — 下载最新版本，查看截图、使用指南与 FAQ
+> 🌐 **官网**：[www.burstdownload.com](https://www.burstdownload.com/) — 下载最新版本，查看截图、使用指南与 FAQ
 
 </div>
 
@@ -28,7 +28,7 @@
 
 ## ⬇️ 下载 Download
 
-从**官网** [burstdownload.com](https://burstdownload.com/) 下载最新版本（[GitHub Releases](https://github.com/ErnestAgel/burst-download/releases) 为镜像）：
+从**官网** [www.burstdownload.com](https://www.burstdownload.com/) 下载最新版本（[GitHub Releases](https://github.com/ErnestAgel/burst-download/releases) 为镜像）：
 
 | 平台 Platform | 安装包 Package | 运行 Run |
 |---|---|---|
@@ -248,7 +248,7 @@ Windows x86_64、Linux x86_64 与 Linux ARM64（仅 CLI）；图形界面支持 
 
 **在哪里下载？**
 
-[burstdownload.com](https://burstdownload.com/) 或 [GitHub Releases](https://github.com/ErnestAgel/burst-download/releases)。
+[www.burstdownload.com](https://www.burstdownload.com/) 或 [GitHub Releases](https://github.com/ErnestAgel/burst-download/releases)。
 
 ---
 

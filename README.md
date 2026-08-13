@@ -21,7 +21,7 @@
 > ⚡ **Multi-threading**: HTTP Range chunking with 1–8 threads (default adaptive to CPU cores) to saturate bandwidth
 > 📦 **Resume support**: continue from where it stopped instead of restarting
 > 🖥 **Three-platform builds**: Linux x86_64 / ARM64 / Windows; single-file Release per platform
-> 🌐 **Official website**: [burstdownload.com](https://burstdownload.com/) — download the latest release, screenshots, usage guide & FAQ
+> 🌐 **Official website**: [www.burstdownload.com](https://www.burstdownload.com/) — download the latest release, screenshots, usage guide & FAQ
 
 </div>
 
@@ -29,7 +29,7 @@
 
 ## ⬇️ Download & Install
 
-Download the latest binaries from the **official website** [burstdownload.com](https://burstdownload.com/) — or from the [GitHub Releases page](https://github.com/ErnestAgel/burst-download/releases) (mirror):
+Download the latest binaries from the **official website** [www.burstdownload.com](https://www.burstdownload.com/) — or from the [GitHub Releases page](https://github.com/ErnestAgel/burst-download/releases) (mirror):
 
 | Platform | Package | Run |
 |---|---|---|
@@ -270,7 +270,7 @@ It opens 1–8 parallel HTTP Range connections. Multiple connections add up past
 
 **Where can I download it?**
 
-From [burstdownload.com](https://burstdownload.com/) or the [GitHub Releases page](https://github.com/ErnestAgel/burst-download/releases).
+From [www.burstdownload.com](https://www.burstdownload.com/) or the [GitHub Releases page](https://github.com/ErnestAgel/burst-download/releases).
 
 ---
 
