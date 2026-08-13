@@ -69,7 +69,7 @@ void ApplyOneDark() {
     col[ImGuiCol_Header]               = cFrame;
     col[ImGuiCol_HeaderHovered]        = cFrameHov;
     col[ImGuiCol_HeaderActive]         = cFrameAct;
-    col[ImGuiCol_Separator]            = cBorder;
+    col[ImGuiCol_Separator]            = C(0, 0, 0, 102);  /* 分割线 40% */
     col[ImGuiCol_SeparatorHovered]     = cBlue;
     col[ImGuiCol_SeparatorActive]      = cBlue;
     col[ImGuiCol_ResizeGrip]           = cBorder;
@@ -94,12 +94,12 @@ void ApplyOneDark() {
 
     /* ---- 样式（圆角/间距） ---- */
     s.WindowRounding    = 4.0f;
-    s.ChildRounding     = 4.0f;
-    s.FrameRounding     = 4.0f;
-    s.PopupRounding     = 4.0f;
-    s.ScrollbarRounding = 4.0f;
-    s.GrabRounding      = 4.0f;
-    s.TabRounding       = 4.0f;
+    s.ChildRounding     = 8.0f;   /* 任务列表容器圆角 (rounded-lg) */
+    s.FrameRounding     = 8.0f;   /* 输入框/下拉圆角 (rounded-lg) */
+    s.PopupRounding     = 8.0f;   /* About 下拉圆角 */
+    s.ScrollbarRounding = 8.0f;
+    s.GrabRounding      = 8.0f;
+    s.TabRounding       = 8.0f;
     s.WindowBorderSize  = 1.0f;
     s.ChildBorderSize   = 1.0f;
     s.PopupBorderSize   = 1.0f;

@@ -203,25 +203,43 @@ int RunGui(int argc, char** argv) {
     /* One Dark theme (user-specified palette). */
     theme::ApplyOneDark();
 
-    /* Embedded font (GB2312 full + ASCII, one font for both languages).
-     * 14px matches the web mockup density (text-sm); OversampleH/V raise
-     * the bitmap density for crisper CJK rendering. */
+    /* Embedded font (GB2312 full + ASCII). Two sizes follow the web
+     * mockup density: 14px for inputs/buttons/file names, 11px for
+     * secondary labels/status bar/chips/tooltips.  Sizes scale with the
+     * window DPI so small text stays crisp on high-DPI displays. */
     {
+        float fDpiScale = 1.0f;
+        glfwGetWindowContentScale(window, &fDpiScale, &fDpiScale);
+        if (fDpiScale < 1.0f) {
+            fDpiScale = 1.0f;
+        }
         ImFontConfig cfg;
         cfg.FontDataOwnedByAtlas = false;
-        cfg.OversampleH = 3;
-        cfg.OversampleV = 3;
-        ImFont* font = io.Fonts->AddFontFromMemoryTTF(
+        cfg.OversampleH = 2;
+        cfg.OversampleV = 2;
+        ImFont* pFontMain = io.Fonts->AddFontFromMemoryTTF(
             (void*)third_party_fonts_NotoSansSC_subset_ttf,
-            (int)third_party_fonts_NotoSansSC_subset_ttf_len, 14.0f, &cfg,
-            io.Fonts->GetGlyphRangesChineseFull());
-        if (font == nullptr) {
+            (int)third_party_fonts_NotoSansSC_subset_ttf_len,
+            14.0f * fDpiScale, &cfg, io.Fonts->GetGlyphRangesChineseFull());
+        if (pFontMain == nullptr) {
             ShowFatal("Font loading failed.");
             ImGui::DestroyContext();
             glfwDestroyWindow(window);
             glfwTerminate();
             return 1;
         }
+        ImFont* pFontSmall = io.Fonts->AddFontFromMemoryTTF(
+            (void*)third_party_fonts_NotoSansSC_subset_ttf,
+            (int)third_party_fonts_NotoSansSC_subset_ttf_len,
+            11.0f * fDpiScale, &cfg, io.Fonts->GetGlyphRangesChineseFull());
+        if (pFontSmall == nullptr) {
+            ShowFatal("Font loading failed.");
+            ImGui::DestroyContext();
+            glfwDestroyWindow(window);
+            glfwTerminate();
+            return 1;
+        }
+        ui::SetFonts(pFontMain, pFontSmall);
     }
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window, true) ||

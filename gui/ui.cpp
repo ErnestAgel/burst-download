@@ -58,6 +58,10 @@ const float kTitleBarH = 0.0f;  /* Linux uses the system title bar; the
  * drag and resize). */
 GLFWwindow* g_window = nullptr;
 
+/* Fonts injected by main_gui.cpp: main 14px / small 11px (web density). */
+ImFont* g_pFontMain = nullptr;
+ImFont* g_pFontSmall = nullptr;
+
 /* ---- Form state (UI thread only; worker threads never touch) ---- */
 /* Machine thread cap: adapts 4~8 to the CPU core count (see
  * BurstMaxThreads). */
@@ -75,6 +79,8 @@ void RenderLog(const std::vector<std::string>& log);
 void RenderStatusBar(const std::vector<CTaskModel::TTaskRow>& vecRows,
                      u32 dwMaxSlots);
 void RenderLogSection(CTaskModel& cModel);
+void PushSmallFont();
+void PopSmallFont();
 
 /* Popup state */
 bool g_error_open = false;
@@ -99,6 +105,21 @@ bool g_log_autoscroll = true;
 /* URL input focus request (example chips) and task-log expand state. */
 bool g_focus_url_input = false;
 bool g_log_open = false;
+float g_task_row_h = 118.0f;  /* measured row height (hover bg) */
+
+/** Push the 11px secondary font when available. */
+void PushSmallFont() {
+    if (g_pFontSmall != nullptr) {
+        ImGui::PushFont(g_pFontSmall);
+    }
+}
+
+/** Pop the secondary font (paired with PushSmallFont). */
+void PopSmallFont() {
+    if (g_pFontSmall != nullptr) {
+        ImGui::PopFont();
+    }
+}
 
 #ifdef _WIN32
 /** UTF-16 -> UTF-8. */
@@ -445,6 +466,7 @@ std::string ErrorGuide(const std::string& err) {
 /** Rounded detection chip ("识别: 文件 / 识别: 视频"), overlaid inside the
  *  right edge of the URL box (spec 2.1, web mockup style). */
 void RenderChip(const char* pszText, BOOL32 bVideo, const ImVec2& pos) {
+    PushSmallFont();
     const ImVec2 sz = ImGui::CalcTextSize(pszText);
     const float fH = sz.y + 6.0f;
     const float fW = sz.x + 16.0f;
@@ -457,6 +479,7 @@ void RenderChip(const char* pszText, BOOL32 bVideo, const ImVec2& pos) {
                             : IM_COL32(0x0E, 0xA5, 0xE9, 38);
     dl->AddRectFilled(pos, ImVec2(pos.x + fW, pos.y + fH), colBg, fH * 0.5f);
     dl->AddText(ImVec2(pos.x + 8.0f, pos.y + 3.0f), colText, pszText);
+    PopSmallFont();
 }
 
 /** Blue download button with a small download glyph (spec layout). */
@@ -467,7 +490,9 @@ bool RenderDownloadButton(const char* pszLabel, const ImVec2& size) {
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
                           IM_COL32(0x25, 0x63, 0xEB, 255));
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xFF, 0xFF, 0xFF, 255));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(16, 8));
     const bool bClicked = ImGui::Button("##download_btn", size);
+    ImGui::PopStyleVar();
     const ImVec2 rMin = ImGui::GetItemRectMin();
     const ImVec2 rMax = ImGui::GetItemRectMax();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -490,18 +515,21 @@ bool RenderDownloadButton(const char* pszLabel, const ImVec2& size) {
 /** Small text-style action button (colored text, tinted hover background). */
 bool RenderTextButton(const char* pszLabel, ImU32 colText, ImU32 colHoverBg,
                       const ImVec2& size) {
+    PushSmallFont();
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colHoverBg);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, colHoverBg);
     ImGui::PushStyleColor(ImGuiCol_Text, colText);
     const bool bClicked = ImGui::Button(pszLabel, size);
     ImGui::PopStyleColor(4);
+    PopSmallFont();
     return bClicked;
 }
 
 /** Rounded pill badge (mode / status), translucent background. */
 void RenderPill(const char* pszId, const char* pszText, ImU32 colText,
                 ImU32 colBg, ImU32 colBorder) {
+    PushSmallFont();
     const ImVec2 sz = ImGui::CalcTextSize(pszText);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 size(sz.x + 16.0f, sz.y + 6.0f);
@@ -515,21 +543,24 @@ void RenderPill(const char* pszId, const char* pszText, ImU32 colText,
                     fRadius, 0, 1.0f);
     }
     dl->AddText(ImVec2(pos.x + 8.0f, pos.y + 3.0f), colText, pszText);
+    PopSmallFont();
 }
 
 /** Small bordered title-bar button (web mockup style). */
 bool TitleBarButton(const char* pszLabel, const ImVec2& size) {
+    PushSmallFont();
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          IM_COL32(0x3E, 0x44, 0x52, 90));
+                          IM_COL32(0x3F, 0x3F, 0x46, 102));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          IM_COL32(0x3E, 0x44, 0x52, 140));
+                          IM_COL32(0x3F, 0x3F, 0x46, 140));
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xA1, 0xA1, 0xAA, 255));
     ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x3E, 0x44, 0x52, 255));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
     const bool bClicked = ImGui::Button(pszLabel, size);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(5);
+    PopSmallFont();
     return bClicked;
 }
 
@@ -625,7 +656,7 @@ void RenderSegmentBar(const CTaskModel::TTaskRow& tRow) {
     snprintf(szInfo, sizeof(szInfo), "%.0f%% · %s", tRow.dPercent,
              FormatSpeed(tRow.dSpeed).c_str());
     const float fGap = ImGui::GetStyle().ItemSpacing.x;
-    const float fRightW = ImGui::CalcTextSize(szInfo).x + fGap;
+    const float fRightW = 112.0f;  /* spec C.3: w-28 right-aligned */
     float fAvail = ImGui::GetContentRegionAvail().x - fRightW;
     if (fAvail < 80.0f) {
         fAvail = 80.0f;
@@ -693,25 +724,50 @@ void RenderSegmentBar(const CTaskModel::TTaskRow& tRow) {
                  dPct < 0.0 ? 0.0 : (dPct > 100.0 ? 100.0 : dPct));
         snprintf(buf4, sizeof(buf4), "%s %s", i18n::T("speed"),
                  FormatSpeed(dSpeed).c_str());
+        ImGui::PushStyleColor(ImGuiCol_PopupBg,
+                              IM_COL32(0x18, 0x1B, 0x21, 242));
+        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 220));
         ImGui::BeginTooltip();
+        PushSmallFont();
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0x93, 0xC5, 0xFD, 255));
         ImGui::TextUnformatted(buf1);
         ImGui::PopStyleColor();
         ImGui::TextUnformatted(buf2);
         ImGui::TextUnformatted(buf3);
         ImGui::TextUnformatted(buf4);
+        PopSmallFont();
         ImGui::EndTooltip();
+        ImGui::PopStyleColor(2);
     }
     ImGui::SameLine();
+    const float fTextW = ImGui::CalcTextSize(szInfo).x;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                         (112.0f - fGap - fTextW));
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() -
                          (fBarH + ImGui::GetTextLineHeight()) * 0.5f);
+    PushSmallFont();
     ImGui::Text("%s", szInfo);
+    PopSmallFont();
 }
 
 /** One task row: name + url, pills, segmented bar, meta + actions. */
 void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     const float fGap = ImGui::GetStyle().ItemSpacing.x;
     const float fAvail = ImGui::GetContentRegionAvail().x;
+    /* Row hover background (web: hover:bg rgba(63,63,70,0.40)); the height
+     * is the previous row's measured height, uniform across rows. */
+    const float fRowTop = ImGui::GetCursorScreenPos().y;
+    {
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        const float fRowX0 = ImGui::GetCursorScreenPos().x;
+        if ((m.y >= fRowTop) && (m.y <= fRowTop + g_task_row_h) &&
+            (m.x >= fRowX0) && (m.x <= fRowX0 + fAvail)) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(ImVec2(fRowX0, fRowTop),
+                              ImVec2(fRowX0 + fAvail, fRowTop + g_task_row_h),
+                              IM_COL32(0x3F, 0x3F, 0x46, 102));
+        }
+    }
 
     /* Display name: output basename (+.mp4 for video tasks). */
     std::string strName = tRow.strOutput;
@@ -781,7 +837,9 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     if (strUrlShow != strUrlLine) {
         strUrlShow += "...";
     }
+    PushSmallFont();
     ImGui::TextDisabled("%s", strUrlShow.c_str());
+    PopSmallFont();
 
     /* Segmented per-thread progress + total percent/speed. */
     RenderSegmentBar(tRow);
@@ -823,13 +881,13 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
         const ImU32 colText =
             bStop ? IM_COL32(0xF8, 0x71, 0x71, 255)
                   : (bResume ? IM_COL32(0x4A, 0xDE, 0x80, 255)
-                             : (bDelete ? IM_COL32(0xF8, 0x71, 0x71, 200)
+                             : (bDelete ? IM_COL32(0xA1, 0xA1, 0xAA, 255)
                                         : IM_COL32(0xA1, 0xA1, 0xAA, 255)));
         const ImU32 colHover =
-            bStop ? IM_COL32(0xF8, 0x71, 0x71, 25)
-                  : (bResume ? IM_COL32(0x4A, 0xDE, 0x80, 25)
-                             : (bDelete ? IM_COL32(0xF8, 0x71, 0x71, 18)
-                                        : IM_COL32(0x3E, 0x44, 0x52, 60)));
+            bStop ? IM_COL32(0xEF, 0x44, 0x44, 25)
+                  : (bResume ? IM_COL32(0x22, 0xC5, 0x5E, 25)
+                             : (bDelete ? IM_COL32(0x3F, 0x3F, 0x46, 102)
+                                        : IM_COL32(0x3F, 0x3F, 0x46, 102)));
         if (RenderTextButton(pszAction, colText, colHover, ImVec2(0, 0))) {
             if (bStop) {
                 cModel.CancelTask(tRow.dwModelId);
@@ -850,7 +908,10 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     }
     ImGui::SetCursorPosY(fMetaY);
     ImGui::SetCursorPosX(0.0f);
+    PushSmallFont();
     ImGui::TextDisabled("%s", szMeta);
+    PopSmallFont();
+    g_task_row_h = ImGui::GetCursorScreenPos().y - fRowTop;
 }
 
 /* ---- Add-task form (always usable; the queue decouples input from the
@@ -872,11 +933,13 @@ void RenderAddForm(CTaskModel& cModel) {
         g_focus_url_input = false;
     }
     ImGui::SetNextItemWidth(fAvail - fBtnW - fGap);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 8));
     if (ImGui::InputTextWithHint(
             "##url", i18n::T("placeholder.url.auto"), g_url, sizeof(g_url),
             ImGuiInputTextFlags_EnterReturnsTrue)) {
         AddTaskFromForm(cModel);
     }
+    ImGui::PopStyleVar();
     const ImVec2 vInputMin = ImGui::GetItemRectMin();
     const ImVec2 vInputMax = ImGui::GetItemRectMax();
     ImGui::SameLine();
@@ -914,9 +977,11 @@ void RenderAddForm(CTaskModel& cModel) {
     const float fRowY = ImGui::GetCursorPosY();
     /* Threads combo pinned to the right edge (drawn first). */
     ImGui::SetCursorPosX(fAvail - fThreadsW);
+    PushSmallFont();
     ImGui::Text("%s", i18n::T("label.threads"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(fComboW);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
     char items[128] = {0};
     int off = 0;
     for (int i = 1; i <= kHardwareMax && off < (int)sizeof(items) - 2; i++) {
@@ -929,15 +994,20 @@ void RenderAddForm(CTaskModel& cModel) {
         g_threads = idx + 1;
     }
     ImGui::EndDisabled();
+    ImGui::PopStyleVar();
+    PopSmallFont();
     /* Save path + browse (left side). */
     ImGui::SetCursorPosY(fRowY);
     ImGui::SetCursorPosX(0.0f);
+    PushSmallFont();
     ImGui::Text("%s", i18n::T("label.save_to"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(fPathW < 120.0f ? 120.0f : fPathW);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
     ImGui::InputTextWithHint(
         "##path", i18n::T("placeholder.path.file"), g_path, sizeof(g_path),
         ImGuiInputTextFlags_None);
+    ImGui::PopStyleVar();
     /* Web-style focus ring for the save-path box. */
     if (ImGui::IsItemActive() || ImGui::IsItemFocused()) {
         const ImVec2 vPathMin = ImGui::GetItemRectMin();
@@ -948,6 +1018,7 @@ void RenderAddForm(CTaskModel& cModel) {
     }
 #ifdef _WIN32
     ImGui::SameLine();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
     if (ImGui::Button(i18n::T("button.browse"), ImVec2(fBrowseW, 0))) {
         HRESULT hrCo = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         IFileDialog* pfd = nullptr;
@@ -978,8 +1049,10 @@ void RenderAddForm(CTaskModel& cModel) {
             CoUninitialize();
         }
     }
+    ImGui::PopStyleVar();
 #else
     ImGui::SameLine();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
     if (ImGui::Button(i18n::T("button.browse"), ImVec2(fBrowseW, 0))) {
         g_dirbrowse_open = true;
         g_dirbrowse_dir = (g_path[0] != '\0' && PathExists(g_path))
@@ -992,7 +1065,9 @@ void RenderAddForm(CTaskModel& cModel) {
                 parent.empty() ? std::string("/") : parent.string();
         }
     }
+    ImGui::PopStyleVar();
 #endif
+    PopSmallFont();
 }
 
 void AddTaskFromForm(CTaskModel& cModel) {
@@ -1067,6 +1142,7 @@ void AddTaskFromForm(CTaskModel& cModel) {
 
 /* ---- Example chips (spec 3: fill the URL box) ---- */
 void RenderExamples() {
+    PushSmallFont();
     /* Web label is uppercase ("TRY AN EXAMPLE"); CJK text is unchanged. */
     std::string strLabel = i18n::T("try_example");
     if (i18n::GetLang() == i18n::Lang::En) {
@@ -1095,13 +1171,21 @@ void RenderExamples() {
         if (i > 0u) {
             ImGui::SameLine(0, 6.0f);
         }
+        /* Hover feedback follows the previous frame's chip hover (1-frame
+         * lag is imperceptible); web: border-blue-500/60 + text-blue-300. */
+        const bool bHover = ImGui::IsItemHovered();
         ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0x21, 0x25, 0x2B, 255));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                               IM_COL32(0x2E, 0x33, 0x3D, 255));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,
                               IM_COL32(0x36, 0x3D, 0x4A, 255));
-        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x3F, 0x3F, 0x46, 255));
-        ImGui::PushStyleColor(ImGuiCol_Text, colText);
+        ImGui::PushStyleColor(
+            ImGuiCol_Border,
+            bHover ? IM_COL32(0x3B, 0x82, 0xF6, 153)
+                   : IM_COL32(0x3F, 0x3F, 0x46, 255));
+        ImGui::PushStyleColor(
+            ImGuiCol_Text,
+            bHover ? IM_COL32(0x93, 0xC5, 0xFD, 255) : colText);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 3));
         if (ImGui::Button(kExamples[i].pszLabel)) {
@@ -1111,6 +1195,7 @@ void RenderExamples() {
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(5);
     }
+    PopSmallFont();
 }
 
 /* ---- Task list (spec 2.2/2.4) ---- */
@@ -1135,7 +1220,9 @@ void RenderTaskList(CTaskModel& cModel,
     char szHead[64];
     snprintf(szHead, sizeof(szHead), "%s (%u)", i18n::T("label.tasks"),
              (u32)vecRows.size());
+    PushSmallFont();
     ImGui::Text("%s", szHead);
+    PopSmallFont();
     const float fClearW =
         ImGui::CalcTextSize(i18n::T("label.clear_finished")).x + 16.0f;
     ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - fClearW);
@@ -1152,13 +1239,16 @@ void RenderTaskList(CTaskModel& cModel,
     if (fListH < 100.0f) {
         fListH = 100.0f;
     }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 12));
     ImGui::BeginChild("##tasklist", ImVec2(0, fListH), true);
     if (vecRows.empty()) {
+        PushSmallFont();
         const float fEmptyW = ImGui::CalcTextSize(i18n::T("empty.tasks")).x;
         ImGui::SetCursorPos(
             ImVec2((ImGui::GetContentRegionAvail().x - fEmptyW) * 0.5f,
                    36.0f));
         ImGui::TextDisabled("%s", i18n::T("empty.tasks"));
+        PopSmallFont();
     } else {
         for (const CTaskModel::TTaskRow& tRow : vecRows) {
             ImGui::PushID(static_cast<int>(tRow.dwModelId));
@@ -1168,6 +1258,7 @@ void RenderTaskList(CTaskModel& cModel,
         }
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar();
 }
 
 /* ---- Collapsible log section for the selected task ---- */
@@ -1190,6 +1281,7 @@ void RenderLogSection(CTaskModel& cModel) {
 void RenderStatusBar(const std::vector<CTaskModel::TTaskRow>& vecRows,
                      u32 dwMaxSlots) {
     ImGui::Separator();
+    PushSmallFont();
     const u32 dwTotal = (u32)vecRows.size();
     u32 dwActive = 0;
     double dTotalBytes = 0.0;
@@ -1237,6 +1329,7 @@ void RenderStatusBar(const std::vector<CTaskModel::TTaskRow>& vecRows,
     dl->AddText(ImVec2(pos.x + fBarW + fGap, fCy - ts.y * 0.5f),
                 IM_COL32(0xA1, 0xA1, 0xAA, 255), szRight);
     ImGui::Dummy(ImVec2(fRightW, ImGui::GetTextLineHeight()));
+    PopSmallFont();
 }
 
 /* ---- Log area (F7) ---- */
@@ -1290,6 +1383,7 @@ bool MacCircleButton(float cx, float cy, float d, ImU32 color, ImU32 hover,
 /* ---- About dropdown menu (spec 2.3: version/website/github/issues/license/
  * tech stack/platforms; links open in the default browser) ---- */
 void RenderAboutMenu() {
+    PushSmallFont();
     const struct TAboutRow {
         const char* pszKey;
         std::string strValue;
@@ -1361,6 +1455,7 @@ void RenderAboutMenu() {
         }
         ImGui::EndTable();
     }
+    PopSmallFont();
 }
 
 /* ---- Custom title bar (borderless window): left traffic lights, centered
@@ -1439,15 +1534,17 @@ void RenderTitleBar() {
                                                         : i18n::Lang::Zh);
     }
 
-    /* Centered title text. */
+    /* Centered title text (12px -> small font). */
     char szTitle[128];
     snprintf(szTitle, sizeof(szTitle), "%s v%s", i18n::T("window.title"),
              BURST_VERSION_STRING);
+    PushSmallFont();
     const float fTitleW = ImGui::CalcTextSize(szTitle).x;
     ImGui::SetCursorPos(
         ImVec2((io.DisplaySize.x - fTitleW) * 0.5f,
                (kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::TextDisabled("%s", szTitle);
+    PopSmallFont();
 
     /* Title bar drag: on press, trigger native Windows window dragging
      * (WM_NCLBUTTONDOWN/HTCAPTION); non-Windows falls back to manual
@@ -1493,7 +1590,7 @@ void RenderTitleBar() {
         ImGui::OpenPopup("##about_menu");
     }
     if (g_about_open) {
-        ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(288.0f, 0.0f), ImGuiCond_Always);
         ImGui::SetNextWindowPos(
             ImVec2(fRightX + fAboutW + fGap, fBtnH + 2.0f), ImGuiCond_Always,
             ImVec2(1.0f, 0.0f));
@@ -1506,6 +1603,11 @@ void RenderTitleBar() {
     }
 
     ImGui::End();
+    /* Bottom divider (web: border-b rgba(0,0,0,0.4)). */
+    ImGui::GetWindowDrawList()->AddLine(
+        ImVec2(0.0f, kTitleBarH - 1.0f),
+        ImVec2(io.DisplaySize.x, kTitleBarH - 1.0f),
+        IM_COL32(0, 0, 0, 102), 1.0f);
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 }
@@ -1614,6 +1716,11 @@ void RenderResizeGrip() {
 
 void Init(GLFWwindow* window) {
     g_window = window;
+}
+
+void SetFonts(ImFont* pFontMain, ImFont* pFontSmall) {
+    g_pFontMain = pFontMain;
+    g_pFontSmall = pFontSmall;
 }
 
 bool Render(CTaskModel& cModel) {
