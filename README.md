@@ -2,9 +2,9 @@
 
 [🇬🇧 English](README.md) · [🇨🇳 中文](README_ZH.md)
 
-# ⚡ Burst Download
+# ⚡ Burst Download — Multi-Threaded Download Manager & Video Downloader
 
-**Multi-threaded chunked downloader with video download support**
+**Free, open-source, cross-platform download manager for Windows & Linux. Multi-threaded HTTP Range chunking speeds up large-file downloads, pause & resume continues from where you stopped, and one command downloads videos from Bilibili, YouTube and more.**
 
 ![C/C++](https://img.shields.io/badge/language-C%2FC%2B%2B-blue?style=for-the-badge)
 ![libcurl](https://img.shields.io/badge/libcurl-green?style=for-the-badge&logo=curl&logoColor=white)
@@ -21,7 +21,7 @@
 > ⚡ **Multi-threading**: HTTP Range chunking with 1–8 threads (default adaptive to CPU cores) to saturate bandwidth
 > 📦 **Resume support**: continue from where it stopped instead of restarting
 > 🖥 **Three-platform builds**: Linux x86_64 / ARM64 / Windows; single-file Release per platform
-> 🌐 **Website**: [burst-download.github.io](https://ernestagel.github.io/burst-download/) — landing page with screenshots, usage guide & download links
+> 🌐 **Official website**: [burstdownload.com](https://burstdownload.com/) — download the latest release, screenshots, usage guide & FAQ
 
 </div>
 
@@ -29,7 +29,7 @@
 
 ## ⬇️ Download & Install
 
-Grab the latest binaries from the [Releases page](https://github.com/ErnestAgel/burst-download/releases):
+Download the latest binaries from the **official website** [burstdownload.com](https://burstdownload.com/) — or from the [GitHub Releases page](https://github.com/ErnestAgel/burst-download/releases) (mirror):
 
 | Platform | Package | Run |
 |---|---|---|
@@ -87,7 +87,7 @@ Release signing key fingerprint: `1C5F F3B1 7A21 6A32 1AE1 7566 4A8E 6102 2774 8
 
 ## 💡 Why Burst Download?
 
-**Compared with traditional download tools (curl / wget):**
+**Compared with traditional download tools (curl / wget / aria2):**
 
 | | curl / wget | burst |
 |---|---|---|
@@ -243,6 +243,34 @@ cmake --build build --target burst      # produces burst
 - 🌐 Bilingual UI (menu bar shows target-language hint: `language` in Chinese UI, `中文` in English UI)
 - 🪟 Windows: frameless full-edge resize (left/right/bottom + corners, min 640×480), DPI-aware; Linux: native title bar (drag & resize)
 - 💾 Fonts and third-party libs bundled and distributed with the repo; no extra installs
+
+---
+
+## ❓ FAQ
+
+**Is Burst Download free?**
+
+Yes — it is fully free, **MIT-licensed** open-source software; use, modify and redistribute it without charge.
+
+**Which platforms does it support?**
+
+Windows x86_64, Linux x86_64 and Linux ARM64 (CLI only). The GUI runs on Windows x86_64 and Linux x86_64.
+
+**How do I download videos from Bilibili or YouTube?**
+
+Run `./burst --video "<video page URL>" -o movie`. The built-in parser resolves the media stream, downloads the video and audio tracks in parallel and merges them into one file.
+
+**Does Burst Download support pause and resume?**
+
+Yes. Resume uses chunk-level metadata (`.curlbolt.part`) — only unfinished chunks are re-downloaded.
+
+**Why is it faster than curl or wget?**
+
+It opens 1–8 parallel HTTP Range connections. Multiple connections add up past the single-connection TCP slow-start limit, saturating high-latency or cross-border links.
+
+**Where can I download it?**
+
+From [burstdownload.com](https://burstdownload.com/) or the [GitHub Releases page](https://github.com/ErnestAgel/burst-download/releases).
 
 ---
 

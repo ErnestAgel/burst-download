@@ -2,10 +2,9 @@
 
 [🇨🇳 中文](README_ZH.md) · [🇬🇧 English](README.md)
 
-# ⚡ Burst Download
+# ⚡ Burst Download — 多线程下载管理器 · 视频下载工具
 
-**多线程分片下载器 · 支持视频下载**  
-**Multi-threaded chunked downloader with video download support**
+**免费开源、跨平台的多线程下载管理器（Windows / Linux）：多线程分片加速、断点续传，一条命令下载 B站 / YouTube 等网站视频。**
 
 ![C/C++](https://img.shields.io/badge/language-C%2FC%2B%2B-blue?style=for-the-badge)
 ![libcurl](https://img.shields.io/badge/libcurl-green?style=for-the-badge&logo=curl&logoColor=white)
@@ -21,8 +20,21 @@
 > ⚡ **多线程加速**：HTTP Range 分片，1~8 线程并发（默认按 CPU 核数自适应），榨干带宽
 > 📦 **断点续传**：中断后从断点继续，不重头来
 > 🖥 **三平台构建**：Linux x86_64 / ARM64 / Windows，Release 单文件发布
+> 🌐 **官网**：[burstdownload.com](https://burstdownload.com/) — 下载最新版本，查看截图、使用指南与 FAQ
 
 </div>
+
+---
+
+## ⬇️ 下载 Download
+
+从**官网** [burstdownload.com](https://burstdownload.com/) 下载最新版本（[GitHub Releases](https://github.com/ErnestAgel/burst-download/releases) 为镜像）：
+
+| 平台 Platform | 安装包 Package | 运行 Run |
+|---|---|---|
+| Windows x86_64 | `burst-windows-x86_64.zip`（exe + 运行 dll） | 解压后运行 `burst.exe` |
+| Linux x86_64 | `burst-linux-x86_64`（单文件） | `./burst` |
+| Linux ARM64 | `burst-linux-aarch64`（单文件） | `./burst` |
 
 ---
 
@@ -45,7 +57,7 @@
 
 ## 💡 为什么用 Burst Download？Why Burst Download?
 
-**对比传统下载工具（curl / wget）：**
+**对比传统下载工具（curl / wget / aria2）：**
 
 | | curl / wget | burst |
 |---|---|---|
@@ -212,6 +224,34 @@ cmake --build build --target burst      # 产出 burst
 
 ---
 
+## ❓ 常见问题 FAQ
+
+**Burst Download 免费吗？**
+
+完全免费，采用 **MIT 开源协议**，可自由使用、修改、商用与分发。
+
+**支持哪些平台？**
+
+Windows x86_64、Linux x86_64 与 Linux ARM64（仅 CLI）；图形界面支持 Windows x86_64 与 Linux x86_64。
+
+**怎么下载 B站 / YouTube 视频？**
+
+运行 `./burst --video "视频页URL" -o movie`，自动解析媒体流直链，并行下载音视频轨并合并为单文件。
+
+**支持断点续传吗？**
+
+支持，基于 `.curlbolt.part` 分片级元数据，中断后只重下未完成分片。
+
+**为什么比 curl / wget 快？**
+
+1~8 条 HTTP Range 连接并行，突破单连接 TCP 慢启动限制，高延迟/跨国链路尤其明显。
+
+**在哪里下载？**
+
+[burstdownload.com](https://burstdownload.com/) 或 [GitHub Releases](https://github.com/ErnestAgel/burst-download/releases)。
+
+---
+
 ## ⚠️ 注意事项 Notes
 
 - 需要服务器支持 **HTTP Range**（静态文件服务器通常都支持；不支持时自动退化单线程）；
@@ -247,7 +287,7 @@ This tool is intended only for downloading content **you have the right to obtai
 
 ## 📄 License
 
-本项目采用 **MIT License**（Copyright © 2026 ErnestAgel），允许自由使用、修改、商用与分发。  
+本项目采用 **MIT License**（Copyright © 2026 ErnestAgel），允许自由使用、修改、商用与分发。
 **This project is licensed under the MIT License.**
 
 内置 **FFmpeg**（[LGPL v2.1+](https://www.ffmpeg.org/legal.html)）静态库，仅用于音视频封装合并（remux），未作修改；LGPL 许可要求下，本仓库随附全部源码与链接说明。

@@ -118,7 +118,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot        # scripts/ 上一级 = 仓�
 if (-not $OutDir) { $OutDir = Join-Path (Split-Path -Parent $RepoRoot) 'release-assets' }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-# WSL 内仓库路径:F:\curlbot\burst -> /mnt/f/curlbot/burst
+# WSL 内仓库路径:F:\burstdownload\burst-download -> /mnt/f/burstdownload/burst-download
 $WslRepo = '/mnt/' + $RepoRoot.Substring(0, 1).ToLower() + ($RepoRoot.Substring(2) -replace '\\', '/')
 
 # ---------- 3) 工具链检查 ----------
@@ -141,7 +141,7 @@ Write-Host "[工具] MSYS2: $Msys2Path"
 # Python 3.11 编译工具（B 方案 pyc 化必需）：参数 → 环境变量 → 常见路径
 if (-not $Python311Exe) { $Python311Exe = $env:PYTHON311_EXE }
 if (-not $Python311Exe) {
-    $Python311Exe = @('F:\curlbot\tools\python-3.11.9-embed\python.exe',
+    $Python311Exe = @('F:\burstdownload\tools\python-3.11.9-embed\python.exe',
                       'C:\Python311\python.exe', 'D:\Python311\python.exe') |
         Where-Object { Test-Path $_ } | Select-Object -First 1
 }
