@@ -661,6 +661,12 @@ void RenderSegmentBar(const CTaskModel::TTaskRow& tRow) {
                                   ImVec2(x0 + fFill, pos.y + fBarH * 0.5f),
                                   IM_COL32(0xA8, 0xD5, 0x84, 230), 3.0f, fl);
             }
+            /* Inset top highlight (web: shadow-[inset_0_1px_0_...]). */
+            if (fFill > 1.5f) {
+                dl->AddRectFilled(ImVec2(x0, pos.y),
+                                  ImVec2(x0 + fFill, pos.y + 1.0f),
+                                  IM_COL32(255, 255, 255, 90));
+            }
         }
     }
 
@@ -884,6 +890,12 @@ void RenderAddForm(CTaskModel& cModel) {
                                       0.5f);
         RenderChip(strChip.c_str(), bIsVideo ? TRUE : FALSE, vChipPos);
     }
+    /* Web-style focus ring: blue border while the URL box is active. */
+    if (ImGui::IsItemActive() || ImGui::IsItemFocused()) {
+        ImGui::GetWindowDrawList()->AddRect(
+            vInputMin, vInputMax, IM_COL32(0x3B, 0x82, 0xF6, 255), 5.0f, 0,
+            1.5f);
+    }
     if (RenderDownloadButton(i18n::T("button.download"),
                              ImVec2(fBtnW, 0))) {
         AddTaskFromForm(cModel);
@@ -926,6 +938,14 @@ void RenderAddForm(CTaskModel& cModel) {
     ImGui::InputTextWithHint(
         "##path", i18n::T("placeholder.path.file"), g_path, sizeof(g_path),
         ImGuiInputTextFlags_None);
+    /* Web-style focus ring for the save-path box. */
+    if (ImGui::IsItemActive() || ImGui::IsItemFocused()) {
+        const ImVec2 vPathMin = ImGui::GetItemRectMin();
+        const ImVec2 vPathMax = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddRect(
+            vPathMin, vPathMax, IM_COL32(0x3B, 0x82, 0xF6, 255), 5.0f, 0,
+            1.5f);
+    }
 #ifdef _WIN32
     ImGui::SameLine();
     if (ImGui::Button(i18n::T("button.browse"), ImVec2(fBrowseW, 0))) {
@@ -1047,7 +1067,16 @@ void AddTaskFromForm(CTaskModel& cModel) {
 
 /* ---- Example chips (spec 3: fill the URL box) ---- */
 void RenderExamples() {
-    ImGui::Text("%s", i18n::T("try_example"));
+    /* Web label is uppercase ("TRY AN EXAMPLE"); CJK text is unchanged. */
+    std::string strLabel = i18n::T("try_example");
+    if (i18n::GetLang() == i18n::Lang::En) {
+        for (char& c : strLabel) {
+            if ((c >= 'a') && (c <= 'z')) {
+                c -= 32;
+            }
+        }
+    }
+    ImGui::Text("%s", strLabel.c_str());
     ImGui::SetCursorPosX(0.0f);
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2.0f);
     const std::string strThunder =
