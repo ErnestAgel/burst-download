@@ -25,7 +25,6 @@
 #include "dialogs.h"
 #include "i18n.h"
 #include "imgui.h"
-#include "toggle.h"
 #include "Ccurl.h"  /* MaxThread */
 #include "pathutil.h"
 #include "version.h"
@@ -35,6 +34,8 @@
 #include <commdlg.h>
 #include <shobjidl.h>  /* IFileDialog folder picker */
 #else
+#include <sys/wait.h>
+#include <unistd.h>    /* fork/execlp: open URLs via xdg-open */
 #include <sys/stat.h>
 #include <filesystem>  /* Linux directory browser initial directory */
 #include "dirbrowser.h"
@@ -66,13 +67,14 @@ char g_url[2048] = {0};
 char g_path[2048] = {0};
 int g_threads = BurstDefaultThreads();   /* default = sensible 2~4 */
 
-/* Forward declarations (RenderAddForm is defined before AddTaskFromForm;
- * RenderTaskDetail needs the progress/log renderers). */
+/* Forward declarations. */
 void AddTaskFromForm(CTaskModel& cModel);
-void RenderTaskList(CTaskModel& cModel);
-void RenderTaskDetail(CTaskModel& cModel);
-void RenderProgress(const DownloadSnapshot& snap);
+void RenderTaskList(CTaskModel& cModel,
+                    std::vector<CTaskModel::TTaskRow>& vecRowsOut);
 void RenderLog(const std::vector<std::string>& log);
+void RenderStatusBar(const std::vector<CTaskModel::TTaskRow>& vecRows,
+                     u32 dwMaxSlots);
+void RenderLogSection(CTaskModel& cModel);
 
 /* Popup state */
 bool g_error_open = false;
@@ -93,6 +95,10 @@ std::string g_dirbrowse_dir;
 
 /* Log auto-scroll */
 bool g_log_autoscroll = true;
+
+/* URL input focus request (example chips) and task-log expand state. */
+bool g_focus_url_input = false;
+bool g_log_open = false;
 
 #ifdef _WIN32
 /** UTF-16 -> UTF-8. */
@@ -231,29 +237,127 @@ std::string UrlFileName(const std::string& url) {
 }
 
 /**
- * @brief Heuristic: is this a video page URL (vs a direct file link)?
- * @param strUrl Input URL.
- * @return TRUE for known video page hosts/paths (Bilibili/YouTube etc.).
+ * @brief URL mode auto-detection (UI spec 2.1): known video hosts take
+ *        priority, then path features, then video file extensions.
+ * @param strUrl Input URL (http/https or already decoded real URL).
+ * @return TRUE when the URL should be handled as a video download.
  */
-bool IsVideoPageUrl(const std::string& strUrl) {
+bool IsVideoUrl(const std::string& strUrl) {
     std::string u = strUrl;
     for (char& c : u) {
         if ((c >= 'A') && (c <= 'Z')) {
             c += 32;  /* lowercase for matching */
         }
     }
-    const char* kPatterns[] = {
-        "bilibili.com/video", "bilibili.com/bangumi", "/bv",
-        "b23.tv/", "youtube.com/watch", "youtube.com/shorts",
-        "youtube.com/playlist", "youtu.be/", "v.qq.com/", "iqiyi.com/",
-        "youku.com/", "douyin.com/", "sohu.com/a/",
+    /* Split scheme / host / path. */
+    size_t scheme = u.find("://");
+    size_t hostBegin = (scheme != std::string::npos) ? scheme + 3 : 0;
+    size_t pathBegin = u.find('/', hostBegin);
+    if (pathBegin == std::string::npos) {
+        pathBegin = u.size();
+    }
+    std::string host = u.substr(hostBegin, pathBegin - hostBegin);
+    size_t colon = host.find(':');
+    if (colon != std::string::npos) {
+        host = host.substr(0, colon);
+    }
+    /* 1. Known video domains (host or any subdomain). */
+    const char* kVideoHosts[] = {
+        "bilibili.com",   "youtube.com",   "youtu.be",
+        "vimeo.com",      "dailymotion.com", "twitch.tv",
+        "tiktok.com",     "douyin.com",    "iqiyi.com",
+        "youku.com",      "v.qq.com",      "sohu.com",
+        "mgtv.com",
     };
-    for (const char* pszPattern : kPatterns) {
-        if (u.find(pszPattern) != std::string::npos) {
+    for (const char* pszHost : kVideoHosts) {
+        if ((host == pszHost) ||
+            (host.size() > strlen(pszHost) &&
+             host.compare(host.size() - strlen(pszHost) - 1,
+                          strlen(pszHost) + 1, std::string(".") + pszHost) ==
+                 0)) {
+            return true;
+        }
+    }
+    /* 2. Path features: /video/ segment or /watch|/play|/bangumi prefix. */
+    const std::string path = u.substr(pathBegin);
+    if (path.find("/video/") != std::string::npos) {
+        return true;
+    }
+    if ((path.rfind("/watch", 0) == 0) || (path.rfind("/play", 0) == 0) ||
+        (path.rfind("/bangumi", 0) == 0)) {
+        return true;
+    }
+    /* 3. Direct video file extensions. */
+    const char* kVideoExts[] = {
+        ".mp4", ".mkv", ".webm", ".mov", ".flv",
+        ".avi", ".ts",  ".m3u8", ".m4v",
+    };
+    for (const char* pszExt : kVideoExts) {
+        if (path.size() >= strlen(pszExt) &&
+            path.compare(path.size() - strlen(pszExt), strlen(pszExt),
+                         pszExt) == 0) {
             return true;
         }
     }
     return false;
+}
+
+/** Base64 encode (used to build the thunder:// example chip; no
+ *  third-party dependency, mirrors Base64Decode above). */
+std::string Base64Encode(const std::string& in) {
+    static const char tbl[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((in.size() + 2) / 3) * 4);
+    for (size_t i = 0; i < in.size(); i += 3) {
+        const u32 dw0 = (u8)in[i];
+        const u32 dw1 = (i + 1 < in.size()) ? (u8)in[i + 1] : 0u;
+        const u32 dw2 = (i + 2 < in.size()) ? (u8)in[i + 2] : 0u;
+        const u32 dwTri = (dw0 << 16) | (dw1 << 8) | dw2;
+        out.push_back(tbl[(dwTri >> 18) & 0x3Fu]);
+        out.push_back(tbl[(dwTri >> 12) & 0x3Fu]);
+        out.push_back((i + 1 < in.size()) ? tbl[(dwTri >> 6) & 0x3Fu] : '=');
+        out.push_back((i + 2 < in.size()) ? tbl[dwTri & 0x3Fu] : '=');
+    }
+    return out;
+}
+
+/** Format a byte rate (B/s) as "8.3 MB/s" / "512 KB/s". */
+std::string FormatSpeed(double dBytesPerSec) {
+    char buf[48];
+    const double dMb = dBytesPerSec / (1024.0 * 1024.0);
+    if (dMb >= 1.0) {
+        snprintf(buf, sizeof(buf), "%.1f MB/s", dMb);
+    } else {
+        snprintf(buf, sizeof(buf), "%.0f KB/s", dMb * 1024.0);
+    }
+    return std::string(buf);
+}
+
+/** Format a byte count as "512 MB" / "1.5 GB". */
+std::string FormatSizeBytes(long long llBytes) {
+    char buf[48];
+    const double dMb = (double)llBytes / (1024.0 * 1024.0);
+    if (dMb >= 1024.0) {
+        snprintf(buf, sizeof(buf), "%.1f GB", dMb / 1024.0);
+    } else {
+        snprintf(buf, sizeof(buf), "%.0f MB", dMb);
+    }
+    return std::string(buf);
+}
+
+/** Open a URL in the system default browser (UI thread only). */
+void OpenUrl(const std::string& strUrl) {
+#ifdef _WIN32
+    ShellExecuteW(NULL, L"open", Utf8ToWide(strUrl).c_str(), NULL, NULL,
+                  SW_SHOWNORMAL);
+#else
+    pid_t pid = fork();
+    if (pid == 0) {
+        execlp("xdg-open", "xdg-open", strUrl.c_str(), (char*)nullptr);
+        _exit(1);
+    }
+#endif
 }
 
 /** Whether the path should be treated as a directory: it exists and is a
@@ -336,23 +440,492 @@ std::string ErrorGuide(const std::string& err) {
     return i18n::T("err.guide.generic");
 }
 
+/* ---- Small UI widgets (pills / text buttons / chips) ---- */
+
+/** Rounded detection chip ("识别: 文件 / 识别: 视频"), shown next to the URL
+ *  box (spec 2.1). */
+void RenderChip(const char* pszText, BOOL32 bVideo) {
+    const ImVec2 sz = ImGui::CalcTextSize(pszText);
+    const float fH = sz.y + 6.0f;
+    const float fW = sz.x + 16.0f;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##chip", ImVec2(fW, fH));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 colText = (bVideo != FALSE)
+                              ? IM_COL32(0xC6, 0x78, 0xDD, 255)
+                              : IM_COL32(0x61, 0xAF, 0xEF, 255);
+    const ImU32 colBg = (bVideo != FALSE)
+                            ? IM_COL32(0xC6, 0x78, 0xDD, 38)
+                            : IM_COL32(0x61, 0xAF, 0xEF, 38);
+    dl->AddRectFilled(pos, ImVec2(pos.x + fW, pos.y + fH), colBg, fH * 0.5f);
+    dl->AddText(ImVec2(pos.x + 8.0f, pos.y + 3.0f), colText, pszText);
+}
+
+/** Blue download button with a small download glyph (spec layout). */
+bool RenderDownloadButton(const char* pszLabel, const ImVec2& size) {
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0x3D, 0x7E, 0xF0, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          IM_COL32(0x60, 0x9A, 0xFF, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          IM_COL32(0x2F, 0x6A, 0xD8, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xFF, 0xFF, 0xFF, 255));
+    const bool bClicked = ImGui::Button("##download_btn", size);
+    const ImVec2 rMin = ImGui::GetItemRectMin();
+    const ImVec2 rMax = ImGui::GetItemRectMax();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float cy = (rMin.y + rMax.y) * 0.5f;
+    const float cx = rMin.x + 22.0f;
+    const ImU32 col = IM_COL32(0xFF, 0xFF, 0xFF, 235);
+    dl->AddLine(ImVec2(cx, cy - 4.0f), ImVec2(cx, cy + 2.0f), col, 1.5f);
+    dl->AddLine(ImVec2(cx - 3.5f, cy - 1.0f), ImVec2(cx, cy + 2.0f), col,
+                1.5f);
+    dl->AddLine(ImVec2(cx + 3.5f, cy - 1.0f), ImVec2(cx, cy + 2.0f), col,
+                1.5f);
+    dl->AddLine(ImVec2(cx - 4.5f, cy + 4.5f), ImVec2(cx + 4.5f, cy + 4.5f),
+                col, 1.5f);
+    const ImVec2 ts = ImGui::CalcTextSize(pszLabel);
+    dl->AddText(ImVec2(cx + 14.0f, cy - ts.y * 0.5f), col, pszLabel);
+    ImGui::PopStyleColor(4);
+    return bClicked;
+}
+
+/** Small text-style action button (colored text, tinted hover background). */
+bool RenderTextButton(const char* pszLabel, ImU32 colText, ImU32 colHoverBg,
+                      const ImVec2& size) {
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colHoverBg);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, colHoverBg);
+    ImGui::PushStyleColor(ImGuiCol_Text, colText);
+    const bool bClicked = ImGui::Button(pszLabel, size);
+    ImGui::PopStyleColor(4);
+    return bClicked;
+}
+
+/** Rounded pill badge (mode / status), translucent background. */
+void RenderPill(const char* pszId, const char* pszText, ImU32 colText,
+                ImU32 colBg, ImU32 colBorder) {
+    const ImVec2 sz = ImGui::CalcTextSize(pszText);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 size(sz.x + 16.0f, sz.y + 6.0f);
+    ImGui::InvisibleButton(pszId, size);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float fRadius = size.y * 0.5f;
+    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), colBg,
+                      fRadius);
+    if (colBorder != 0) {
+        dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), colBorder,
+                    fRadius, 0, 1.0f);
+    }
+    dl->AddText(ImVec2(pos.x + 8.0f, pos.y + 3.0f), colText, pszText);
+}
+
+/** Small bordered title-bar button (web mockup style). */
+bool TitleBarButton(const char* pszLabel, const ImVec2& size) {
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          IM_COL32(0x3E, 0x44, 0x52, 90));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          IM_COL32(0x3E, 0x44, 0x52, 140));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xA1, 0xA8, 0xB6, 255));
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x3E, 0x44, 0x52, 255));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    const bool bClicked = ImGui::Button(pszLabel, size);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(5);
+    return bClicked;
+}
+
+/* ---- Task row rendering (spec 2.4: segmented per-thread bars) ---- */
+
+/** Status pill text for a row (queued / stopped / stages / percent). */
+std::string StatusText(const CTaskModel::TTaskRow& tRow) {
+    switch (tRow.emState) {
+        case emTaskPending:
+            return std::string(i18n::T("status.queued"));
+        case emTaskCanceled:
+            return std::string(i18n::T("status.stopped"));
+        case emTaskDone:
+            return std::string(i18n::T("stage.done"));
+        case emTaskError:
+            return std::string(i18n::T("stage.error"));
+        case emTaskRunning:
+        default:
+            break;
+    }
+    if (tRow.bVideo != FALSE) {
+        switch (tRow.nStage) {
+            case STAGE_PARSING:
+                return std::string(i18n::T("stage.parsing"));
+            case STAGE_VIDEO_DL:
+                return std::string(i18n::T("stage.video"));
+            case STAGE_AUDIO_DL:
+                return std::string(i18n::T("stage.audio"));
+            case STAGE_MERGING:
+                return std::string(i18n::T("stage.merging"));
+            default:
+                break;
+        }
+    }
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s %.0f%%", i18n::T("stage.downloading"),
+             tRow.dPercent);
+    return std::string(buf);
+}
+
+/** Status pill colors (web mockup palette). */
+void StatusColors(const CTaskModel::TTaskRow& tRow, ImU32& colText,
+                  ImU32& colBg) {
+    switch (tRow.emState) {
+        case emTaskRunning:
+            colText = IM_COL32(0x61, 0xAF, 0xEF, 255);
+            colBg = IM_COL32(0x61, 0xAF, 0xEF, 38);
+            break;
+        case emTaskPending:
+            colText = IM_COL32(0xA1, 0xA1, 0xAA, 255);
+            colBg = IM_COL32(0xA1, 0xA1, 0xAA, 25);
+            break;
+        case emTaskCanceled:
+            colText = IM_COL32(0xE5, 0xC0, 0x7B, 255);
+            colBg = IM_COL32(0xE5, 0xC0, 0x7B, 38);
+            break;
+        case emTaskDone:
+            colText = IM_COL32(0x98, 0xC3, 0x79, 255);
+            colBg = IM_COL32(0x98, 0xC3, 0x79, 38);
+            break;
+        case emTaskError:
+        default:
+            colText = IM_COL32(0xE0, 0x6C, 0x75, 255);
+            colBg = IM_COL32(0xE0, 0x6C, 0x75, 38);
+            break;
+    }
+}
+
+/** Per-chunk progress percentage (0-100 within its own chunk). */
+double ChunkPercent(const CTaskModel::TTaskRow& tRow, int nIndex) {
+    if (nIndex >= 0 && nIndex < (int)tRow.vecThreads.size()) {
+        const ThreadProgress& t = tRow.vecThreads[nIndex];
+        const double dSegTotal = (double)(t.total - t.file_start);
+        if (dSegTotal > 0.0) {
+            return (double)(t.downloaded - t.file_start) / dSegTotal * 100.0;
+        }
+    }
+    return tRow.dPercent;
+}
+
+/** Per-chunk speed (B/s). */
+double ChunkSpeed(const CTaskModel::TTaskRow& tRow, int nIndex) {
+    if (nIndex >= 0 && nIndex < (int)tRow.vecThreads.size()) {
+        return tRow.vecThreads[nIndex].speed;
+    }
+    return 0.0;
+}
+
+/** Segmented progress bar: one track per thread with a hover tooltip
+ *  (ImGui tooltips are separate windows, never clipped by the list). */
+void RenderSegmentBar(const CTaskModel::TTaskRow& tRow) {
+    char szInfo[96];
+    snprintf(szInfo, sizeof(szInfo), "%.0f%% · %s", tRow.dPercent,
+             FormatSpeed(tRow.dSpeed).c_str());
+    const float fGap = ImGui::GetStyle().ItemSpacing.x;
+    const float fRightW = ImGui::CalcTextSize(szInfo).x + fGap;
+    float fAvail = ImGui::GetContentRegionAvail().x - fRightW;
+    if (fAvail < 80.0f) {
+        fAvail = 80.0f;
+    }
+    int nSegs = (int)tRow.vecThreads.size();
+    if (nSegs <= 0) {
+        nSegs = (tRow.nThreads > 0) ? tRow.nThreads : 1;
+    }
+    const float fSegGap = 3.0f;
+    const float fSegW =
+        (fAvail - fSegGap * (float)(nSegs - 1)) / (float)nSegs;
+    const float fBarH = 20.0f;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    for (int i = 0; i < nSegs; ++i) {
+        const float x0 = pos.x + (float)i * (fSegW + fSegGap);
+        const ImVec2 a(x0, pos.y);
+        const ImVec2 b(x0 + fSegW, pos.y + fBarH);
+        dl->AddRectFilled(a, b, IM_COL32(0x3B, 0x40, 0x50, 255), 3.0f);
+        double dPct = ChunkPercent(tRow, i);
+        if (dPct < 0.0) dPct = 0.0;
+        if (dPct > 100.0) dPct = 100.0;
+        const float fFill = (float)(dPct / 100.0) * fSegW;
+        if (fFill > 0.5f) {
+            const ImDrawFlags fl = (dPct >= 99.9)
+                                       ? ImDrawFlags_RoundCornersAll
+                                       : ImDrawFlags_RoundCornersLeft;
+            dl->AddRectFilled(a, ImVec2(x0 + fFill, pos.y + fBarH),
+                              IM_COL32(0x6F, 0xA3, 0x4C, 255), 3.0f, fl);
+            if (fFill > 4.0f) {
+                dl->AddRectFilled(a,
+                                  ImVec2(x0 + fFill, pos.y + fBarH * 0.5f),
+                                  IM_COL32(0xA8, 0xD5, 0x84, 230), 3.0f, fl);
+            }
+        }
+    }
+
+    /* Hover hit area over the whole bar; map the mouse to a chunk. */
+    ImGui::InvisibleButton("##segs", ImVec2(fAvail, fBarH));
+    if (ImGui::IsItemHovered()) {
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        int nIdx = (int)((m.x - pos.x) / (fSegW + fSegGap));
+        if (nIdx < 0) nIdx = 0;
+        if (nIdx >= nSegs) nIdx = nSegs - 1;
+        const double dPct = ChunkPercent(tRow, nIdx);
+        const double dSpeed = ChunkSpeed(tRow, nIdx);
+        const long long llChunk = (tRow.llFileTotal > 0)
+                                      ? tRow.llFileTotal / nSegs
+                                      : 0;
+        const int nStart = (int)((double)nIdx / nSegs * 100.0);
+        const int nEnd = (int)((double)(nIdx + 1) / nSegs * 100.0);
+        char buf1[160], buf2[96], buf3[96], buf4[96];
+        snprintf(buf1, sizeof(buf1), "%s %d · %s", i18n::T("label.thread"),
+                 nIdx + 1, FormatSizeBytes(llChunk).c_str());
+        snprintf(buf2, sizeof(buf2), "%s %d–%d%%", i18n::T("chunk"), nStart,
+                 nEnd);
+        snprintf(buf3, sizeof(buf3), "%s %.0f%%", i18n::T("progress"),
+                 dPct < 0.0 ? 0.0 : (dPct > 100.0 ? 100.0 : dPct));
+        snprintf(buf4, sizeof(buf4), "%s %s", i18n::T("speed"),
+                 FormatSpeed(dSpeed).c_str());
+        ImGui::BeginTooltip();
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0x61, 0xAF, 0xEF, 255));
+        ImGui::TextUnformatted(buf1);
+        ImGui::PopStyleColor();
+        ImGui::TextUnformatted(buf2);
+        ImGui::TextUnformatted(buf3);
+        ImGui::TextUnformatted(buf4);
+        ImGui::EndTooltip();
+    }
+    ImGui::SameLine();
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() -
+                         (fBarH + ImGui::GetTextLineHeight()) * 0.5f);
+    ImGui::Text("%s", szInfo);
+}
+
+/** One task row: name + url, pills, segmented bar, meta + actions. */
+void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
+    const float fGap = ImGui::GetStyle().ItemSpacing.x;
+    const float fAvail = ImGui::GetContentRegionAvail().x;
+
+    /* Display name: output basename (+.mp4 for video tasks). */
+    std::string strName = tRow.strOutput;
+    const size_t slash = strName.find_last_of("/\\");
+    if (slash != std::string::npos) {
+        strName = strName.substr(slash + 1);
+    }
+    if (tRow.bVideo != FALSE) {
+        const char* kVideoExts[] = {".mp4", ".mkv", ".webm", ".mov", ".flv"};
+        BOOL32 bHasExt = FALSE;
+        for (const char* pszExt : kVideoExts) {
+            if (strName.size() >= strlen(pszExt) &&
+                strName.compare(strName.size() - strlen(pszExt),
+                                strlen(pszExt), pszExt) == 0) {
+                bHasExt = TRUE;
+                break;
+            }
+        }
+        if (bHasExt == FALSE) {
+            strName += ".mp4";
+        }
+    }
+    if (strName.empty()) {
+        strName = UrlFileName(tRow.strUrl);
+    }
+
+    const char* pszMode = (tRow.bVideo != FALSE)
+                              ? i18n::T("label.type_video")
+                              : i18n::T("label.type_file");
+    const std::string strStatus = StatusText(tRow);
+    ImU32 colStatusText = 0;
+    ImU32 colStatusBg = 0;
+    StatusColors(tRow, colStatusText, colStatusBg);
+
+    const float fModeW = ImGui::CalcTextSize(pszMode).x + 16.0f;
+    const float fStatusW = ImGui::CalcTextSize(strStatus.c_str()).x + 16.0f;
+    const float fRightW = fModeW + fStatusW + fGap * 2.0f;
+    const float fLeftW = fAvail - fRightW;
+    const float fRowY = ImGui::GetCursorPosY();
+
+    /* Right side: mode badge + status pill (pinned to the right edge). */
+    ImGui::SetCursorPosX(fLeftW);
+    RenderPill("##mode_pill", pszMode, IM_COL32(0xA1, 0xA1, 0xAA, 255),
+               IM_COL32(0xA1, 0xA1, 0xAA, 25),
+               IM_COL32(0x3E, 0x44, 0x52, 255));
+    ImGui::SameLine(0, fGap);
+    RenderPill("##status_pill", strStatus.c_str(), colStatusText, colStatusBg,
+               0);
+
+    /* Left side: selectable file name (selects the detail log). */
+    ImGui::SetCursorPosY(fRowY);
+    ImGui::SetCursorPosX(0.0f);
+    if (ImGui::Selectable(strName.c_str(),
+                          g_selected_model_id == tRow.dwModelId, 0,
+                          ImVec2(fLeftW, 0))) {
+        g_selected_model_id = tRow.dwModelId;
+    }
+    /* URL line (thunder:// prefix when decoded), truncated to fit. */
+    const std::string strUrlLine =
+        (tRow.bDecoded != FALSE) ? "thunder:// -> " + tRow.strUrl
+                                 : tRow.strUrl;
+    std::string strUrlShow = strUrlLine;
+    while (!strUrlShow.empty() &&
+           ImGui::CalcTextSize(strUrlShow.c_str()).x > fLeftW) {
+        strUrlShow.pop_back();
+    }
+    if (strUrlShow != strUrlLine) {
+        strUrlShow += "...";
+    }
+    ImGui::TextDisabled("%s", strUrlShow.c_str());
+
+    /* Segmented per-thread progress + total percent/speed. */
+    RenderSegmentBar(tRow);
+
+    /* Meta row: size · threads (left) + actions (right). */
+    char szMeta[160];
+    snprintf(szMeta, sizeof(szMeta), "%s · %d %s",
+             FormatSizeBytes(tRow.llFileTotal).c_str(), tRow.nThreads,
+             i18n::T("unit.threads"));
+    std::vector<const char*> vecActions;
+    if ((tRow.emState == emTaskRunning) || (tRow.emState == emTaskPending)) {
+        vecActions.push_back(i18n::T("button.stop"));
+        vecActions.push_back(i18n::T("button.delete"));
+    } else if (tRow.emState == emTaskCanceled) {
+        vecActions.push_back(i18n::T("button.resume"));
+        vecActions.push_back(i18n::T("button.delete"));
+    } else {
+        vecActions.push_back(i18n::T("button.remove"));
+    }
+    float fActionsW = 0.0f;
+    for (const char* pszAction : vecActions) {
+        fActionsW += ImGui::CalcTextSize(pszAction).x + 16.0f;
+    }
+    fActionsW += fGap * (float)(vecActions.size() - 1u);
+    const float fMetaY = ImGui::GetCursorPosY();
+    ImGui::SetCursorPosX(fAvail - fActionsW);
+    for (size_t i = 0; i < vecActions.size(); ++i) {
+        if (i > 0u) {
+            ImGui::SameLine(0, fGap);
+        }
+        const char* pszAction = vecActions[i];
+        const BOOL32 bStop = (strcmp(pszAction, i18n::T("button.stop")) == 0);
+        const BOOL32 bResume =
+            (strcmp(pszAction, i18n::T("button.resume")) == 0);
+        const BOOL32 bDelete =
+            (strcmp(pszAction, i18n::T("button.delete")) == 0);
+        const BOOL32 bRemove =
+            (strcmp(pszAction, i18n::T("button.remove")) == 0);
+        const ImU32 colText =
+            bStop ? IM_COL32(0xE0, 0x6C, 0x75, 255)
+                  : (bResume ? IM_COL32(0x98, 0xC3, 0x79, 255)
+                             : (bDelete ? IM_COL32(0xE0, 0x6C, 0x75, 200)
+                                        : IM_COL32(0xA1, 0xA1, 0xAA, 255)));
+        const ImU32 colHover =
+            bStop ? IM_COL32(0xE0, 0x6C, 0x75, 25)
+                  : (bResume ? IM_COL32(0x98, 0xC3, 0x79, 25)
+                             : (bDelete ? IM_COL32(0xE0, 0x6C, 0x75, 18)
+                                        : IM_COL32(0x3E, 0x44, 0x52, 60)));
+        if (RenderTextButton(pszAction, colText, colHover, ImVec2(0, 0))) {
+            if (bStop) {
+                cModel.CancelTask(tRow.dwModelId);
+            } else if (bResume) {
+                cModel.ResumeTask(tRow.dwModelId);
+            } else if (bDelete) {
+                cModel.DeleteTask(tRow.dwModelId);
+                if (g_selected_model_id == tRow.dwModelId) {
+                    g_selected_model_id = 0;
+                }
+            } else if (bRemove) {
+                cModel.RemoveTask(tRow.dwModelId);
+                if (g_selected_model_id == tRow.dwModelId) {
+                    g_selected_model_id = 0;
+                }
+            }
+        }
+    }
+    ImGui::SetCursorPosY(fMetaY);
+    ImGui::SetCursorPosX(0.0f);
+    ImGui::TextDisabled("%s", szMeta);
+}
+
 /* ---- Add-task form (always usable; the queue decouples input from the
  *      running tasks, P5-4) ---- */
 void RenderAddForm(CTaskModel& cModel) {
-    /* URL input: file/video is auto-detected (no mode switch). */
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint(
-        "##url", i18n::T("placeholder.url.auto"),
-        g_url, sizeof(g_url), ImGuiInputTextFlags_None);
+    const float fAvail = ImGui::GetContentRegionAvail().x;
+    const float fGap = ImGui::GetStyle().ItemSpacing.x;
 
-    /* Save path + browse. */
-    ImGui::SetNextItemWidth(-70.0f);
+    /* Row 1: URL input + detection chip + download button (spec 2.1). */
+    const bool bHasUrl = g_url[0] != '\0';
+    const bool bIsVideo = bHasUrl ? IsVideoUrl(g_url) : false;
+    const std::string strChip = std::string(i18n::T("detected")) + ": " +
+                                (bIsVideo ? i18n::T("label.type_video")
+                                          : i18n::T("label.type_file"));
+    const float fChipW = ImGui::CalcTextSize(strChip.c_str()).x + 18.0f;
+    const float fBtnW =
+        ImGui::CalcTextSize(i18n::T("button.download")).x + 48.0f;
+    if (g_focus_url_input) {
+        ImGui::SetKeyboardFocusHere();
+        g_focus_url_input = false;
+    }
+    ImGui::SetNextItemWidth(fAvail - fChipW - fBtnW - fGap * 2.0f);
+    if (ImGui::InputTextWithHint(
+            "##url", i18n::T("placeholder.url.auto"), g_url, sizeof(g_url),
+            ImGuiInputTextFlags_EnterReturnsTrue)) {
+        AddTaskFromForm(cModel);
+    }
+    ImGui::SameLine();
+    if (bHasUrl) {
+        RenderChip(strChip.c_str(), bIsVideo ? TRUE : FALSE);
+    } else {
+        ImGui::Dummy(ImVec2(fChipW, 0.0f));
+    }
+    ImGui::SameLine();
+    if (RenderDownloadButton(i18n::T("button.download"),
+                             ImVec2(fBtnW, 0))) {
+        AddTaskFromForm(cModel);
+    }
+
+    /* Row 2: save-to + browse (left), threads combo (right). */
+    const float fLabelW =
+        ImGui::CalcTextSize(i18n::T("label.save_to")).x + fGap;
+    const float fThreadsLabelW =
+        ImGui::CalcTextSize(i18n::T("label.threads")).x;
+    const float fComboW = 64.0f;
+    const float fThreadsW = fThreadsLabelW + fComboW + fGap * 3.0f;
+    const float fBrowseW = 64.0f;
+    const float fPathW =
+        fAvail - fLabelW - fThreadsW - fBrowseW - fGap * 4.0f;
+    const float fRowY = ImGui::GetCursorPosY();
+    /* Threads combo pinned to the right edge (drawn first). */
+    ImGui::SetCursorPosX(fAvail - fThreadsW);
+    ImGui::Text("%s", i18n::T("label.threads"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(fComboW);
+    char items[128] = {0};
+    int off = 0;
+    for (int i = 1; i <= kHardwareMax && off < (int)sizeof(items) - 2; i++) {
+        off += snprintf(items + off, sizeof(items) - off, "%d%c", i, '\0');
+    }
+    int idx = (g_threads >= 1 && g_threads <= kHardwareMax) ? g_threads - 1
+                                                            : 0;
+    ImGui::BeginDisabled(cModel.ActiveCount() > 0u);
+    if (ImGui::Combo("##threads", &idx, items, kHardwareMax)) {
+        g_threads = idx + 1;
+    }
+    ImGui::EndDisabled();
+    /* Save path + browse (left side). */
+    ImGui::SetCursorPosY(fRowY);
+    ImGui::SetCursorPosX(0.0f);
+    ImGui::Text("%s", i18n::T("label.save_to"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(fPathW < 120.0f ? 120.0f : fPathW);
     ImGui::InputTextWithHint(
-        "##path", i18n::T("placeholder.path.file"),
-        g_path, sizeof(g_path), ImGuiInputTextFlags_None);
+        "##path", i18n::T("placeholder.path.file"), g_path, sizeof(g_path),
+        ImGuiInputTextFlags_None);
 #ifdef _WIN32
     ImGui::SameLine();
-    if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0))) {
+    if (ImGui::Button(i18n::T("button.browse"), ImVec2(fBrowseW, 0))) {
         HRESULT hrCo = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         IFileDialog* pfd = nullptr;
         HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, NULL,
@@ -384,7 +957,7 @@ void RenderAddForm(CTaskModel& cModel) {
     }
 #else
     ImGui::SameLine();
-    if (ImGui::Button(i18n::T("button.browse"), ImVec2(60, 0))) {
+    if (ImGui::Button(i18n::T("button.browse"), ImVec2(fBrowseW, 0))) {
         g_dirbrowse_open = true;
         g_dirbrowse_dir = (g_path[0] != '\0' && PathExists(g_path))
                               ? g_path
@@ -397,43 +970,14 @@ void RenderAddForm(CTaskModel& cModel) {
         }
     }
 #endif
-
-    /* Threads: combo 1..kHardwareMax; locked while tasks are active (P8:
-     * the download pool size is fixed once the queue is running). */
-    ImGui::Text("%s:", i18n::T("label.threads"));
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    char items[128] = {0};
-    int off = 0;
-    for (int i = 1; i <= kHardwareMax && off < (int)sizeof(items) - 2; i++) {
-        off += snprintf(items + off, sizeof(items) - off, "%d%c", i, '\0');
-    }
-    int idx = (g_threads >= 1 && g_threads <= kHardwareMax) ? g_threads - 1 : 0;
-    ImGui::BeginDisabled(cModel.ActiveCount() > 0u);
-    if (ImGui::Combo("##threads", &idx, items, kHardwareMax)) {
-        g_threads = idx + 1;
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    {
-        char buf[128];
-        snprintf(buf, sizeof(buf), i18n::T("hint.threads"), kHardwareMax);
-        ImGui::TextDisabled("%s", buf);
-    }
-
-    ImGui::Separator();
-    if (ImGui::Button(i18n::T("button.add"), ImVec2(160, 0))) {
-        AddTaskFromForm(cModel);
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", i18n::T("label.add_hint"));
 }
 
 void AddTaskFromForm(CTaskModel& cModel) {
     std::string url(g_url);
     std::string path(g_path);
+    BOOL32 bDecoded = FALSE;
 
-    /* Decode thunder:// links to real URLs. */
+    /* Decode thunder:// links to real URLs (spec 2.1). */
     if (url.rfind("thunder://", 0) == 0) {
         std::string decoded = ThunderDecode(url);
         if (decoded.empty() || !UrlSchemeOk(decoded)) {
@@ -443,8 +987,13 @@ void AddTaskFromForm(CTaskModel& cModel) {
         }
         snprintf(g_url, sizeof(g_url), "%s", decoded.c_str());
         url = decoded;
+        bDecoded = TRUE;
     }
-    if (url.empty() || !UrlSchemeOk(url)) {
+    if (url.empty()) {
+        g_focus_url_input = true;  /* web behavior: focus, no error popup */
+        return;
+    }
+    if (!UrlSchemeOk(url)) {
         ShowErrorPopup(i18n::T("dialog.error.title"),
                        i18n::T("err.url.invalid"));
         return;
@@ -455,9 +1004,8 @@ void AddTaskFromForm(CTaskModel& cModel) {
         return;
     }
 
-    /* Auto-classify: video page URLs go to the video pipeline, everything
-     * else is a plain file download. */
-    if (IsVideoPageUrl(url)) {
+    /* Auto-classify on the decoded URL (spec 2.1 priority order). */
+    if (IsVideoUrl(url)) {
         std::string base = UrlFileName(url);
         size_t dot = base.find_last_of('.');
         if (dot != std::string::npos) {
@@ -468,7 +1016,8 @@ void AddTaskFromForm(CTaskModel& cModel) {
         }
         const std::string basename =
             JoinPath(path, base + "_" + CurrentTimeStamp());
-        if (cModel.AddVideoTask(url, basename, g_threads, 60, FALSE) == 0) {
+        if (cModel.AddVideoTask(url, basename, g_threads, 60, FALSE,
+                                bDecoded) == 0) {
             ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
         } else {
             g_url[0] = '\0';  /* clear the URL after a successful add */
@@ -486,35 +1035,59 @@ void AddTaskFromForm(CTaskModel& cModel) {
     if (PathExists(path)) {
         path = StampName(path);
     }
-    if (cModel.AddFileTask(url, path, g_threads, 60, FALSE) == 0) {
+    if (cModel.AddFileTask(url, path, g_threads, 60, FALSE, bDecoded) == 0) {
         ShowErrorPopup(i18n::T("dialog.error.title"), i18n::T("err.busy"));
     } else {
         g_url[0] = '\0';  /* clear the URL after a successful add */
     }
 }
 
-/* ---- Task list (P5-4): one row per download task ---- */
-void RenderTaskList(CTaskModel& cModel) {
-    ImGui::Separator();
-    ImGui::Text("%s", i18n::T("label.tasks"));
-    ImGui::SameLine();
-    if (ImGui::SmallButton(i18n::T("label.clear_finished"))) {
-        cModel.ClearFinished();
+/* ---- Example chips (spec 3: fill the URL box) ---- */
+void RenderExamples() {
+    ImGui::Text("%s", i18n::T("try_example"));
+    ImGui::SetCursorPosX(0.0f);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2.0f);
+    const std::string strThunder =
+        "thunder://" + Base64Encode("AAhttps://example.com/demo.isoZZ");
+    const struct TExample {
+        const char* pszLabel;
+        const char* pszUrl;
+    } kExamples[] = {
+        {"ISO", "https://mirror.example.com/ubuntu-24.04-desktop-amd64.iso"},
+        {"Dataset", "https://example.com/datasets/coco-2017.zip"},
+        {"Bilibili", "https://www.bilibili.com/video/BV1GJ411x7h7"},
+        {"thunder://", strThunder.c_str()},
+    };
+    const ImU32 colText = IM_COL32(0xB8, 0xBE, 0xC8, 255);
+    for (size_t i = 0; i < sizeof(kExamples) / sizeof(kExamples[0]); ++i) {
+        if (i > 0u) {
+            ImGui::SameLine(0, 6.0f);
+        }
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0x21, 0x25, 0x2B, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              IM_COL32(0x2E, 0x33, 0x3D, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              IM_COL32(0x36, 0x3D, 0x4A, 255));
+        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x3E, 0x44, 0x52, 255));
+        ImGui::PushStyleColor(ImGuiCol_Text, colText);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 3));
+        if (ImGui::Button(kExamples[i].pszLabel)) {
+            snprintf(g_url, sizeof(g_url), "%s", kExamples[i].pszUrl);
+            g_focus_url_input = true;
+        }
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(5);
     }
-    ImGui::SameLine();
-    {
-        char buf[96];
-        snprintf(buf, sizeof(buf), "%s: %u", i18n::T("label.active"),
-                 cModel.ActiveCount());
-        ImGui::TextDisabled("%s", buf);
-    }
+}
 
-    const std::vector<CTaskModel::TTaskRow> vecRows = cModel.Rows();
-    if (vecRows.empty()) {
-        ImGui::TextDisabled("(%s)", i18n::T("label.no_tasks"));
-        return;
-    }
-    /* Auto-select a row so the cylinder detail stays visible. */
+/* ---- Task list (spec 2.2/2.4) ---- */
+void RenderTaskList(CTaskModel& cModel,
+                    std::vector<CTaskModel::TTaskRow>& vecRowsOut) {
+    vecRowsOut = cModel.Rows();
+    const std::vector<CTaskModel::TTaskRow>& vecRows = vecRowsOut;
+
+    /* Auto-select the first row so the detail log has a target. */
     bool bSelFound = false;
     for (const CTaskModel::TTaskRow& tRow : vecRows) {
         if (tRow.dwModelId == g_selected_model_id) {
@@ -522,302 +1095,113 @@ void RenderTaskList(CTaskModel& cModel) {
             break;
         }
     }
-    if (!bSelFound) {
+    if (!bSelFound && !vecRows.empty()) {
         g_selected_model_id = vecRows[0].dwModelId;
     }
-    /* Bounded list height: the selected-task detail renders below. */
-    float fListH = ImGui::GetContentRegionAvail().y - 300.0f;
-    if (fListH < 120.0f) {
-        fListH = 120.0f;
+
+    /* Header: task count + clear-finished (right). */
+    char szHead[64];
+    snprintf(szHead, sizeof(szHead), "%s (%u)", i18n::T("label.tasks"),
+             (u32)vecRows.size());
+    ImGui::Text("%s", szHead);
+    const float fClearW =
+        ImGui::CalcTextSize(i18n::T("label.clear_finished")).x + 16.0f;
+    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - fClearW);
+    if (RenderTextButton(i18n::T("label.clear_finished"),
+                         IM_COL32(0xA1, 0xA1, 0xAA, 255),
+                         IM_COL32(0x3E, 0x44, 0x52, 60), ImVec2(0, 0))) {
+        cModel.ClearFinished();
+    }
+
+    /* Bounded list height; the log section + status bar reserve the rest. */
+    const float fStatusH = 30.0f;
+    const float fLogH = g_log_open ? 170.0f : 0.0f;
+    float fListH = ImGui::GetContentRegionAvail().y - fStatusH - fLogH;
+    if (fListH < 100.0f) {
+        fListH = 100.0f;
     }
     ImGui::BeginChild("##tasklist", ImVec2(0, fListH), true);
-    ImGui::BeginTable("##tasks", 6,
-                      ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp);
-    ImGui::TableSetupColumn(i18n::T("label.state"), 0, 90.0f);
-    ImGui::TableSetupColumn(i18n::T("label.type"), 0, 60.0f);
-    ImGui::TableSetupColumn(i18n::T("label.name"), 0, 210.0f);
-    ImGui::TableSetupColumn(i18n::T("label.progress"), 0, 130.0f);
-    ImGui::TableSetupColumn(i18n::T("label.speed"), 0, 70.0f);
-    ImGui::TableSetupColumn(i18n::T("label.actions"), 0, 130.0f);
-    ImGui::TableHeadersRow();
-
-    for (const CTaskModel::TTaskRow& tRow : vecRows) {
-        ImGui::PushID(static_cast<int>(tRow.dwModelId));
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        const char* pszState = i18n::T("task.pending");
-        switch (tRow.emState) {
-            case emTaskRunning: pszState = i18n::T("stage.downloading"); break;
-            case emTaskDone: pszState = i18n::T("stage.done"); break;
-            case emTaskError: pszState = i18n::T("stage.error"); break;
-            case emTaskCanceled: pszState = i18n::T("stage.canceled"); break;
-            default: break;
+    if (vecRows.empty()) {
+        const float fEmptyW = ImGui::CalcTextSize(i18n::T("empty.tasks")).x;
+        ImGui::SetCursorPos(
+            ImVec2((ImGui::GetContentRegionAvail().x - fEmptyW) * 0.5f,
+                   36.0f));
+        ImGui::TextDisabled("%s", i18n::T("empty.tasks"));
+    } else {
+        for (const CTaskModel::TTaskRow& tRow : vecRows) {
+            ImGui::PushID(static_cast<int>(tRow.dwModelId));
+            RenderTaskRow(cModel, tRow);
+            ImGui::PopID();
+            ImGui::Separator();
         }
-        ImGui::Text("%s", pszState);
-        ImGui::TableSetColumnIndex(1);
-        ImGui::Text("%s", tRow.bVideo != FALSE
-                              ? i18n::T("label.type_video")
-                              : i18n::T("label.type_file"));
-        ImGui::TableSetColumnIndex(2);
-        if (ImGui::Selectable(
-                tRow.strOutput.empty() ? tRow.strUrl.c_str()
-                                       : tRow.strOutput.c_str(),
-                g_selected_model_id == tRow.dwModelId)) {
-            g_selected_model_id = tRow.dwModelId;
-        }
-        if (ImGui::IsItemHovered() && !tRow.strUrl.empty()) {
-            ImGui::SetTooltip("%s", tRow.strUrl.c_str());
-        }
-        ImGui::TableSetColumnIndex(3);
-        char szPct[32];
-        snprintf(szPct, sizeof(szPct), "%.0f%%", tRow.dPercent);
-        ImGui::ProgressBar(static_cast<float>(tRow.dPercent / 100.0),
-                           ImVec2(-FLT_MIN, 0.0f), szPct);
-        ImGui::TableSetColumnIndex(4);
-        {
-            char szSpeed[48];
-            snprintf(szSpeed, sizeof(szSpeed), "%.2f MB/s",
-                     tRow.dSpeed / (1024.0 * 1024.0));
-            ImGui::Text("%s", tRow.dSpeed > 0.0 ? szSpeed : "--");
-        }
-        ImGui::TableSetColumnIndex(5);
-        if ((tRow.emState == emTaskRunning) || (tRow.emState == emTaskPending)) {
-            /* 停止 = cancel and keep partials so 继续 can resume. */
-            if (ImGui::SmallButton(i18n::T("button.stop"))) {
-                cModel.CancelTask(tRow.dwModelId);
-            }
-        }
-        if (tRow.emState == emTaskCanceled) {
-            ImGui::SameLine();
-            if (ImGui::SmallButton(i18n::T("button.resume"))) {
-                cModel.ResumeTask(tRow.dwModelId);
-            }
-        }
-        if ((tRow.emState == emTaskRunning) ||
-            (tRow.emState == emTaskPending) ||
-            (tRow.emState == emTaskCanceled)) {
-            ImGui::SameLine();
-            /* 删除 = hard delete: cancel, remove artifacts, drop the row
-             * (running tasks finish their executor first). */
-            if (ImGui::SmallButton(i18n::T("button.delete"))) {
-                cModel.DeleteTask(tRow.dwModelId);
-                if (g_selected_model_id == tRow.dwModelId) {
-                    g_selected_model_id = 0;
-                }
-            }
-        } else {
-            ImGui::SameLine();
-            if (ImGui::SmallButton(i18n::T("button.remove"))) {
-                cModel.RemoveTask(tRow.dwModelId);
-                if (g_selected_model_id == tRow.dwModelId) {
-                    g_selected_model_id = 0;
-                }
-            }
-        }
-        if ((tRow.emState == emTaskError) && !tRow.strError.empty() &&
-            ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", tRow.strError.c_str());
-        }
-        ImGui::PopID();
     }
-    ImGui::EndTable();
     ImGui::EndChild();
 }
 
-/* ---- Selected task detail (cylinder progress + its log) ---- */
-void RenderTaskDetail(CTaskModel& cModel) {
-    if (g_selected_model_id == 0) {
-        return;
+/* ---- Collapsible log section for the selected task ---- */
+void RenderLogSection(CTaskModel& cModel) {
+    g_log_open = ImGui::CollapsingHeader(i18n::T("label.log"));
+    if (g_log_open) {
+        std::vector<std::string> vecLog;
+        if (g_selected_model_id != 0) {
+            DownloadSnapshot snap;
+            if (cModel.TaskDetail(g_selected_model_id, snap, vecLog) ==
+                FALSE) {
+                g_selected_model_id = 0;
+            }
+        }
+        RenderLog(vecLog);
     }
-    DownloadSnapshot snap;
-    std::vector<std::string> vecLog;
-    if (cModel.TaskDetail(g_selected_model_id, snap, vecLog) == FALSE) {
-        g_selected_model_id = 0;
-        return;
-    }
-    RenderProgress(snap);
-    RenderLog(vecLog);
 }
-/* ---- Progress area rendering (F5/F6/F8) ---- */
-void RenderProgress(const DownloadSnapshot& snap) {
+
+/* ---- Window status bar (spec 2.4: tasks/slots + weighted progress) ---- */
+void RenderStatusBar(const std::vector<CTaskModel::TTaskRow>& vecRows,
+                     u32 dwMaxSlots) {
     ImGui::Separator();
-    ImGui::Text("%s", i18n::T("label.total"));
-    /* Total progress bar (F6): 3D cylinder style - track/fill are
-     * capsule-shaped (radius = height/2) with a vertical gradient (top bright
-     * -> bottom dark, simulated with AddRectFilledMultiColor).  Chunk effect:
-     * full fill in green, dark separators between chunks, dark track for
-     * unwritten areas.  The fill corners hug the track edges exactly (first
-     * chunk left-rounded, last chunk right-rounded, single chunk fully
-     * rounded). */
-    {
-        ImDrawList* draw = ImGui::GetWindowDrawList();
-        const float bar_w = ImGui::GetContentRegionAvail().x;
-        const float bar_h = 30.0f; /* 1.5x wide, fits per-chunk text */
-        const ImVec2 pos = ImGui::GetCursorScreenPos();
-        const float radius = bar_h * 0.5f; /* capsule corner = cylinder end */
-        /* Cylinder: uniform color + top highlight + bottom shadow (layered
-         * draws, the gradient API has no rounded corners). */
-        const ImU32 bg_mid = IM_COL32(0x3A, 0x3A, 0x3A, 255);
-        const ImU32 gn_mid = IM_COL32(0x5E, 0xA8, 0x4E, 255); /* green fill */
-        const ImU32 gn_hi  = IM_COL32(255, 255, 255, 40);     /* highlight */
-        const ImU32 gn_lo  = IM_COL32(0, 0, 0, 52);           /* shadow */
-        const ImU32 sep = IM_COL32(0x0A, 0x0A, 0x0A, 230);    /* separator */
-        const ImU32 border = IM_COL32(0x6A, 0x6A, 0x6A, 255);
-        /* Track (capsule + highlight/shadow). */
-        draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h),
-                            bg_mid, radius);
-        draw->AddRectFilled(pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.32f),
-                            IM_COL32(255, 255, 255, 16), radius,
-                            ImDrawFlags_RoundCornersAll);
-        draw->AddRectFilled(ImVec2(pos.x, pos.y + bar_h * 0.8f),
-                            ImVec2(pos.x + bar_w, pos.y + bar_h),
-                            IM_COL32(0, 0, 0, 40), radius,
-                            ImDrawFlags_RoundCornersAll);
-        if (!snap.threads.empty() && snap.threads[0].file_total > 0) {
-            const double ft = (double)snap.threads[0].file_total;
-            for (int i = 0; i < (int)snap.threads.size(); i++) {
-                const auto& t = snap.threads[i];
-                float s = (float)((double)t.file_start / ft);
-                float e = (float)((double)t.total / ft);
-                float cur = (float)((double)t.downloaded / ft);
-                if (s > 1.0f) s = 1.0f;
-                if (e > 1.0f) e = 1.0f;
-                if (cur > e) cur = e;
-                /* Chunk completion (for in-chunk text + hover tooltip). */
-                double seg_done = (double)(t.downloaded - t.file_start);
-                double seg_total = (double)(t.total - t.file_start);
-                int seg_pct = (seg_total > 0)
-                                  ? (int)(seg_done / seg_total * 100.0)
-                                  : 0;
-                if (seg_pct < 0) seg_pct = 0;
-                if (seg_pct > 100) seg_pct = 100;
-                /* Hover: show this chunk's progress + speed. */
-                {
-                    const ImVec2 m = ImGui::GetIO().MousePos;
-                    if (m.x >= pos.x + bar_w * s && m.x <= pos.x + bar_w * e &&
-                        m.y >= pos.y && m.y <= pos.y + bar_h) {
-                        char tip[160];
-                        snprintf(tip, sizeof(tip),
-                                 "%s #%d | %d%% | %.2f MB/s",
-                                 i18n::T("label.thread"), t.id, seg_pct,
-                                 t.speed / (1024.0 * 1024.0));
-                        ImGui::SetTooltip("%s", tip);
-                    }
-                }
-                if (t.downloaded <= t.file_start) {
-                    continue; /* not started: keep the dark track */
-                }
-                /* Corner rounding only for the physical first/last chunk
-                 * (first left-rounded, last right-rounded, single chunk fully
-                 * rounded); middle chunks use RoundCornersNone for sharp
-                 * corners - flags=0 in ImGui means all four corners rounded!
-                 * (Previously middle chunks with flags=0 became capsule
-                 * shaped and left track gaps between them.) */
-                const int nseg = (int)snap.threads.size();
-                ImDrawFlags flags = ImDrawFlags_RoundCornersNone;
-                if (nseg == 1) {
-                    flags = ImDrawFlags_RoundCornersAll;
-                } else if (i == 0) {
-                    flags = ImDrawFlags_RoundCornersLeft;
-                } else if (i == nseg - 1) {
-                    flags = ImDrawFlags_RoundCornersRight;
-                }
-                /* Green fill (solid sharp-corner bar; the highlight/shadow
-                 * is drawn as one capsule below). */
-                draw->AddRectFilled(
-                    ImVec2(pos.x + bar_w * s, pos.y),
-                    ImVec2(pos.x + bar_w * cur, pos.y + bar_h), gn_mid,
-                    radius, flags);
-                /* In-chunk text: chunk percent (shown when the cell is wide
-                 * enough). */
-                if ((e - s) * bar_w > 44.0f) {
-                    char seg_txt[16];
-                    snprintf(seg_txt, sizeof(seg_txt), "%d%%", seg_pct);
-                    ImVec2 ts = ImGui::CalcTextSize(seg_txt);
-                    ImVec2 tp(pos.x + bar_w * (s + e) * 0.5f - ts.x * 0.5f,
-                              pos.y + (bar_h - ts.y) * 0.5f);
-                    draw->AddText(tp, IM_COL32(255, 255, 255, 235), seg_txt);
-                }
-                /* Downloaded boundary inside a chunk (dark thin line,
-                 * distinct from the battery-cell separators). */
-                if (cur > s && cur < e - 0.001f) {
-                    draw->AddLine(ImVec2(pos.x + bar_w * cur, pos.y + 2.0f),
-                                  ImVec2(pos.x + bar_w * cur,
-                                         pos.y + bar_h - 2.0f),
-                                  IM_COL32(0, 0, 0, 90), 1.0f);
-                }
-            }
-        } else if (snap.totalPercent > 0.0) {
-            /* No chunk data (parse/merge stage): fill by total progress
-             * (left-rounded). */
-            float cur = (float)(snap.totalPercent / 100.0);
-            if (cur > 1.0f) cur = 1.0f;
-            ImDrawFlags f2 = cur >= 0.999f ? ImDrawFlags_RoundCornersAll
-                                            : ImDrawFlags_RoundCornersLeft;
-            draw->AddRectFilled(pos, ImVec2(pos.x + bar_w * cur, pos.y + bar_h),
-                                gn_mid, radius, f2);
+    const u32 dwTotal = (u32)vecRows.size();
+    u32 dwActive = 0;
+    double dTotalBytes = 0.0;
+    double dWeighted = 0.0;
+    double dTotalSpeed = 0.0;
+    for (const CTaskModel::TTaskRow& tRow : vecRows) {
+        const double dSize = (double)tRow.llFileTotal;
+        dTotalBytes += dSize;
+        dWeighted += dSize * tRow.dPercent;
+        if (tRow.emState == emTaskRunning) {
+            ++dwActive;
+            dTotalSpeed += tRow.dSpeed;
         }
-        /* Overall cylinder highlight/shadow (one capsule across all chunks,
-         * matching the end-face arcs; replaces per-chunk highlights). */
-        draw->AddRectFilled(
-            pos, ImVec2(pos.x + bar_w, pos.y + bar_h * 0.35f), gn_hi,
-            radius, ImDrawFlags_RoundCornersAll);
-        draw->AddRectFilled(
-            ImVec2(pos.x, pos.y + bar_h * 0.72f),
-            ImVec2(pos.x + bar_w, pos.y + bar_h), gn_lo, radius,
-            ImDrawFlags_RoundCornersAll);
-        /* Battery-cell separators: 5px dark vertical bands (2-3x wider,
-         * user request), drawn last so the fill never covers them; they show
-         * even with no download data. */
-        if (!snap.threads.empty() && snap.threads[0].file_total > 0) {
-            const double ft = (double)snap.threads[0].file_total;
-            for (const auto& t : snap.threads) {
-                float s = (float)((double)t.file_start / ft);
-                if (s > 0.002f && s < 0.998f) {
-                    draw->AddRectFilled(
-                        ImVec2(pos.x + bar_w * s - 2.5f, pos.y + 1.0f),
-                        ImVec2(pos.x + bar_w * s + 2.5f,
-                               pos.y + bar_h - 1.0f),
-                        sep);
-                }
-            }
-        }
-        draw->AddRect(pos, ImVec2(pos.x + bar_w, pos.y + bar_h), border,
-                      radius);
-        ImGui::Dummy(ImVec2(bar_w, bar_h));
     }
-
-    /* Bottom-right of the total bar: overall percent + speed. */
-    {
-        char info[128];
-        if (snap.totalSpeed > 0) {
-            snprintf(info, sizeof(info), "%.1f%%  |  %.2f MB/s",
-                     snap.totalPercent,
-                     snap.totalSpeed / (1024.0 * 1024.0));
-        } else {
-            snprintf(info, sizeof(info), "%.1f%%", snap.totalPercent);
-        }
-        float txt_w = ImGui::CalcTextSize(info).x;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                             ImGui::GetContentRegionAvail().x - txt_w);
-        ImGui::Text("%s", info);
+    const double dOverall =
+        dTotalBytes > 0.0 ? dWeighted / dTotalBytes : 0.0;
+    char szLeft[128];
+    snprintf(szLeft, sizeof(szLeft), "%u %s · %u/%u %s", dwTotal,
+             i18n::T("tasks.unit"), dwActive, dwMaxSlots, i18n::T("slots"));
+    char szRight[160];
+    snprintf(szRight, sizeof(szRight), "%s %.0f%% · %s", i18n::T("overall"),
+             dOverall, FormatSpeed(dTotalSpeed).c_str());
+    const float fGap = ImGui::GetStyle().ItemSpacing.x;
+    const float fBarW = 80.0f;
+    const float fBarH = 6.0f;
+    const ImVec2 ts = ImGui::CalcTextSize(szRight);
+    const float fRightW = fBarW + fGap + ts.x;
+    ImGui::Text("%s", szLeft);
+    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - fRightW);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float fCy = pos.y + ImGui::GetTextLineHeight() * 0.5f;
+    dl->AddRectFilled(ImVec2(pos.x, fCy - fBarH * 0.5f),
+                      ImVec2(pos.x + fBarW, fCy + fBarH * 0.5f),
+                      IM_COL32(0x3B, 0x40, 0x50, 255), 3.0f);
+    if (dOverall > 0.0) {
+        const float fFill = (float)(dOverall / 100.0) * fBarW;
+        dl->AddRectFilled(ImVec2(pos.x, fCy - fBarH * 0.5f),
+                          ImVec2(pos.x + fFill, fCy + fBarH * 0.5f),
+                          IM_COL32(0x61, 0xAF, 0xEF, 255), 3.0f);
     }
-
-    const char* stage_txt = i18n::T("stage.idle");
-    switch (snap.stage) {
-        case STAGE_DOWNLOADING: stage_txt = i18n::T("stage.downloading"); break;
-        case STAGE_PARSING:     stage_txt = i18n::T("stage.parsing"); break;
-        case STAGE_VIDEO_DL:    stage_txt = i18n::T("stage.video"); break;
-        case STAGE_AUDIO_DL:    stage_txt = i18n::T("stage.audio"); break;
-        case STAGE_MERGING:     stage_txt = i18n::T("stage.merging"); break;
-        case STAGE_DONE:        stage_txt = i18n::T("stage.done"); break;
-        case STAGE_CANCELED:
-            stage_txt = i18n::T("stage.canceled");
-            break;
-        case STAGE_ERROR:       stage_txt = i18n::T("stage.error"); break;
-        default: break;
-    }
-    ImGui::Text("%s: %s", i18n::T("label.status"), stage_txt);
+    dl->AddText(ImVec2(pos.x + fBarW + fGap, fCy - ts.y * 0.5f),
+                IM_COL32(0xA1, 0xA8, 0xB6, 255), szRight);
+    ImGui::Dummy(ImVec2(fRightW, ImGui::GetTextLineHeight()));
 }
 
 /* ---- Log area (F7) ---- */
@@ -868,8 +1252,84 @@ bool MacCircleButton(float cx, float cy, float d, ImU32 color, ImU32 hover,
     return clicked;
 }
 
-/* ---- Custom title bar (borderless window: settings + title + Mac-style
- * buttons + drag) ---- */
+/* ---- About dropdown menu (spec 2.3: version/website/github/issues/license/
+ * tech stack/platforms; links open in the default browser) ---- */
+void RenderAboutMenu() {
+    const struct TAboutRow {
+        const char* pszKey;
+        std::string strValue;
+        BOOL32 bLink;
+    } kRows[] = {
+        {"dialog.about.version", std::string("v") + BURST_VERSION_STRING,
+         FALSE},
+        {"website", "https://www.burstdownload.com", TRUE},
+        {"github", "https://github.com/ErnestAgel/burst-download", TRUE},
+        {"issues", "https://github.com/ErnestAgel/burst-download/issues",
+         TRUE},
+        {"license", "MIT", FALSE},
+        {"tech_stack", "C/C++ · libcurl", FALSE},
+        {"platforms", "Windows x86_64 · Linux x86_64 · Linux ARM64", FALSE},
+    };
+    char szHead[160];
+    snprintf(szHead, sizeof(szHead), "%s - %s v%s", i18n::T("menu.about"),
+             i18n::T("window.title"), BURST_VERSION_STRING);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(IM_COL32(0xD7, 0xDA,
+                                                              0xE0, 255)),
+                       "%s", szHead);
+    ImGui::Separator();
+    if (ImGui::BeginTable("##aboutrows", 2,
+                          ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch,
+                                0.42f);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch,
+                                0.58f);
+        for (const TAboutRow& tRow : kRows) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(IM_COL32(0x7A, 0x82, 0x92,
+                                                        255)),
+                "%s", i18n::T(tRow.pszKey));
+            ImGui::TableSetColumnIndex(1);
+            if (tRow.bLink != FALSE) {
+                /* Link rows: right-aligned, truncated display. */
+                std::string strShow = tRow.strValue;
+                if (strShow.size() > 24u) {
+                    strShow = strShow.substr(0, 24u) + "...";
+                }
+                const float fValW = ImGui::CalcTextSize(strShow.c_str()).x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                     ImGui::GetContentRegionAvail().x - fValW);
+                ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                      IM_COL32(0x61, 0xAF, 0xEF, 0x18));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                      IM_COL32(0x61, 0xAF, 0xEF, 0x30));
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      IM_COL32(0x61, 0xAF, 0xEF, 255));
+                if (ImGui::Button(strShow.c_str())) {
+                    OpenUrl(tRow.strValue);
+                    g_about_open = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopStyleColor(4);
+            } else if (strcmp(tRow.pszKey, "platforms") == 0) {
+                /* Long value rows wrap inside the popup width. */
+                ImGui::TextWrapped("%s", tRow.strValue.c_str());
+            } else {
+                const float fValW =
+                    ImGui::CalcTextSize(tRow.strValue.c_str()).x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                     ImGui::GetContentRegionAvail().x - fValW);
+                ImGui::Text("%s", tRow.strValue.c_str());
+            }
+        }
+        ImGui::EndTable();
+    }
+}
+
+/* ---- Custom title bar (borderless window): left traffic lights, centered
+ * title, right About/language buttons + About dropdown (spec 2.3) ---- */
 void RenderTitleBar() {
     const ImGuiIO& io = ImGui::GetIO();
 
@@ -891,39 +1351,31 @@ void RenderTitleBar() {
 
     const float cy = kTitleBarH * 0.5f;  /* button vertical center */
 
-    /* Title text (the settings entry moved to the main window's Settings
-     * menu bar, see Render()). */
-    ImGui::SetCursorPos(
-        ImVec2(12, (kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f));
-    char szTitle[128];
-    snprintf(szTitle, sizeof(szTitle), "%s %s", i18n::T("window.title"),
-             BURST_VERSION_STRING);
-    ImGui::Text("%s", szTitle);
-
-    /* Right side: Mac-style three-color buttons (red=close at the far right,
-     * green=maximize, yellow=minimize). */
-    const float btn_d = 14.0f;
-    const float gap = 12.0f;
-    const float margin = 18.0f; /* distance from the right edge */
-    /* Red (close) */
-    float rx = io.DisplaySize.x - margin - btn_d * 0.5f;
-    /* Green (maximize) */
-    float gx = rx - btn_d - gap;
-    /* Yellow (minimize) */
-    float yx = gx - btn_d - gap;
-    const ImU32 cRed = IM_COL32(0xE0, 0x6C, 0x75, 255);
-    const ImU32 cRedH = IM_COL32(0xF0, 0x8A, 0x92, 255);
-    const ImU32 cYellow = IM_COL32(0xE5, 0xC0, 0x7B, 255);
-    const ImU32 cYellowH = IM_COL32(0xF2, 0xD3, 0x9A, 255);
-    const ImU32 cGreen = IM_COL32(0x98, 0xC3, 0x79, 255);
-    const ImU32 cGreenH = IM_COL32(0xB2, 0xD5, 0x97, 255);
-
-    if (MacCircleButton(yx, cy, btn_d, cYellow, cYellowH,
+    /* Left: Mac-style traffic lights (red close / yellow minimize / green
+     * maximize), same order as the web mockup. */
+    const float fBtnD = 12.0f;
+    const float fGap = 9.0f;
+    const float fMargin = 14.0f;
+    const float rx = fMargin + fBtnD * 0.5f;
+    const float yx = rx + fBtnD + fGap;
+    const float gx = yx + fBtnD + fGap;
+    const ImU32 cRed = IM_COL32(0xFF, 0x5F, 0x57, 255);
+    const ImU32 cRedH = IM_COL32(0xFF, 0x7A, 0x74, 255);
+    const ImU32 cYellow = IM_COL32(0xFE, 0xBC, 0x2E, 255);
+    const ImU32 cYellowH = IM_COL32(0xFF, 0xCB, 0x57, 255);
+    const ImU32 cGreen = IM_COL32(0x28, 0xC8, 0x40, 255);
+    const ImU32 cGreenH = IM_COL32(0x46, 0xD6, 0x5E, 255);
+    if (MacCircleButton(rx, cy, fBtnD, cRed, cRedH,
+                        i18n::T("button.close")) &&
+        g_window != nullptr) {
+        glfwSetWindowShouldClose(g_window, GLFW_TRUE);
+    }
+    if (MacCircleButton(yx, cy, fBtnD, cYellow, cYellowH,
                         i18n::T("button.minimize")) &&
         g_window != nullptr) {
         glfwIconifyWindow(g_window);
     }
-    if (MacCircleButton(gx, cy, btn_d, cGreen, cGreenH,
+    if (MacCircleButton(gx, cy, fBtnD, cGreen, cGreenH,
                         i18n::T("button.maximize")) &&
         g_window != nullptr) {
         if (glfwGetWindowAttrib(g_window, GLFW_MAXIMIZED) == GLFW_TRUE) {
@@ -932,19 +1384,44 @@ void RenderTitleBar() {
             glfwMaximizeWindow(g_window);
         }
     }
-    if (MacCircleButton(rx, cy, btn_d, cRed, cRedH, i18n::T("button.close")) &&
-        g_window != nullptr) {
-        glfwSetWindowShouldClose(g_window, GLFW_TRUE);
+
+    /* Right: About + language toggle buttons (small bordered, web style). */
+    const float fAboutW =
+        ImGui::CalcTextSize(i18n::T("menu.about")).x + 20.0f;
+    const float fLangW =
+        ImGui::CalcTextSize(i18n::T("menu.lang_hint")).x + 20.0f;
+    const float fBtnH = 24.0f;
+    const float fRightX =
+        io.DisplaySize.x - fLangW - fAboutW - fGap * 3.0f - fMargin;
+    ImGui::SetCursorPos(ImVec2(fRightX, (kTitleBarH - fBtnH) * 0.5f));
+    bool bAboutClicked = false;
+    if (TitleBarButton(i18n::T("menu.about"), ImVec2(fAboutW, fBtnH))) {
+        bAboutClicked = true;
+    }
+    ImGui::SameLine(0, fGap);
+    if (TitleBarButton(i18n::T("menu.lang_hint"), ImVec2(fLangW, fBtnH))) {
+        i18n::SetLang(i18n::GetLang() == i18n::Lang::Zh ? i18n::Lang::En
+                                                        : i18n::Lang::Zh);
     }
 
+    /* Centered title text. */
+    char szTitle[128];
+    snprintf(szTitle, sizeof(szTitle), "%s v%s", i18n::T("window.title"),
+             BURST_VERSION_STRING);
+    const float fTitleW = ImGui::CalcTextSize(szTitle).x;
+    ImGui::SetCursorPos(
+        ImVec2((io.DisplaySize.x - fTitleW) * 0.5f,
+               (kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f));
+    ImGui::TextDisabled("%s", szTitle);
+
     /* Title bar drag: on press, trigger native Windows window dragging
-     * (WM_NCLBUTTONDOWN/HTCAPTION) so the system moves the window smoothly;
-     * non-Windows falls back to manual position updates. */
-    ImGui::SetCursorPos(ImVec2(0, 0));
+     * (WM_NCLBUTTONDOWN/HTCAPTION); non-Windows falls back to manual
+     * position updates. */
+    const float fDragX0 = fMargin + fBtnD * 3.0f + fGap * 2.0f + 6.0f;
+    const float fDragW = fRightX - fDragX0;
+    ImGui::SetCursorPos(ImVec2(fDragX0, 0));
     ImGui::InvisibleButton("##titlebar_drag",
-                           ImVec2(io.DisplaySize.x - btn_d * 3 - gap * 2 -
-                                      margin * 2 - 8,
-                                  kTitleBarH));
+                           ImVec2(fDragW, kTitleBarH));
     if (ImGui::IsItemActivated() && g_window != nullptr) {
 #ifdef _WIN32
         HWND hwnd = glfwGetWin32Window(g_window);
@@ -955,23 +1432,42 @@ void RenderTitleBar() {
 #else
         /* Non-Windows fallback: record the press position and move per
          * frame. */
-        static bool dragging = false;
-        static int drag_x0 = 0, drag_y0 = 0;
-        static ImVec2 drag_mouse0;
-        if (!dragging) {
-            dragging = true;
-            glfwGetWindowPos(g_window, &drag_x0, &drag_y0);
-            drag_mouse0 = io.MousePos;
+        static bool s_dragging = false;
+        static int s_dragX0 = 0;
+        static int s_dragY0 = 0;
+        static ImVec2 s_dragMouse0;
+        if (!s_dragging) {
+            s_dragging = true;
+            glfwGetWindowPos(g_window, &s_dragX0, &s_dragY0);
+            s_dragMouse0 = io.MousePos;
         }
-        if (dragging) {
+        if (s_dragging) {
             glfwSetWindowPos(g_window,
-                             drag_x0 + (int)(io.MousePos.x - drag_mouse0.x),
-                             drag_y0 + (int)(io.MousePos.y - drag_mouse0.y));
+                             s_dragX0 + (int)(io.MousePos.x - s_dragMouse0.x),
+                             s_dragY0 + (int)(io.MousePos.y - s_dragMouse0.y));
         }
         if (!ImGui::IsItemActive()) {
-            dragging = false;
+            s_dragging = false;
         }
 #endif
+    }
+
+    /* About dropdown (spec 2.3); clicking outside closes it. */
+    if (bAboutClicked) {
+        g_about_open = true;
+        ImGui::OpenPopup("##about_menu");
+    }
+    if (g_about_open) {
+        ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowPos(
+            ImVec2(fRightX + fAboutW + fGap, fBtnH + 2.0f), ImGuiCond_Always,
+            ImVec2(1.0f, 0.0f));
+        if (ImGui::BeginPopup("##about_menu", ImGuiWindowFlags_NoMove)) {
+            RenderAboutMenu();
+            ImGui::EndPopup();
+        } else {
+            g_about_open = false;
+        }
     }
 
     ImGui::End();
@@ -1088,49 +1584,29 @@ void Init(GLFWwindow* window) {
 bool Render(CTaskModel& cModel) {
 #ifdef _WIN32
     /* Custom title bar (Windows borderless window; Linux uses the system
-     * title bar). */
+     * title bar and the controls stay in the web mockup order). */
     RenderTitleBar();
 #endif
 
-    /* Main window: fills the client area below the title bar; includes a
-     * Settings menu bar (language switching). */
+    /* Main window: fills the client area below the title bar. */
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0.0f, kTitleBarH), ImGuiCond_Always);
     ImGui::SetNextWindowSize(
         ImVec2(io.DisplaySize.x, io.DisplaySize.y - kTitleBarH),
         ImGuiCond_Always);
     ImGui::Begin("##main", nullptr,
-                 ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar |
-                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoCollapse |
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoSavedSettings);
 
-    /* Settings menu bar: the language entry shows the TARGET language hint
-     * (a Chinese UI -> "language"; an English UI -> "中文", see
-     * menu.lang_hint); opening it shows the regular language choices. */
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu(i18n::T("menu.lang_hint"))) {
-            bool zh = (i18n::GetLang() == i18n::Lang::Zh);
-            bool en = !zh;
-            if (ImGui::MenuItem(i18n::T("lang.zh"), nullptr, zh)) {
-                i18n::SetLang(i18n::Lang::Zh);
-            }
-            if (ImGui::MenuItem(i18n::T("lang.en"), nullptr, en)) {
-                i18n::SetLang(i18n::Lang::En);
-            }
-            ImGui::EndMenu();
-        }
-        if (ImGui::MenuItem(i18n::T("menu.about"))) {
-            g_about_open = true;
-        }
-        ImGui::EndMenuBar();
-    }
-
-    /* Always-usable add form + multi-task list + selected task detail. */
+    /* Add form + examples + task list + collapsible log + status bar. */
     cModel.OnUiTick();
+    std::vector<CTaskModel::TTaskRow> vecRows;
     RenderAddForm(cModel);
-    RenderTaskList(cModel);
-    RenderTaskDetail(cModel);
+    RenderExamples();
+    RenderTaskList(cModel, vecRows);
+    RenderLogSection(cModel);
+    RenderStatusBar(vecRows, cModel.MaxSlots());
 
 #ifdef _WIN32
     /* Bottom-right resize grip (Windows borderless window; draw before the
@@ -1152,9 +1628,6 @@ bool Render(CTaskModel& cModel) {
         }
         g_error_partial_path.clear();
     }
-
-    /* About popup. */
-    dialogs::ShowAbout(BURST_VERSION_STRING, g_about_open);
 
 #ifndef _WIN32
     /* Linux built-in directory browser (Windows uses the native IFileDialog

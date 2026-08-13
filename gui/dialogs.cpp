@@ -132,30 +132,4 @@ void ShowDone(const std::string& strPath, bool& bOpen) {
     EndModal(bOpen);
 }
 
-void ShowAbout(const std::string& strVersion, bool& bOpen) {
-    if (!BeginModal("##about", bOpen)) {
-        return;
-    }
-    ImGui::TextWrapped("%s", i18n::T("dialog.about.title"));
-    ImGui::Separator();
-    ImGui::Text("burst %s (Burst Download)", strVersion.c_str());
-    ImGui::Text("%s:", i18n::T("dialog.about.platform"));
-    ImGui::SameLine();
-#ifdef _WIN32
-    ImGui::TextUnformatted("Windows x86_64");
-#elif defined(__aarch64__)
-    ImGui::TextUnformatted("Linux aarch64");
-#else
-    ImGui::TextUnformatted("Linux x86_64");
-#endif
-    ImGui::Text("%s: MIT License", i18n::T("dialog.about.license"));
-    ImGui::TextWrapped("Copyright (c) 2026 ErnestAgel");
-    ImGui::Separator();
-    if (ImGui::Button(i18n::T("dialog.about.ok"), ImVec2(120, 0))) {
-        bOpen = false;
-        ImGui::CloseCurrentPopup();
-    }
-    EndModal(bOpen);
-}
-
 }  // namespace dialogs

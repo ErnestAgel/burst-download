@@ -34,7 +34,8 @@ CTaskModel::~CTaskModel()
 
 u64 CTaskModel::AddFileTask(const std::string& strUrl,
                             const std::string& strPath, int nThreads,
-                            int nTimeout, BOOL32 bPreserveSnapshot)
+                            int nTimeout, BOOL32 bPreserveSnapshot,
+                            BOOL32 bDecoded)
 {
     if (strUrl.empty() || strPath.empty())
     {
@@ -56,6 +57,7 @@ u64 CTaskModel::AddFileTask(const std::string& strUrl,
     pTask->nThreads = nThreads;
     pTask->nTimeout = nTimeout;
     pTask->bVideo = FALSE;
+    pTask->bDecoded = bDecoded;
     pTask->dwQueueTaskId = dwQueueId;
     pTask->bPreserveSnapshot = bPreserveSnapshot;
     pTask->bPendingRemove = FALSE;
@@ -66,7 +68,8 @@ u64 CTaskModel::AddFileTask(const std::string& strUrl,
 
 u64 CTaskModel::AddVideoTask(const std::string& strUrl,
                              const std::string& strBasename, int nThreads,
-                             int nTimeout, BOOL32 bPreserveSnapshot)
+                             int nTimeout, BOOL32 bPreserveSnapshot,
+                             BOOL32 bDecoded)
 {
     if (strUrl.empty() || strBasename.empty())
     {
@@ -88,6 +91,7 @@ u64 CTaskModel::AddVideoTask(const std::string& strUrl,
     pTask->nThreads = nThreads;
     pTask->nTimeout = nTimeout;
     pTask->bVideo = TRUE;
+    pTask->bDecoded = bDecoded;
     pTask->dwQueueTaskId = dwQueueId;
     pTask->bPreserveSnapshot = bPreserveSnapshot;
     pTask->bPendingRemove = FALSE;
@@ -282,10 +286,16 @@ std::vector<CTaskModel::TTaskRow> CTaskModel::Rows() const
         tRow.strUrl = tTask.strUrl;
         tRow.strOutput = tTask.strOutput;
         tRow.bVideo = tTask.bVideo;
+        tRow.bDecoded = tTask.bDecoded;
         tRow.nStage = tTask.tSnap.stage;
+        tRow.nThreads = tTask.nThreads;
         tRow.dPercent = tTask.tSnap.totalPercent;
         tRow.dSpeed = tTask.tSnap.totalSpeed;
         tRow.strEta = tTask.tSnap.eta;
+        tRow.vecThreads = tTask.tSnap.threads;
+        tRow.llFileTotal = tTask.tSnap.threads.empty()
+                               ? 0LL
+                               : tTask.tSnap.threads[0].file_total;
         std::map<u64, TTaskState>::const_iterator itState =
             mapQueueState.find(tTask.dwQueueTaskId);
         tRow.emState = (itState != mapQueueState.end())
@@ -325,6 +335,11 @@ u32 CTaskModel::ActiveCount() const
         }
     }
     return dwActive;
+}
+
+u32 CTaskModel::MaxSlots() const
+{
+    return m_cExecPool.ThreadCount();
 }
 
 BOOL32 CTaskModel::RunTaskBody(u64 dwQueueTaskId, TDownloadTask& tQueueTask,

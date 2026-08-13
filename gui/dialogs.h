@@ -53,11 +53,4 @@ ExistsChoice ShowFileExists(const std::string& strPath, bool& bOpen);
  */
 void ShowDone(const std::string& strPath, bool& bOpen);
 
-/**
- * @brief About dialog: app name, version, platform and license.
- * @param strVersion Version string (from version.h).
- * @param bOpen Dialog open flag.
- */
-void ShowAbout(const std::string& strVersion, bool& bOpen);
-
 }  // namespace dialogs

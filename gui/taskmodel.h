@@ -40,12 +40,16 @@ public:
         std::string strUrl;
         std::string strOutput;
         BOOL32      bVideo;
+        BOOL32      bDecoded;   /**< TRUE when the URL came from thunder:// */
         TTaskState  emState;
         std::string strError;
         int         nStage;
+        int         nThreads;
         double      dPercent;
         double      dSpeed;
         std::string strEta;
+        long long   llFileTotal; /**< file size in bytes (0 when unknown) */
+        std::vector<ThreadProgress> vecThreads; /**< per-thread chunk state */
     } TTaskRow;
 
     /**
@@ -53,14 +57,16 @@ public:
      * @return Model id (> 0) or 0 when input is invalid.
      */
     u64 AddFileTask(const std::string& strUrl, const std::string& strPath,
-                    int nThreads, int nTimeout, BOOL32 bPreserveSnapshot);
+                    int nThreads, int nTimeout, BOOL32 bPreserveSnapshot,
+                    BOOL32 bDecoded = FALSE);
 
     /**
      * @brief Add a video download task.
      * @return Model id (> 0) or 0 when input is invalid.
      */
     u64 AddVideoTask(const std::string& strUrl, const std::string& strBasename,
-                     int nThreads, int nTimeout, BOOL32 bPreserveSnapshot);
+                     int nThreads, int nTimeout, BOOL32 bPreserveSnapshot,
+                     BOOL32 bDecoded = FALSE);
 
     /** @brief Cancel a running task (partial files kept for resume). */
     void CancelTask(u64 dwModelId);
@@ -96,6 +102,9 @@ public:
     /** @brief Number of tasks still pending or running. */
     u32 ActiveCount() const;
 
+    /** @brief Concurrent task slot count (the UI shows active/max). */
+    u32 MaxSlots() const;
+
 private:
     typedef struct tagModelTask
     {
@@ -105,6 +114,7 @@ private:
         int                nThreads;
         int                nTimeout;
         BOOL32             bVideo;
+        BOOL32             bDecoded;
         u64                dwQueueTaskId;
         BOOL32             bPreserveSnapshot;
         BOOL32             bPendingRemove;
