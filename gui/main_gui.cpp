@@ -204,8 +204,8 @@ int RunGui(int argc, char** argv) {
     theme::ApplyOneDark();
 
     /* Embedded font (GB2312 full + ASCII, one font for both languages).
-     * OversampleH/V raise the bitmap density for crisper CJK rendering
-     * (atlas size grows as a tradeoff). */
+     * 14px matches the web mockup density (text-sm); OversampleH/V raise
+     * the bitmap density for crisper CJK rendering. */
     {
         ImFontConfig cfg;
         cfg.FontDataOwnedByAtlas = false;
@@ -213,7 +213,7 @@ int RunGui(int argc, char** argv) {
         cfg.OversampleV = 3;
         ImFont* font = io.Fonts->AddFontFromMemoryTTF(
             (void*)third_party_fonts_NotoSansSC_subset_ttf,
-            (int)third_party_fonts_NotoSansSC_subset_ttf_len, 18.0f, &cfg,
+            (int)third_party_fonts_NotoSansSC_subset_ttf_len, 14.0f, &cfg,
             io.Fonts->GetGlyphRangesChineseFull());
         if (font == nullptr) {
             ShowFatal("Font loading failed.");

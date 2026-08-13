@@ -30,10 +30,11 @@ void ApplyOneDark() {
     const ImVec4 cBg        = C(0x28, 0x2C, 0x34);  /* 窗口背景 */
     const ImVec4 cPanel     = C(0x21, 0x25, 0x2B);  /* 面板/弹层 */
     const ImVec4 cPanelDeep = C(0x1B, 0x1E, 0x24);  /* 更深面板 */
-    const ImVec4 cFrame     = C(0x3E, 0x44, 0x52);  /* 控件底(提亮,增强立体) */
-    const ImVec4 cFrameHov  = C(0x4E, 0x55, 0x66);
-    const ImVec4 cFrameAct  = C(0x5E, 0x67, 0x78);
-    const ImVec4 cBorder    = C(0x4B, 0x52, 0x63);  /* 边框(提亮,可见) */
+    /* 输入框底色对齐网页 Demo：#21252B 深面板 + zinc-700 描边 */
+    const ImVec4 cFrame     = C(0x21, 0x25, 0x2B);  /* 控件底(网页输入框色) */
+    const ImVec4 cFrameHov  = C(0x27, 0x2C, 0x34);
+    const ImVec4 cFrameAct  = C(0x2C, 0x32, 0x3B);
+    const ImVec4 cBorder    = C(0x3E, 0x44, 0x52);  /* 边框(zinc-700) */
     const ImVec4 cText      = C(0xD7, 0xDA, 0xE0);  /* 主文本(调亮,暗色下更清晰) */
     const ImVec4 cTextDim   = C(0x7A, 0x82, 0x92);
     const ImVec4 cBlue      = C(0x61, 0xAF, 0xEF);
@@ -103,10 +104,10 @@ void ApplyOneDark() {
     s.ChildBorderSize   = 1.0f;
     s.PopupBorderSize   = 1.0f;
     s.FrameBorderSize   = 1.0f;  /* 控件描边 → 立体感 */
-    s.WindowPadding     = ImVec2(10, 10);
-    s.FramePadding      = ImVec2(8, 4);
-    s.ItemSpacing       = ImVec2(8, 6);
-    s.ItemInnerSpacing  = ImVec2(6, 4);
+    s.WindowPadding     = ImVec2(12, 10);
+    s.FramePadding      = ImVec2(7, 3);
+    s.ItemSpacing       = ImVec2(8, 5);
+    s.ItemInnerSpacing  = ImVec2(5, 3);
     s.ScrollbarSize     = 12.0f;
     s.GrabMinSize       = 10.0f;
     s.WindowTitleAlign  = ImVec2(0.5f, 0.5f);

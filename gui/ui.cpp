@@ -48,7 +48,7 @@ namespace {
 /* Custom title bar height (borderless window, replaces the system title
  * bar). */
 #ifdef _WIN32
-const float kTitleBarH = 36.0f; /* Windows custom title bar height */
+const float kTitleBarH = 34.0f; /* Windows custom title bar height */
 #else
 const float kTitleBarH = 0.0f;  /* Linux uses the system title bar; the
                                  * content area starts at the window top */
@@ -442,32 +442,30 @@ std::string ErrorGuide(const std::string& err) {
 
 /* ---- Small UI widgets (pills / text buttons / chips) ---- */
 
-/** Rounded detection chip ("识别: 文件 / 识别: 视频"), shown next to the URL
- *  box (spec 2.1). */
-void RenderChip(const char* pszText, BOOL32 bVideo) {
+/** Rounded detection chip ("识别: 文件 / 识别: 视频"), overlaid inside the
+ *  right edge of the URL box (spec 2.1, web mockup style). */
+void RenderChip(const char* pszText, BOOL32 bVideo, const ImVec2& pos) {
     const ImVec2 sz = ImGui::CalcTextSize(pszText);
     const float fH = sz.y + 6.0f;
     const float fW = sz.x + 16.0f;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##chip", ImVec2(fW, fH));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImU32 colText = (bVideo != FALSE)
-                              ? IM_COL32(0xC6, 0x78, 0xDD, 255)
-                              : IM_COL32(0x61, 0xAF, 0xEF, 255);
+                              ? IM_COL32(0xD8, 0xB4, 0xFE, 255)
+                              : IM_COL32(0x7D, 0xD3, 0xFC, 255);
     const ImU32 colBg = (bVideo != FALSE)
-                            ? IM_COL32(0xC6, 0x78, 0xDD, 38)
-                            : IM_COL32(0x61, 0xAF, 0xEF, 38);
+                            ? IM_COL32(0xA8, 0x5B, 0xF7, 38)
+                            : IM_COL32(0x0E, 0xA5, 0xE9, 38);
     dl->AddRectFilled(pos, ImVec2(pos.x + fW, pos.y + fH), colBg, fH * 0.5f);
     dl->AddText(ImVec2(pos.x + 8.0f, pos.y + 3.0f), colText, pszText);
 }
 
 /** Blue download button with a small download glyph (spec layout). */
 bool RenderDownloadButton(const char* pszLabel, const ImVec2& size) {
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0x3D, 0x7E, 0xF0, 255));
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0x3B, 0x82, 0xF6, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          IM_COL32(0x60, 0x9A, 0xFF, 255));
+                          IM_COL32(0x60, 0xA5, 0xFA, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          IM_COL32(0x2F, 0x6A, 0xD8, 255));
+                          IM_COL32(0x25, 0x63, 0xEB, 255));
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xFF, 0xFF, 0xFF, 255));
     const bool bClicked = ImGui::Button("##download_btn", size);
     const ImVec2 rMin = ImGui::GetItemRectMin();
@@ -526,7 +524,7 @@ bool TitleBarButton(const char* pszLabel, const ImVec2& size) {
                           IM_COL32(0x3E, 0x44, 0x52, 90));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
                           IM_COL32(0x3E, 0x44, 0x52, 140));
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xA1, 0xA8, 0xB6, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xA1, 0xA1, 0xAA, 255));
     ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x3E, 0x44, 0x52, 255));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
     const bool bClicked = ImGui::Button(pszLabel, size);
@@ -577,25 +575,25 @@ void StatusColors(const CTaskModel::TTaskRow& tRow, ImU32& colText,
                   ImU32& colBg) {
     switch (tRow.emState) {
         case emTaskRunning:
-            colText = IM_COL32(0x61, 0xAF, 0xEF, 255);
-            colBg = IM_COL32(0x61, 0xAF, 0xEF, 38);
+            colText = IM_COL32(0x93, 0xC5, 0xFD, 255);  /* blue-300 */
+            colBg = IM_COL32(0x3B, 0x82, 0xF6, 38);     /* blue-500/15 */
             break;
         case emTaskPending:
-            colText = IM_COL32(0xA1, 0xA1, 0xAA, 255);
-            colBg = IM_COL32(0xA1, 0xA1, 0xAA, 25);
+            colText = IM_COL32(0xA1, 0xA1, 0xAA, 255);  /* zinc-400 */
+            colBg = IM_COL32(0x71, 0x71, 0x7A, 38);     /* zinc-500/15 */
             break;
         case emTaskCanceled:
-            colText = IM_COL32(0xE5, 0xC0, 0x7B, 255);
-            colBg = IM_COL32(0xE5, 0xC0, 0x7B, 38);
+            colText = IM_COL32(0xFA, 0xCC, 0x15, 255);  /* yellow-400 */
+            colBg = IM_COL32(0xEA, 0xB3, 0x08, 38);     /* yellow-500/15 */
             break;
         case emTaskDone:
-            colText = IM_COL32(0x98, 0xC3, 0x79, 255);
-            colBg = IM_COL32(0x98, 0xC3, 0x79, 38);
+            colText = IM_COL32(0x4A, 0xDE, 0x80, 255);  /* green-400 */
+            colBg = IM_COL32(0x22, 0xC5, 0x5E, 38);     /* green-500/15 */
             break;
         case emTaskError:
         default:
-            colText = IM_COL32(0xE0, 0x6C, 0x75, 255);
-            colBg = IM_COL32(0xE0, 0x6C, 0x75, 38);
+            colText = IM_COL32(0xF8, 0x71, 0x71, 255);  /* red-400 */
+            colBg = IM_COL32(0xEF, 0x44, 0x44, 38);     /* red-500/15 */
             break;
     }
 }
@@ -690,7 +688,7 @@ void RenderSegmentBar(const CTaskModel::TTaskRow& tRow) {
         snprintf(buf4, sizeof(buf4), "%s %s", i18n::T("speed"),
                  FormatSpeed(dSpeed).c_str());
         ImGui::BeginTooltip();
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0x61, 0xAF, 0xEF, 255));
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0x93, 0xC5, 0xFD, 255));
         ImGui::TextUnformatted(buf1);
         ImGui::PopStyleColor();
         ImGui::TextUnformatted(buf2);
@@ -752,7 +750,7 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     ImGui::SetCursorPosX(fLeftW);
     RenderPill("##mode_pill", pszMode, IM_COL32(0xA1, 0xA1, 0xAA, 255),
                IM_COL32(0xA1, 0xA1, 0xAA, 25),
-               IM_COL32(0x3E, 0x44, 0x52, 255));
+               IM_COL32(0x3F, 0x3F, 0x46, 255));
     ImGui::SameLine(0, fGap);
     RenderPill("##status_pill", strStatus.c_str(), colStatusText, colStatusBg,
                0);
@@ -817,14 +815,14 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
         const BOOL32 bRemove =
             (strcmp(pszAction, i18n::T("button.remove")) == 0);
         const ImU32 colText =
-            bStop ? IM_COL32(0xE0, 0x6C, 0x75, 255)
-                  : (bResume ? IM_COL32(0x98, 0xC3, 0x79, 255)
-                             : (bDelete ? IM_COL32(0xE0, 0x6C, 0x75, 200)
+            bStop ? IM_COL32(0xF8, 0x71, 0x71, 255)
+                  : (bResume ? IM_COL32(0x4A, 0xDE, 0x80, 255)
+                             : (bDelete ? IM_COL32(0xF8, 0x71, 0x71, 200)
                                         : IM_COL32(0xA1, 0xA1, 0xAA, 255)));
         const ImU32 colHover =
-            bStop ? IM_COL32(0xE0, 0x6C, 0x75, 25)
-                  : (bResume ? IM_COL32(0x98, 0xC3, 0x79, 25)
-                             : (bDelete ? IM_COL32(0xE0, 0x6C, 0x75, 18)
+            bStop ? IM_COL32(0xF8, 0x71, 0x71, 25)
+                  : (bResume ? IM_COL32(0x4A, 0xDE, 0x80, 25)
+                             : (bDelete ? IM_COL32(0xF8, 0x71, 0x71, 18)
                                         : IM_COL32(0x3E, 0x44, 0x52, 60)));
         if (RenderTextButton(pszAction, colText, colHover, ImVec2(0, 0))) {
             if (bStop) {
@@ -861,26 +859,31 @@ void RenderAddForm(CTaskModel& cModel) {
     const std::string strChip = std::string(i18n::T("detected")) + ": " +
                                 (bIsVideo ? i18n::T("label.type_video")
                                           : i18n::T("label.type_file"));
-    const float fChipW = ImGui::CalcTextSize(strChip.c_str()).x + 18.0f;
     const float fBtnW =
         ImGui::CalcTextSize(i18n::T("button.download")).x + 48.0f;
     if (g_focus_url_input) {
         ImGui::SetKeyboardFocusHere();
         g_focus_url_input = false;
     }
-    ImGui::SetNextItemWidth(fAvail - fChipW - fBtnW - fGap * 2.0f);
+    ImGui::SetNextItemWidth(fAvail - fBtnW - fGap);
     if (ImGui::InputTextWithHint(
             "##url", i18n::T("placeholder.url.auto"), g_url, sizeof(g_url),
             ImGuiInputTextFlags_EnterReturnsTrue)) {
         AddTaskFromForm(cModel);
     }
+    const ImVec2 vInputMin = ImGui::GetItemRectMin();
+    const ImVec2 vInputMax = ImGui::GetItemRectMax();
     ImGui::SameLine();
     if (bHasUrl) {
-        RenderChip(strChip.c_str(), bIsVideo ? TRUE : FALSE);
-    } else {
-        ImGui::Dummy(ImVec2(fChipW, 0.0f));
+        const ImVec2 szChip = ImGui::CalcTextSize(strChip.c_str());
+        const float fChipH = szChip.y + 6.0f;
+        const float fChipW = szChip.x + 16.0f;
+        const ImVec2 vChipPos(vInputMax.x - fChipW - 8.0f,
+                              vInputMin.y +
+                                  (vInputMax.y - vInputMin.y - fChipH) *
+                                      0.5f);
+        RenderChip(strChip.c_str(), bIsVideo ? TRUE : FALSE, vChipPos);
     }
-    ImGui::SameLine();
     if (RenderDownloadButton(i18n::T("button.download"),
                              ImVec2(fBtnW, 0))) {
         AddTaskFromForm(cModel);
@@ -1058,7 +1061,7 @@ void RenderExamples() {
         {"Bilibili", "https://www.bilibili.com/video/BV1GJ411x7h7"},
         {"thunder://", strThunder.c_str()},
     };
-    const ImU32 colText = IM_COL32(0xB8, 0xBE, 0xC8, 255);
+    const ImU32 colText = IM_COL32(0xD4, 0xD4, 0xD8, 255);  /* zinc-300 */
     for (size_t i = 0; i < sizeof(kExamples) / sizeof(kExamples[0]); ++i) {
         if (i > 0u) {
             ImGui::SameLine(0, 6.0f);
@@ -1068,7 +1071,7 @@ void RenderExamples() {
                               IM_COL32(0x2E, 0x33, 0x3D, 255));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,
                               IM_COL32(0x36, 0x3D, 0x4A, 255));
-        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x3E, 0x44, 0x52, 255));
+        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x3F, 0x3F, 0x46, 255));
         ImGui::PushStyleColor(ImGuiCol_Text, colText);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 3));
@@ -1197,10 +1200,13 @@ void RenderStatusBar(const std::vector<CTaskModel::TTaskRow>& vecRows,
         const float fFill = (float)(dOverall / 100.0) * fBarW;
         dl->AddRectFilled(ImVec2(pos.x, fCy - fBarH * 0.5f),
                           ImVec2(pos.x + fFill, fCy + fBarH * 0.5f),
-                          IM_COL32(0x61, 0xAF, 0xEF, 255), 3.0f);
+                          IM_COL32(0x3B, 0x82, 0xF6, 255), 3.0f);
+        dl->AddRectFilled(ImVec2(pos.x, fCy - fBarH * 0.5f),
+                          ImVec2(pos.x + fFill, fCy),
+                          IM_COL32(0x38, 0xBD, 0xF8, 225), 3.0f);
     }
     dl->AddText(ImVec2(pos.x + fBarW + fGap, fCy - ts.y * 0.5f),
-                IM_COL32(0xA1, 0xA8, 0xB6, 255), szRight);
+                IM_COL32(0xA1, 0xA1, 0xAA, 255), szRight);
     ImGui::Dummy(ImVec2(fRightW, ImGui::GetTextLineHeight()));
 }
 
@@ -1302,11 +1308,11 @@ void RenderAboutMenu() {
                                      ImGui::GetContentRegionAvail().x - fValW);
                 ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                      IM_COL32(0x61, 0xAF, 0xEF, 0x18));
+                                      IM_COL32(0x93, 0xC5, 0xFD, 0x18));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                      IM_COL32(0x61, 0xAF, 0xEF, 0x30));
+                                      IM_COL32(0x93, 0xC5, 0xFD, 0x30));
                 ImGui::PushStyleColor(ImGuiCol_Text,
-                                      IM_COL32(0x61, 0xAF, 0xEF, 255));
+                                      IM_COL32(0x93, 0xC5, 0xFD, 255));
                 if (ImGui::Button(strShow.c_str())) {
                     OpenUrl(tRow.strValue);
                     g_about_open = false;
@@ -1390,7 +1396,7 @@ void RenderTitleBar() {
         ImGui::CalcTextSize(i18n::T("menu.about")).x + 20.0f;
     const float fLangW =
         ImGui::CalcTextSize(i18n::T("menu.lang_hint")).x + 20.0f;
-    const float fBtnH = 24.0f;
+    const float fBtnH = 22.0f;
     const float fRightX =
         io.DisplaySize.x - fLangW - fAboutW - fGap * 3.0f - fMargin;
     ImGui::SetCursorPos(ImVec2(fRightX, (kTitleBarH - fBtnH) * 0.5f));
