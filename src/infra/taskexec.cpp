@@ -189,6 +189,11 @@ BOOL32 RunVideoExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
     {
         strError = "Python runtime init failed: assets/ (stdlib/yt_dlp) is "
                    "missing";
+        const std::string strDetail = EmbedLastInitError();
+        if (!strDetail.empty())
+        {
+            strError += "\n[detail] " + strDetail;
+        }
         if (tCb.fnOnLog)
         {
             tCb.fnOnLog("[ERROR] video parsing failed: Python runtime");

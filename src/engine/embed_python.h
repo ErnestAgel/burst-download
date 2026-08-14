@@ -33,6 +33,11 @@
 bool EmbedPythonInit(const std::string& python_home = "");
 
 /**
+ * @brief Last initialization failure reason (empty on success).
+ */
+std::string EmbedLastInitError();
+
+/**
  * @brief Parse a video page with the embedded yt_dlp into media stream
  *        URLs.
  * @param url Video page URL (e.g. Bilibili/YouTube video page).

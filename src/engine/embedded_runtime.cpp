@@ -19,7 +19,6 @@
 #include <vector>
 
 #include <filesystem>
-#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -39,6 +38,13 @@ const size_t kFooterSize = 32;
 const long kCacheLockStaleSec = 600;
 
 std::string g_exe_path;
+std::string g_runtime_last_error;
+
+void SetRuntimeError(const char* pszFmt, const std::string& strArg) {
+  char buf[512];
+  snprintf(buf, sizeof(buf), pszFmt, strArg.c_str());
+  g_runtime_last_error = buf;
+}
 
 uint64_t Fnv1a64(const uint8_t* data, size_t len) {
   uint64_t h = 0xcbf29ce484222325ULL;
@@ -105,50 +111,47 @@ void WriteMarker(const std::string& cache, uint64_t hash, size_t size) {
 }
 
 /**
- * @brief Acquire the cache lock file (exclusive create; stale locks older
- *        than 10 minutes are broken).  Waits up to ~10s for a fresh lock.
- * @param strLock Lock file path.
+ * @brief Acquire the cache lock (exclusive directory create; stale locks
+ *        older than 10 minutes are broken).  Waits up to ~10s for a fresh
+ *        lock.
+ *
+ * std::filesystem is used (instead of CreateFileA / open()) so the lock
+ * path is handled exactly like every other cache path on Windows and never
+ * depends on the ANSI code page (v2.4.2 regression on non-UTF-8 systems).
+ * @param strLock Lock directory path.
  * @return TRUE when the lock is held.
  */
 bool AcquireCacheLock(const std::string& strLock) {
+  std::error_code ec;
   for (int i = 0; i < 50; ++i) {
-#ifdef _WIN32
-    HANDLE h = CreateFileA(strLock.c_str(), GENERIC_WRITE, 0, NULL,
-                           CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) {
-      const std::string strInfo = std::to_string(GetCurrentProcessId()) + "\n";
-      DWORD dwWritten = 0;
-      WriteFile(h, strInfo.c_str(), (DWORD)strInfo.size(), &dwWritten, NULL);
-      CloseHandle(h);
+    if (std::filesystem::create_directory(strLock, ec)) {
       return true;
     }
-#else
-    int fd = open(strLock.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
-    if (fd >= 0) {
-      const std::string strInfo = std::to_string(getpid()) + "\n";
-      (void)!write(fd, strInfo.c_str(), strInfo.size());
-      close(fd);
-      return true;
-    }
-#endif
+    ec.clear();
     /* The lock exists: break it when it is stale. */
-    struct stat st = {};
-    if (stat(strLock.c_str(), &st) == 0) {
-      const time_t now = time(nullptr);
-      if (now >= st.st_mtime &&
-          (now - st.st_mtime) > kCacheLockStaleSec) {
-        remove(strLock.c_str());
+    const std::filesystem::file_time_type ft =
+        std::filesystem::last_write_time(strLock, ec);
+    if (!ec) {
+      const auto age = std::chrono::duration_cast<std::chrono::seconds>(
+                           std::filesystem::file_time_type::clock::now() -
+                           ft)
+                           .count();
+      if (age > kCacheLockStaleSec) {
+        std::filesystem::remove_all(strLock, ec);
+        ec.clear();
         continue;
       }
     }
+    ec.clear();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
   return false;
 }
 
-/** @brief Release the cache lock file. */
+/** @brief Release the cache lock directory. */
 void ReleaseCacheLock(const std::string& strLock) {
-  remove(strLock.c_str());
+  std::error_code ec;
+  std::filesystem::remove_all(strLock, ec);
 }
 
 }  // namespace
@@ -157,54 +160,91 @@ void EmbedSetExePath(const std::string& exe_path) { g_exe_path = exe_path; }
 
 std::string EmbedGetExePath() { return g_exe_path; }
 
+std::string EmbedRuntimeLastError() { return g_runtime_last_error; }
+
+/** @brief Cache dir whose version marker matches the current blob and whose
+ *         stdlib is present; empty when none matches. */
+std::string MatchingCache(const std::string& strPrimary,
+                          const std::string& strFallback, uint64_t hash,
+                          size_t size) {
+  for (const std::string& strDir : {strPrimary, strFallback}) {
+    uint64_t mh = 0;
+    size_t ms = 0;
+    if (ReadMarker(strDir, mh, ms) && mh == hash && ms == size &&
+        (access((strDir + "/python311.zip").c_str(), 0) == 0 ||
+         access((strDir + "/stdlib").c_str(), 0) == 0)) {
+      return strDir;
+    }
+  }
+  return "";
+}
+
 bool ExtractEmbeddedRuntime(std::string& home) {
   home.clear();
-  if (g_exe_path.empty()) return false;
+  if (g_exe_path.empty()) {
+    SetRuntimeError("executable path not set", "");
+    return false;
+  }
 
   size_t blob_size = 0;
   uint64_t hash = 0;
-  if (!ReadFooter(g_exe_path, blob_size, hash)) return false;
+  if (!ReadFooter(g_exe_path, blob_size, hash)) {
+    SetRuntimeError("no embedded runtime footer in the executable", "");
+    return false;
+  }
 
   const std::string cache = TempCacheDir();
-  if (cache.empty()) return false;
+  if (cache.empty()) {
+    SetRuntimeError("temp cache directory unavailable", "");
+    return false;
+  }
+
+  /* Hash-suffixed fallback cache: used when the primary cache is locked by
+   * a still-running older process (Windows cannot delete files mapped as
+   * DLLs), so a stale cache can never block the runtime. */
+  char szHash[9];
+  snprintf(szHash, sizeof(szHash), "%08llx", (unsigned long long)hash);
+  const std::string strFallbackCache = cache + "-" + szHash;
 
   /* Cache hit: reuse when the version marker matches and stdlib exists. */
-  {
-    uint64_t mh = 0;
-    size_t ms = 0;
-    if (ReadMarker(cache, mh, ms) && mh == hash && ms == blob_size &&
-        (access((cache + "/python311.zip").c_str(), 0) == 0 ||
-         access((cache + "/stdlib").c_str(), 0) == 0)) {
-      home = cache;
-      return true;
-    }
+  const std::string strMatched =
+      MatchingCache(cache, strFallbackCache, hash, blob_size);
+  if (!strMatched.empty()) {
+    home = strMatched;
+    return true;
   }
 
   /* Cross-process cache lock (issue R8): serialize extraction and prevent
-   * half-built caches. */
+   * half-built caches.  Lock failure is not fatal: the temp-dir + atomic
+   * rename below keeps the cache consistent, so a broken lock must never
+   * block the runtime (v2.4.2 regression on non-UTF-8 systems). */
   const std::string strLock = cache + ".lock";
-  if (!AcquireCacheLock(strLock)) {
-    return false;
+  const bool bLocked = AcquireCacheLock(strLock);
+  if (!bLocked) {
+    fprintf(stderr,
+            "[runtime] cache lock unavailable (%s), extracting unlocked\n",
+            strLock.c_str());
   }
 
   /* Re-check the marker under the lock: another process may have completed
    * the extraction while we waited. */
-  {
-    uint64_t mh = 0;
-    size_t ms = 0;
-    if (ReadMarker(cache, mh, ms) && mh == hash && ms == blob_size &&
-        (access((cache + "/python311.zip").c_str(), 0) == 0 ||
-         access((cache + "/stdlib").c_str(), 0) == 0)) {
+  const std::string strMatchedNow =
+      MatchingCache(cache, strFallbackCache, hash, blob_size);
+  if (!strMatchedNow.empty()) {
+    if (bLocked) {
       ReleaseCacheLock(strLock);
-      home = cache;
-      return true;
     }
+    home = strMatchedNow;
+    return true;
   }
 
   /* Read the blob. */
   std::ifstream in(g_exe_path, std::ios::binary);
   if (!in) {
-    ReleaseCacheLock(strLock);
+    SetRuntimeError("failed to open the executable", "");
+    if (bLocked) {
+      ReleaseCacheLock(strLock);
+    }
     return false;
   }
   in.seekg(0, std::ios::end);
@@ -213,11 +253,17 @@ bool ExtractEmbeddedRuntime(std::string& home) {
   std::vector<uint8_t> blob(blob_size);
   in.read(reinterpret_cast<char*>(blob.data()), blob_size);
   if (!in) {
-    ReleaseCacheLock(strLock);
+    SetRuntimeError("failed to read the embedded runtime blob", "");
+    if (bLocked) {
+      ReleaseCacheLock(strLock);
+    }
     return false;
   }
   if (Fnv1a64(blob.data(), blob.size()) != hash) {
-    ReleaseCacheLock(strLock);
+    SetRuntimeError("embedded runtime blob hash mismatch (corrupt)", "");
+    if (bLocked) {
+      ReleaseCacheLock(strLock);
+    }
     return false;
   }
 
@@ -246,7 +292,10 @@ bool ExtractEmbeddedRuntime(std::string& home) {
   uint32_t count = 0;
   if (!rd(&count, 4)) {
     std::filesystem::remove_all(tmp_cache, ec);
-    ReleaseCacheLock(strLock);
+    SetRuntimeError("embedded runtime blob format invalid", "");
+    if (bLocked) {
+      ReleaseCacheLock(strLock);
+    }
     return false;
   }
 
@@ -282,20 +331,35 @@ bool ExtractEmbeddedRuntime(std::string& home) {
 
   if (!ok || pos != blob.size()) {
     std::filesystem::remove_all(tmp_cache, ec);
-    ReleaseCacheLock(strLock);
+    SetRuntimeError("failed to extract embedded runtime files", "");
+    if (bLocked) {
+      ReleaseCacheLock(strLock);
+    }
     return false;
   }
   WriteMarker(tmp_cache, hash, blob_size);
 
-  /* Swap the temp cache into place. */
+  /* Swap into the primary cache; when its files are locked (an older burst
+   * is still running), use the hash-suffixed cache instead so the runtime
+   * stays usable. */
+  std::string strHome = tmp_cache;
   std::filesystem::remove_all(cache, ec);
+  ec.clear();
   std::filesystem::rename(tmp_cache, cache, ec);
-  if (ec) {
-    std::filesystem::remove_all(tmp_cache, ec);
-    ReleaseCacheLock(strLock);
-    return false;
+  if (!ec) {
+    strHome = cache;
+  } else {
+    ec.clear();
+    std::filesystem::remove_all(strFallbackCache, ec);
+    ec.clear();
+    std::filesystem::rename(tmp_cache, strFallbackCache, ec);
+    if (!ec) {
+      strHome = strFallbackCache;
+    }
   }
-  ReleaseCacheLock(strLock);
-  home = cache;
+  if (bLocked) {
+    ReleaseCacheLock(strLock);
+  }
+  home = strHome;
   return true;
 }

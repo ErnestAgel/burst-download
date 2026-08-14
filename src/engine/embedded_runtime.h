@@ -14,6 +14,12 @@ void EmbedSetExePath(const std::string& exe_path);
 std::string EmbedGetExePath();
 
 /**
+ * @brief Last extraction failure reason (empty when the last extraction
+ *        succeeded); surfaced in task errors for diagnostics.
+ */
+std::string EmbedRuntimeLastError();
+
+/**
  * @brief Ensure the runtime assets are ready and output their root dir.
  * @param home Output: ready runtime root (contains stdlib/); empty when
  *             unavailable.

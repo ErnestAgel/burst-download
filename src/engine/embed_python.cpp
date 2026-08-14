@@ -58,6 +58,7 @@ bool g_py_thread_started = false;
 bool g_py_thread_stop = false;
 std::atomic<bool> g_py_thread_exited{false};
 PyThreadState* g_py_main_thread_state = nullptr;
+std::string g_last_init_error;
 
 /** @brief Idle lifetime of the Python worker (P8-2): the thread releases
  *         itself after this long without jobs, so pure downloads run with
@@ -658,6 +659,15 @@ bool EmbedPythonInit(const std::string& strPythonHome)
     }
     if (strHome.empty())
     {
+        const std::string strRuntimeErr = EmbedRuntimeLastError();
+        g_last_init_error =
+            "Python runtime assets not found (checked assets/ next to the "
+            "exe, python_runtime/, the embedded runtime cache and "
+            "CURLBOLT_PYHOME)";
+        if (!strRuntimeErr.empty())
+        {
+            g_last_init_error += "; embedded runtime: " + strRuntimeErr;
+        }
         fprintf(stderr,
                 "[embed_python] Python runtime assets not found: checked "
                 "assets/ next to the exe, python_runtime/, the embedded "
@@ -669,6 +679,8 @@ bool EmbedPythonInit(const std::string& strPythonHome)
 
     if (!RuntimeHomeUsable(strHome))
     {
+        g_last_init_error =
+            "Python runtime assets not usable: " + strHome;
         fprintf(stderr,
                 "[embed_python] Python runtime assets not usable: %s\n",
                 strHome.c_str());
@@ -702,18 +714,30 @@ bool EmbedPythonInit(const std::string& strPythonHome)
     const PyStatus stStatus = Py_InitializeFromConfig(&tConfig);
     if (PyStatus_Exception(stStatus))
     {
+        g_last_init_error =
+            std::string("Py_Initialize failed: ") +
+            (stStatus.err_msg ? stStatus.err_msg : "?");
         fprintf(stderr, "[embed_python] Py_Initialize failed: %s\n",
                 stStatus.err_msg ? stStatus.err_msg : "?");
         PyConfig_Clear(&tConfig);
         return false;
     }
     PyConfig_Clear(&tConfig);
+    g_last_init_error.clear();
     g_python_home = strHome;
     g_initialized = true;
     /* Issue R5: release the GIL so the dedicated Python worker thread can
      * acquire it; without this its PyGILState_Ensure deadlocks. */
     g_py_main_thread_state = PyEval_SaveThread();
     return true;
+}
+
+/** @brief Last Python initialization failure reason (empty on success);
+ *         surfaced in task errors so "missing runtime" reports can be
+ *         diagnosed without a console. */
+std::string EmbedLastInitError()
+{
+    return g_last_init_error;
 }
 
 bool EmbedParseVideoUrls(const std::string& strUrl,
