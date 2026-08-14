@@ -24,6 +24,10 @@
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 
+#ifndef GL_MULTISAMPLE
+#define GL_MULTISAMPLE 0x809D  /* 缺失时补充 MSAA 常量 */
+#endif
+
 #include "font_data.h"
 #include "app.h"
 #include "crashguard.h"
@@ -160,6 +164,7 @@ int RunGui(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_SAMPLES, 4);  /* MSAA: smoother rounded edges */
 #ifdef _WIN32
     /* Windows: borderless with a custom title bar / resize grip (ui.cpp
      * RenderTitleBar / RenderResizeGrip). */
@@ -180,6 +185,7 @@ int RunGui(int argc, char** argv) {
         return 1;
     }
     glfwMakeContextCurrent(window);
+    glEnable(GL_MULTISAMPLE);
     glfwSwapInterval(1);
     /* Fixed window size per the visual spec (ui-preview width 720). */
     glfwSetWindowSizeLimits(window, 720, 640, 720, 640);
@@ -199,12 +205,12 @@ int RunGui(int argc, char** argv) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    /* One Dark theme (user-specified palette). */
-    theme::ApplyOneDark();
+    /* Burst dark theme (UI spec appendix C). */
+    theme::ApplyBurst();
 
     /* Embedded font (GB2312 full + ASCII). Two sizes follow the web
-     * mockup density (10-16px range): 16px for inputs/buttons/file names,
-     * 12px for secondary labels/status bar/chips/tooltips.  Sizes scale
+     * mockup density (14-18px range): 18px for inputs/buttons/file names,
+     * 14px for secondary labels/status bar/chips/tooltips.  Sizes scale
      * with the window DPI so text stays crisp on high-DPI displays. */
     {
         float fDpiScale = 1.0f;
@@ -219,7 +225,7 @@ int RunGui(int argc, char** argv) {
         ImFont* pFontMain = io.Fonts->AddFontFromMemoryTTF(
             (void*)third_party_fonts_NotoSansSC_subset_ttf,
             (int)third_party_fonts_NotoSansSC_subset_ttf_len,
-            16.0f * fDpiScale, &cfg, io.Fonts->GetGlyphRangesChineseFull());
+            18.0f * fDpiScale, &cfg, io.Fonts->GetGlyphRangesChineseFull());
         if (pFontMain == nullptr) {
             ShowFatal("Font loading failed.");
             ImGui::DestroyContext();
@@ -230,7 +236,7 @@ int RunGui(int argc, char** argv) {
         ImFont* pFontSmall = io.Fonts->AddFontFromMemoryTTF(
             (void*)third_party_fonts_NotoSansSC_subset_ttf,
             (int)third_party_fonts_NotoSansSC_subset_ttf_len,
-            12.0f * fDpiScale, &cfg, io.Fonts->GetGlyphRangesChineseFull());
+            14.0f * fDpiScale, &cfg, io.Fonts->GetGlyphRangesChineseFull());
         if (pFontSmall == nullptr) {
             ShowFatal("Font loading failed.");
             ImGui::DestroyContext();

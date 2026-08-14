@@ -15,9 +15,9 @@
 namespace theme {
 
 /**
- * @brief 应用 Atom One Dark 主题到 ImGui（每次调用重置全部颜色与样式）
+ * @brief 应用 Burst Download 深色主题到 ImGui（视觉规格附录 C）
  * @note 需在 ImGui::CreateContext() 之后调用；窗口标题栏/边框由 style 统一定制
  */
-void ApplyOneDark();
+void ApplyBurst();
 
 }  // namespace theme

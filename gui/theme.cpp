@@ -1,6 +1,6 @@
 /**
  * @file theme.cpp
- * @brief Atom One Dark 主题实现（见 theme.h）
+ * @brief Burst Download 深色主题实现（视觉规格附录 C，见 theme.h）
  *
  * @author ErnestAgel
  * @date 2026-08-07
@@ -22,98 +22,103 @@ ImVec4 C(unsigned r, unsigned g, unsigned b, float a = 1.0f) {
 
 }  // namespace
 
-void ApplyOneDark() {
+void ApplyBurst() {
     ImGuiStyle& s = ImGui::GetStyle();
-    ImVec4* col = s.Colors;
+    ImVec4* pCol = s.Colors;
 
-    /* ---- One Dark 调色板 ---- */
-    const ImVec4 cBg        = C(0x28, 0x2C, 0x34);  /* 窗口背景 */
-    const ImVec4 cPanel     = C(0x21, 0x25, 0x2B);  /* 面板/弹层 */
-    const ImVec4 cPanelDeep = C(0x1B, 0x1E, 0x24);  /* 更深面板 */
-    /* 输入框底色对齐网页 Demo：#21252B 深面板 + zinc-700 描边 */
-    const ImVec4 cFrame     = C(0x21, 0x25, 0x2B);  /* 控件底(网页输入框色) */
-    const ImVec4 cFrameHov  = C(0x27, 0x2C, 0x34);
-    const ImVec4 cFrameAct  = C(0x2C, 0x32, 0x3B);
-    const ImVec4 cBorder    = C(0x3E, 0x44, 0x52);  /* 边框(zinc-700) */
-    const ImVec4 cText      = C(0xD7, 0xDA, 0xE0);  /* 主文本(调亮,暗色下更清晰) */
-    const ImVec4 cTextDim   = C(0x7A, 0x82, 0x92);
-    const ImVec4 cBlue      = C(0x61, 0xAF, 0xEF);
-    const ImVec4 cBlueAct   = C(0x52, 0x8B, 0xFF);
-    const ImVec4 cGreen     = C(0x98, 0xC3, 0x79);
+    /* C.1 palette. */
+    const ImVec4 cBg          = C(0x28, 0x2C, 0x34);
+    const ImVec4 cPanel       = C(0x21, 0x25, 0x2B);
+    const ImVec4 cPanelDeep   = C(0x18, 0x1C, 0x23);
+    const ImVec4 cTooltip     = C(0x18, 0x1B, 0x21, 0.95f);
+    const ImVec4 cTrack       = C(0x3B, 0x40, 0x50);
+    const ImVec4 cText        = C(0xAB, 0xB2, 0xBF);
+    const ImVec4 cTextDim     = C(0xA1, 0xA1, 0xAA);
+    const ImVec4 cTextFaint   = C(0x71, 0x71, 0x7A);
+    const ImVec4 cTextStrong  = C(0xE4, 0xE4, 0xE7);
+    const ImVec4 cBorder      = C(0x3F, 0x3F, 0x46, 0.6f);
+    const ImVec4 cHover       = C(0x3F, 0x3F, 0x46, 0.40f);
+    const ImVec4 cBlue        = C(0x3B, 0x82, 0xF6);
+    const ImVec4 cBlueHov     = C(0x60, 0xA5, 0xFA);
+    const ImVec4 cDivider     = C(0, 0, 0, 102);
 
-    /* ---- 颜色映射 ---- */
-    col[ImGuiCol_Text]                 = cText;
-    col[ImGuiCol_TextDisabled]         = cTextDim;
-    col[ImGuiCol_WindowBg]             = cBg;
-    col[ImGuiCol_ChildBg]              = cPanel;
-    col[ImGuiCol_PopupBg]              = cPanel;
-    col[ImGuiCol_Border]               = cBorder;
-    col[ImGuiCol_BorderShadow]         = C(0, 0, 0, 0);
-    col[ImGuiCol_FrameBg]              = cFrame;
-    col[ImGuiCol_FrameBgHovered]       = cFrameHov;
-    col[ImGuiCol_FrameBgActive]        = cFrameAct;
-    col[ImGuiCol_TitleBg]              = cPanelDeep;
-    col[ImGuiCol_TitleBgActive]        = cPanelDeep;
-    col[ImGuiCol_TitleBgCollapsed]     = cPanel;
-    col[ImGuiCol_MenuBarBg]            = cPanel;
-    col[ImGuiCol_ScrollbarBg]          = cPanelDeep;
-    col[ImGuiCol_ScrollbarGrab]        = cBorder;
-    col[ImGuiCol_ScrollbarGrabHovered] = cFrameHov;
-    col[ImGuiCol_ScrollbarGrabActive]  = cFrameAct;
-    col[ImGuiCol_CheckMark]            = cBlue;
-    col[ImGuiCol_SliderGrab]           = cBlue;
-    col[ImGuiCol_SliderGrabActive]     = cBlueAct;
-    col[ImGuiCol_Button]               = cFrame;
-    col[ImGuiCol_ButtonHovered]        = cFrameHov;
-    col[ImGuiCol_ButtonActive]         = cFrameAct;
-    col[ImGuiCol_Header]               = cFrame;
-    col[ImGuiCol_HeaderHovered]        = cFrameHov;
-    col[ImGuiCol_HeaderActive]         = cFrameAct;
-    col[ImGuiCol_Separator]            = C(0, 0, 0, 102);  /* 分割线 40% */
-    col[ImGuiCol_SeparatorHovered]     = cBlue;
-    col[ImGuiCol_SeparatorActive]      = cBlue;
-    col[ImGuiCol_ResizeGrip]           = cBorder;
-    col[ImGuiCol_ResizeGripHovered]    = cBlue;
-    col[ImGuiCol_ResizeGripActive]     = cBlueAct;
-    col[ImGuiCol_Tab]                  = cPanel;
-    col[ImGuiCol_TabHovered]           = cFrameHov;
-    col[ImGuiCol_TabActive]            = cFrame;
-    col[ImGuiCol_TabUnfocused]         = cPanel;
-    col[ImGuiCol_TabUnfocusedActive]   = cPanelDeep;
-    col[ImGuiCol_TableHeaderBg]        = cPanel;
-    col[ImGuiCol_TableBorderStrong]    = cBorder;
-    col[ImGuiCol_TableBorderLight]     = cBorder;
-    col[ImGuiCol_TextSelectedBg]       = C(0x61, 0xAF, 0xEF, 0.35f);
-    col[ImGuiCol_DragDropTarget]       = cBlue;
-    col[ImGuiCol_NavHighlight]         = cBlue;
-    col[ImGuiCol_PlotLines]            = cText;
-    col[ImGuiCol_PlotLinesHovered]     = cGreen;
-    col[ImGuiCol_PlotHistogram]        = cBlue;       /* ProgressBar 前景 */
-    col[ImGuiCol_PlotHistogramHovered] = cBlueAct;
-    col[ImGuiCol_ModalWindowDimBg]     = C(0, 0, 0, 0.55f);
+    pCol[ImGuiCol_Text]                  = cText;
+    pCol[ImGuiCol_TextDisabled]          = cTextFaint;
+    pCol[ImGuiCol_WindowBg]              = cBg;
+    pCol[ImGuiCol_ChildBg]               = cPanel;
+    pCol[ImGuiCol_PopupBg]               = cPanel;
+    pCol[ImGuiCol_Border]                = cBorder;
+    pCol[ImGuiCol_BorderShadow]          = C(0, 0, 0, 0);
+    pCol[ImGuiCol_FrameBg]               = cPanel;
+    pCol[ImGuiCol_FrameBgHovered]        = cHover;
+    pCol[ImGuiCol_FrameBgActive]         = C(0x3F, 0x3F, 0x46, 0.55f);
+    pCol[ImGuiCol_TitleBg]               = cPanel;
+    pCol[ImGuiCol_TitleBgActive]         = cPanel;
+    pCol[ImGuiCol_TitleBgCollapsed]      = cPanel;
+    pCol[ImGuiCol_MenuBarBg]             = cPanel;
+    pCol[ImGuiCol_ScrollbarBg]           = cTooltip;
+    pCol[ImGuiCol_ScrollbarGrab]         = C(0x3F, 0x3F, 0x46);
+    pCol[ImGuiCol_ScrollbarGrabHovered]  = C(0x52, 0x52, 0x5B);
+    pCol[ImGuiCol_ScrollbarGrabActive]   = C(0x71, 0x71, 0x7A);
+    pCol[ImGuiCol_CheckMark]             = cBlue;
+    pCol[ImGuiCol_CheckboxSelectedBg]    = C(0x3B, 0x82, 0xF6, 0.25f);
+    pCol[ImGuiCol_SliderGrab]            = cBlue;
+    pCol[ImGuiCol_SliderGrabActive]      = cBlueHov;
+    pCol[ImGuiCol_Button]                = cPanel;
+    pCol[ImGuiCol_ButtonHovered]         = cHover;
+    pCol[ImGuiCol_ButtonActive]          = C(0x3F, 0x3F, 0x46, 0.55f);
+    pCol[ImGuiCol_Header]                = cPanel;
+    pCol[ImGuiCol_HeaderHovered]         = cHover;
+    pCol[ImGuiCol_HeaderActive]          = C(0x3F, 0x3F, 0x46, 0.55f);
+    pCol[ImGuiCol_Separator]             = cDivider;
+    pCol[ImGuiCol_SeparatorHovered]      = cBlue;
+    pCol[ImGuiCol_SeparatorActive]       = cBlue;
+    pCol[ImGuiCol_ResizeGrip]            = cBorder;
+    pCol[ImGuiCol_ResizeGripHovered]     = cBlue;
+    pCol[ImGuiCol_ResizeGripActive]      = cBlueHov;
+    pCol[ImGuiCol_Tab]                   = cPanel;
+    pCol[ImGuiCol_TabHovered]            = cHover;
+    pCol[ImGuiCol_TabSelected]           = C(0x3F, 0x3F, 0x46, 0.40f);
+    pCol[ImGuiCol_TabSelectedOverline]   = cBlue;
+    pCol[ImGuiCol_TabDimmed]             = cPanel;
+    pCol[ImGuiCol_TabDimmedSelected]     = C(0x3F, 0x3F, 0x46, 0.30f);
+    pCol[ImGuiCol_TabDimmedSelectedOverline] = C(0x3B, 0x82, 0xF6, 0.6f);
+    pCol[ImGuiCol_TableHeaderBg]         = cPanel;
+    pCol[ImGuiCol_TableBorderStrong]     = cBorder;
+    pCol[ImGuiCol_TableBorderLight]      = C(0x3F, 0x3F, 0x46, 0.5f);
+    pCol[ImGuiCol_TableRowBg]            = C(0, 0, 0, 0);
+    pCol[ImGuiCol_TableRowBgAlt]         = C(0, 0, 0, 0.05f);
+    pCol[ImGuiCol_TextSelectedBg]        = C(0x3B, 0x82, 0xF6, 0.35f);
+    pCol[ImGuiCol_DragDropTarget]        = cBlue;
+    pCol[ImGuiCol_NavCursor]             = cBlue;
+    pCol[ImGuiCol_PlotLines]             = cText;
+    pCol[ImGuiCol_PlotLinesHovered]      = cBlueHov;
+    pCol[ImGuiCol_PlotHistogram]         = cBlue;
+    pCol[ImGuiCol_PlotHistogramHovered]  = cBlueHov;
+    pCol[ImGuiCol_ModalWindowDimBg]      = C(0, 0, 0, 0.55f);
 
-    /* ---- 样式（圆角/间距） ---- */
-    s.WindowRounding    = 4.0f;
-    s.ChildRounding     = 8.0f;   /* 任务列表容器圆角 (rounded-lg) */
-    s.FrameRounding     = 8.0f;   /* 输入框/下拉圆角 (rounded-lg) */
-    s.PopupRounding     = 8.0f;   /* About 下拉圆角 */
-    s.ScrollbarRounding = 8.0f;
-    s.GrabRounding      = 8.0f;
-    s.TabRounding       = 8.0f;
-    s.WindowBorderSize  = 1.0f;
-    s.ChildBorderSize   = 1.0f;
-    s.PopupBorderSize   = 1.0f;
-    s.FrameBorderSize   = 1.0f;  /* 控件描边 → 立体感 */
-    s.WindowPadding     = ImVec2(12, 10);
-    s.FramePadding      = ImVec2(7, 3);
-    s.ItemSpacing       = ImVec2(8, 5);
-    s.ItemInnerSpacing  = ImVec2(5, 3);
-    s.ScrollbarSize     = 8.0f;   /* 细滚动条，贴近网页 */
-    s.GrabMinSize       = 10.0f;
-    s.WindowTitleAlign  = ImVec2(0.5f, 0.5f);
-    s.AntiAliasedLines  = true;
-    s.AntiAliasedFill   = true;
+    /* C.2 rounding / C.3 spacing. */
+    s.WindowRounding       = 16.0f;
+    s.ChildRounding        = 8.0f;
+    s.FrameRounding        = 8.0f;
+    s.PopupRounding        = 8.0f;
+    s.ScrollbarRounding    = 8.0f;
+    s.GrabRounding         = 8.0f;
+    s.TabRounding          = 8.0f;
+    s.WindowBorderSize     = 1.0f;
+    s.ChildBorderSize      = 1.0f;
+    s.PopupBorderSize      = 1.0f;
+    s.FrameBorderSize      = 1.0f;
+    s.WindowPadding        = ImVec2(16.0f, 16.0f);
+    s.FramePadding         = ImVec2(12.0f, 8.0f);
+    s.ItemSpacing          = ImVec2(8.0f, 8.0f);
+    s.ItemInnerSpacing     = ImVec2(8.0f, 8.0f);
+    s.ScrollbarSize        = 8.0f;
+    s.GrabMinSize          = 10.0f;
+    s.WindowTitleAlign     = ImVec2(0.5f, 0.5f);
     s.WindowMenuButtonPosition = ImGuiDir_None;
+    s.AntiAliasedLines     = true;
+    s.AntiAliasedFill      = true;
 }
 
 }  // namespace theme
