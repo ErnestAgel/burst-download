@@ -196,7 +196,12 @@ BOOL32 RunVideoExec(const TTaskExecOptions& tOpts, TTaskExecCallbacks& tCb,
         }
         if (tCb.fnOnLog)
         {
-            tCb.fnOnLog("[ERROR] video parsing failed: Python runtime");
+            std::string strLogLine = "video parsing failed: Python runtime";
+            if (!strDetail.empty())
+            {
+                strLogLine += " - " + strDetail;
+            }
+            tCb.fnOnLog(("[ERROR] " + strLogLine).c_str());
         }
         if (tCb.fnOnStage)
         {

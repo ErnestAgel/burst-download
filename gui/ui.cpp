@@ -976,6 +976,12 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     ImGui::SameLine(0, fGap);
     RenderPill("##status_pill", strStatus.c_str(), colStatusText,
                colStatusBg, 0, fCapsuleW);
+    /* Hover the Error pill to see the full task error (including the
+     * Python-runtime init detail when parsing could not start). */
+    if ((tRow.emState == emTaskError) && !tRow.strError.empty())
+    {
+        ImGui::SetItemTooltip("%s", tRow.strError.c_str());
+    }
 
     /* Left side: selectable file name (selects the detail log). */
     ImGui::SetCursorPosY(fRowY);
