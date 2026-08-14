@@ -108,6 +108,10 @@ const Entry kStrings[] = {
     {"speed", "速度", "Speed"},
     {"label.log", "日志", "Log"},
     {"log.copy", "复制日志", "Copy log"},
+    /* Text-input right-click menu (paste/copy/cut) */
+    {"context.paste", "粘贴", "Paste"},
+    {"context.copy", "复制", "Copy"},
+    {"context.cut", "剪切", "Cut"},
     /* Settings */
     {"menu.settings", "设置", "Settings"},
     {"menu.language", "语言", "Language"},

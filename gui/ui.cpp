@@ -1032,6 +1032,54 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     g_task_row_h = ImGui::GetCursorScreenPos().y - fRowTop;
 }
 
+/** @brief Replace a fixed buffer's content with the clipboard text,
+ *         truncated to fit at a UTF-8 boundary. */
+void PasteIntoBuffer(char* pBuf, size_t nBufSize) {
+    const char* pClip = ImGui::GetClipboardText();
+    if (pClip == nullptr) {
+        return;
+    }
+    size_t nLen = strlen(pClip);
+    if (nLen >= nBufSize) {
+        nLen = nBufSize - 1;
+        while (nLen > 0 && (((unsigned char)pClip[nLen] & 0xC0) == 0x80)) {
+            --nLen;
+        }
+    }
+    memcpy(pBuf, pClip, nLen);
+    pBuf[nLen] = '\0';
+}
+
+/** @brief Right-click edit menu (paste / copy / cut) for a text input.
+ *         Call immediately after the InputText* widget that owns the
+ *         buffer, before any other item is submitted. */
+void RenderTextEditPopup(const char* pszPopupId, char* pBuf,
+                         size_t nBufSize) {
+    if (!ImGui::BeginPopupContextItem(pszPopupId)) {
+        return;
+    }
+    const char* pClip = ImGui::GetClipboardText();
+    const bool bCanPaste = (pClip != nullptr) && (pClip[0] != '\0');
+    const bool bHasText = (pBuf[0] != '\0');
+    if (ImGui::MenuItem(i18n::T("context.paste"), nullptr, false,
+                        bCanPaste)) {
+        PasteIntoBuffer(pBuf, nBufSize);
+        ImGui::CloseCurrentPopup();
+    }
+    if (ImGui::MenuItem(i18n::T("context.copy"), nullptr, false,
+                        bHasText)) {
+        ImGui::SetClipboardText(pBuf);
+        ImGui::CloseCurrentPopup();
+    }
+    if (ImGui::MenuItem(i18n::T("context.cut"), nullptr, false,
+                        bHasText)) {
+        ImGui::SetClipboardText(pBuf);
+        pBuf[0] = '\0';
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 /* ---- Add-task form (always usable; the queue decouples input from the
  *      running tasks, P5-4) ---- */
 void RenderAddForm(CTaskModel& cModel) {
@@ -1059,6 +1107,7 @@ void RenderAddForm(CTaskModel& cModel) {
         AddTaskFromForm(cModel);
     }
     ImGui::PopStyleVar();
+    RenderTextEditPopup("##url_ctx", g_url, sizeof(g_url));
     const ImVec2 vInputMin = ImGui::GetItemRectMin();
     const ImVec2 vInputMax = ImGui::GetItemRectMax();
     const bool bUrlActive =
@@ -1140,6 +1189,7 @@ void RenderAddForm(CTaskModel& cModel) {
         "##path", i18n::T("placeholder.path.file"), g_path, sizeof(g_path),
         ImGuiInputTextFlags_None);
     ImGui::PopStyleVar();
+    RenderTextEditPopup("##path_ctx", g_path, sizeof(g_path));
     /* Web-style focus ring for the save-path box. */
     if (ImGui::IsItemActive() || ImGui::IsItemFocused()) {
         const ImVec2 vPathMin = ImGui::GetItemRectMin();
