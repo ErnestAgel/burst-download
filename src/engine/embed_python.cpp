@@ -249,8 +249,11 @@ std::string ExeDirOf(const std::string& strExePath)
 /** @brief Runtime root is usable when stdlib/ or python311.zip exists. */
 bool RuntimeHomeUsable(const std::string& strHome)
 {
-    return access((strHome + "/stdlib").c_str(), R_OK) == 0 ||
-           access((strHome + "/python311.zip").c_str(), R_OK) == 0;
+    std::error_code ec;
+    return std::filesystem::exists(
+               std::filesystem::u8path(strHome + "/stdlib"), ec) ||
+           std::filesystem::exists(
+               std::filesystem::u8path(strHome + "/python311.zip"), ec);
 }
 
 /** @brief Locate the runtime assets directory: exe assets/ -> temp cache ->
@@ -311,12 +314,13 @@ std::string ResultFile()
  *         yt_dlp/version.py layout. */
 std::string ReadVersionMarker(const std::string& strHome)
 {
-    std::ifstream inFile(strHome + "/version_ytdlp.txt");
+    std::ifstream inFile(std::filesystem::u8path(strHome + "/version_ytdlp.txt"));
     std::string strVer;
     std::getline(inFile, strVer);
     if (!inFile)
     {
-        std::ifstream vf(strHome + "/yt_dlp/version.py");
+        std::ifstream vf(
+            std::filesystem::u8path(strHome + "/yt_dlp/version.py"));
         std::string strLine;
         while (std::getline(vf, strLine))
         {
@@ -598,7 +602,7 @@ bool UpdateParserAt(const std::string& strHome, std::string& strMsg,
     }
 
     /* Read back the JSON result. */
-    std::ifstream inFile(strResultFile);
+    std::ifstream inFile(std::filesystem::u8path(strResultFile));
     if (!inFile.is_open())
     {
         strMsg = "failed to read the update result";
@@ -607,7 +611,7 @@ bool UpdateParserAt(const std::string& strHome, std::string& strMsg,
     std::string strContent((std::istreambuf_iterator<char>(inFile)),
                            std::istreambuf_iterator<char>());
     inFile.close();
-    remove(strResultFile.c_str());
+    std::filesystem::remove(std::filesystem::u8path(strResultFile));
 
     const bool bOk =
         strContent.find("\"ok\": true") != std::string::npos;
@@ -707,7 +711,9 @@ bool EmbedPythonInit(const std::string& strPythonHome)
         /* stdlib: prefer the extracted directory (dev layout); the release
          * layout ships python311.zip (also auto-loaded early by CPython). */
         std::string strStdlib = strHome + "/stdlib";
-        if (access(strStdlib.c_str(), R_OK) != 0)
+        std::error_code ecUsable;
+        if (!std::filesystem::exists(
+                std::filesystem::u8path(strStdlib), ecUsable))
         {
             strStdlib = strHome + "/python311.zip";
         }
@@ -754,7 +760,8 @@ bool EmbedPythonInit(const std::string& strPythonHome)
         if ((nAttempt == 0) && bCacheHome)
         {
             std::error_code ec;
-            std::filesystem::remove_all(strHome, ec);
+            std::filesystem::remove_all(
+                std::filesystem::u8path(strHome), ec);
             continue;
         }
         break;
@@ -827,7 +834,7 @@ bool EmbedVerifyRuntime(std::string& strMsg)
         return false;
     }
 
-    std::ifstream inFile(strResultFile);
+    std::ifstream inFile(std::filesystem::u8path(strResultFile));
     if (!inFile.is_open())
     {
         strMsg = "failed to read the verification result";
@@ -836,7 +843,7 @@ bool EmbedVerifyRuntime(std::string& strMsg)
     std::string strContent((std::istreambuf_iterator<char>(inFile)),
                            std::istreambuf_iterator<char>());
     inFile.close();
-    remove(strResultFile.c_str());
+    std::filesystem::remove(std::filesystem::u8path(strResultFile));
 
     const bool bOk = strContent.find("\"ok\": true") != std::string::npos;
     const std::string strVer = ExtractJsonStr(strContent, "yt_dlp_version");
@@ -970,7 +977,7 @@ bool EmbedParseVideoUrls(const std::string& strUrl,
     }
 
     /* Read back the JSON result. */
-    std::ifstream inFile(strResultFile);
+    std::ifstream inFile(std::filesystem::u8path(strResultFile));
     if (!inFile.is_open())
     {
         strErr = "failed to read the parse result";
@@ -979,7 +986,7 @@ bool EmbedParseVideoUrls(const std::string& strUrl,
     std::string strContent((std::istreambuf_iterator<char>(inFile)),
                            std::istreambuf_iterator<char>());
     inFile.close();
-    remove(strResultFile.c_str());
+    std::filesystem::remove(std::filesystem::u8path(strResultFile));
 
     /* Minimal JSON parsing: extract the "urls" array strings. */
     const size_t nErrPos = strContent.find("\"error\"");
@@ -1051,19 +1058,31 @@ bool EmbedAutoUpdateParser(std::string& strMsg,
      * failed attempt allow a retry after 1h (issue O8). */
     const std::string strCheckStamp = strHome + "/.parser_last_check";
     const std::string strFailStamp = strHome + "/.parser_last_fail";
-    struct stat stCheck;
-    struct stat stFail;
-    const time_t tNow = time(nullptr);
-    if ((stat(strCheckStamp.c_str(), &stCheck) == 0) &&
-        (tNow >= stCheck.st_mtime) &&
-        ((tNow - stCheck.st_mtime) < kParserAutoUpdateIntervalSec))
+    const auto fnStampAgeSec = [](const std::string& strPath,
+                                  long& nAgeSec) -> bool {
+        std::error_code ec;
+        const auto tStamp = std::filesystem::last_write_time(
+            std::filesystem::u8path(strPath), ec);
+        if (ec)
+        {
+            return false;
+        }
+        nAgeSec = std::chrono::duration_cast<std::chrono::seconds>(
+                      std::filesystem::file_time_type::clock::now() -
+                      tStamp)
+                      .count();
+        return true;
+    };
+    long nCheckAge = 0;
+    long nFailAge = 0;
+    if (fnStampAgeSec(strCheckStamp, nCheckAge) &&
+        (nCheckAge < kParserAutoUpdateIntervalSec))
     {
         strMsg.clear();  /* checked recently: skip silently */
         return true;
     }
-    if ((stat(strFailStamp.c_str(), &stFail) == 0) &&
-        (tNow >= stFail.st_mtime) &&
-        ((tNow - stFail.st_mtime) < kParserRetryAfterFailSec))
+    if (fnStampAgeSec(strFailStamp, nFailAge) &&
+        (nFailAge < kParserRetryAfterFailSec))
     {
         strMsg.clear();  /* failed recently: skip to avoid hammering GitHub */
         return true;
@@ -1071,12 +1090,14 @@ bool EmbedAutoUpdateParser(std::string& strMsg,
     const bool bOk = UpdateParserAt(strHome, strMsg, pbCancel, 10L);
     if (bOk)
     {
-        { std::ofstream f(strCheckStamp.c_str(), std::ios::app); }
-        std::remove(strFailStamp.c_str());
+        { std::ofstream f(std::filesystem::u8path(strCheckStamp),
+                          std::ios::app); }
+        std::filesystem::remove(std::filesystem::u8path(strFailStamp));
     }
     else
     {
-        { std::ofstream f(strFailStamp.c_str(), std::ios::app); }
+        { std::ofstream f(std::filesystem::u8path(strFailStamp),
+                          std::ios::app); }
     }
     return bOk;
 }

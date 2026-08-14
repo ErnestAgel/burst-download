@@ -40,6 +40,17 @@ const long kCacheLockStaleSec = 600;
 std::string g_exe_path;
 std::string g_runtime_last_error;
 
+/** @brief Build a filesystem path from a UTF-8 string. On Windows the
+ *         narrow std::ifstream / access() APIs convert via the ANSI code
+ *         page, which breaks non-ASCII paths on non-UTF-8 system locales
+ *         (the same bug class as the v2.4.2 runtime regression).  u8path
+ *         yields the native wide path, so every runtime file operation is
+ *         locale-independent. */
+std::filesystem::path ToPath(const std::string& strUtf8)
+{
+    return std::filesystem::u8path(strUtf8);
+}
+
 void SetRuntimeError(const char* pszFmt, const std::string& strArg) {
   char buf[512];
   snprintf(buf, sizeof(buf), pszFmt, strArg.c_str());
@@ -59,10 +70,19 @@ uint64_t Fnv1a64(const uint8_t* data, size_t len) {
  * system cleans it up). */
 std::string TempCacheDir() {
 #ifdef _WIN32
-  char buf[MAX_PATH];
-  DWORD n = GetTempPathA(MAX_PATH, buf);
+  wchar_t wszBuf[MAX_PATH];
+  DWORD n = GetTempPathW(MAX_PATH, wszBuf);
   if (n == 0 || n >= MAX_PATH) return "";
-  return std::string(buf) + "burst-runtime";
+  /* Wide-to-UTF-8 keeps every cache path in one encoding; the ANSI
+   * GetTempPathA variant mangles non-ASCII temp dirs on non-UTF-8
+   * system locales. */
+  const int nUtf8Len = WideCharToMultiByte(CP_UTF8, 0, wszBuf, (int)n,
+                                           NULL, 0, NULL, NULL);
+  if (nUtf8Len <= 0) return "";
+  std::string strOut((size_t)nUtf8Len, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wszBuf, (int)n, &strOut[0], nUtf8Len,
+                      NULL, NULL);
+  return strOut + "burst-runtime";
 #else
   const char* td = getenv("TMPDIR");
   std::string base = (td && *td) ? td : "/tmp";
@@ -72,7 +92,7 @@ std::string TempCacheDir() {
 
 bool ReadFooter(const std::string& exe_path, size_t& blob_size,
                 uint64_t& hash) {
-  std::ifstream in(exe_path, std::ios::binary);
+  std::ifstream in(ToPath(exe_path), std::ios::binary);
   if (!in) return false;
   in.seekg(0, std::ios::end);
   const std::streamoff len = in.tellg();
@@ -92,7 +112,7 @@ bool ReadFooter(const std::string& exe_path, size_t& blob_size,
 }
 
 bool ReadMarker(const std::string& cache, uint64_t& hash, size_t& size) {
-  std::ifstream in(cache + "/manifest", std::ios::binary);
+  std::ifstream in(ToPath(cache + "/manifest"), std::ios::binary);
   if (!in) return false;
   uint64_t h = 0, sz = 0;
   in.read(reinterpret_cast<char*>(&h), 8);
@@ -104,7 +124,7 @@ bool ReadMarker(const std::string& cache, uint64_t& hash, size_t& size) {
 }
 
 void WriteMarker(const std::string& cache, uint64_t hash, size_t size) {
-  std::ofstream out(cache + "/manifest", std::ios::binary);
+  std::ofstream out(ToPath(cache + "/manifest"), std::ios::binary);
   uint64_t sz = size;
   out.write(reinterpret_cast<const char*>(&hash), 8);
   out.write(reinterpret_cast<const char*>(&sz), 8);
@@ -124,20 +144,20 @@ void WriteMarker(const std::string& cache, uint64_t hash, size_t size) {
 bool AcquireCacheLock(const std::string& strLock) {
   std::error_code ec;
   for (int i = 0; i < 50; ++i) {
-    if (std::filesystem::create_directory(strLock, ec)) {
+    if (std::filesystem::create_directory(ToPath(strLock), ec)) {
       return true;
     }
     ec.clear();
     /* The lock exists: break it when it is stale. */
     const std::filesystem::file_time_type ft =
-        std::filesystem::last_write_time(strLock, ec);
+        std::filesystem::last_write_time(ToPath(strLock), ec);
     if (!ec) {
       const auto age = std::chrono::duration_cast<std::chrono::seconds>(
                            std::filesystem::file_time_type::clock::now() -
                            ft)
                            .count();
       if (age > kCacheLockStaleSec) {
-        std::filesystem::remove_all(strLock, ec);
+        std::filesystem::remove_all(ToPath(strLock), ec);
         ec.clear();
         continue;
       }
@@ -151,7 +171,7 @@ bool AcquireCacheLock(const std::string& strLock) {
 /** @brief Release the cache lock directory. */
 void ReleaseCacheLock(const std::string& strLock) {
   std::error_code ec;
-  std::filesystem::remove_all(strLock, ec);
+  std::filesystem::remove_all(ToPath(strLock), ec);
 }
 
 }  // namespace
@@ -169,13 +189,15 @@ std::string EmbedRuntimeLastError() { return g_runtime_last_error; }
  *         run) must be rebuilt instead of reused. */
 bool CacheContentsUsable(const std::string& strDir)
 {
+    std::error_code ec;
     const bool bStdlib =
-        (access((strDir + "/python311.zip").c_str(), 0) == 0) ||
-        ((access((strDir + "/stdlib").c_str(), 0) == 0) &&
-         (access((strDir + "/stdlib/encodings/__init__.pyc").c_str(), 0) ==
-          0));
+        std::filesystem::exists(ToPath(strDir + "/python311.zip"), ec) ||
+        (std::filesystem::exists(ToPath(strDir + "/stdlib"), ec) &&
+         std::filesystem::exists(
+             ToPath(strDir + "/stdlib/encodings/__init__.pyc"), ec));
+    ec.clear();
     const bool bYtDlp =
-        (access((strDir + "/yt_dlp/__init__.pyc").c_str(), 0) == 0);
+        std::filesystem::exists(ToPath(strDir + "/yt_dlp/__init__.pyc"), ec);
     return bStdlib && bYtDlp;
 }
 
@@ -255,7 +277,7 @@ bool ExtractEmbeddedRuntime(std::string& home) {
   }
 
   /* Read the blob. */
-  std::ifstream in(g_exe_path, std::ios::binary);
+  std::ifstream in(ToPath(g_exe_path), std::ios::binary);
   if (!in) {
     SetRuntimeError("failed to open the executable", "");
     if (bLocked) {
@@ -294,8 +316,8 @@ bool ExtractEmbeddedRuntime(std::string& home) {
 #endif
       );
   std::error_code ec;
-  std::filesystem::remove_all(tmp_cache, ec);
-  std::filesystem::create_directories(tmp_cache, ec);
+  std::filesystem::remove_all(ToPath(tmp_cache), ec);
+  std::filesystem::create_directories(ToPath(tmp_cache), ec);
 
   size_t pos = 0;
   const auto rd = [&](void* dst, size_t n) -> bool {
@@ -307,7 +329,7 @@ bool ExtractEmbeddedRuntime(std::string& home) {
 
   uint32_t count = 0;
   if (!rd(&count, 4)) {
-    std::filesystem::remove_all(tmp_cache, ec);
+    std::filesystem::remove_all(ToPath(tmp_cache), ec);
     SetRuntimeError("embedded runtime blob format invalid", "");
     if (bLocked) {
       ReleaseCacheLock(strLock);
@@ -330,8 +352,8 @@ bool ExtractEmbeddedRuntime(std::string& home) {
     }
     const std::string full = tmp_cache + "/" + rel;
     std::filesystem::create_directories(
-        std::filesystem::path(full).parent_path(), ec);
-    std::ofstream out(full, std::ios::binary);
+        ToPath(full).parent_path(), ec);
+    std::ofstream out(ToPath(full), std::ios::binary);
     if (!out) { ok = false; break; }
     size_t left = static_cast<size_t>(dlen);
     while (left > 0 && ok) {
@@ -346,7 +368,7 @@ bool ExtractEmbeddedRuntime(std::string& home) {
   }
 
   if (!ok || pos != blob.size()) {
-    std::filesystem::remove_all(tmp_cache, ec);
+    std::filesystem::remove_all(ToPath(tmp_cache), ec);
     SetRuntimeError("failed to extract embedded runtime files", "");
     if (bLocked) {
       ReleaseCacheLock(strLock);
@@ -359,16 +381,16 @@ bool ExtractEmbeddedRuntime(std::string& home) {
    * is still running), use the hash-suffixed cache instead so the runtime
    * stays usable. */
   std::string strHome = tmp_cache;
-  std::filesystem::remove_all(cache, ec);
+  std::filesystem::remove_all(ToPath(cache), ec);
   ec.clear();
-  std::filesystem::rename(tmp_cache, cache, ec);
+  std::filesystem::rename(ToPath(tmp_cache), ToPath(cache), ec);
   if (!ec) {
     strHome = cache;
   } else {
     ec.clear();
-    std::filesystem::remove_all(strFallbackCache, ec);
+    std::filesystem::remove_all(ToPath(strFallbackCache), ec);
     ec.clear();
-    std::filesystem::rename(tmp_cache, strFallbackCache, ec);
+    std::filesystem::rename(ToPath(tmp_cache), ToPath(strFallbackCache), ec);
     if (!ec) {
       strHome = strFallbackCache;
     }
