@@ -149,6 +149,7 @@ One command for any supported site:
 ```bash
 ./burst <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
 ./burst --video <video-url> [-o basename] [-t threads] [--timeout sec]
+./burst --verify-runtime
 ```
 
 ```bash
@@ -163,6 +164,9 @@ One command for any supported site:
 
 # Force download without auto-interruption
 ./burst https://example.com/file.iso -o file.iso --no-timeout
+
+# Offline self-check of the embedded Python runtime (exit 0 = OK; CI gate)
+./burst --verify-runtime
 
 # Show help
 ./burst -h

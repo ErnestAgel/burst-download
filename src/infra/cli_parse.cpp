@@ -152,6 +152,11 @@ BOOL32 CliParseArgs(s32 nArgc, char** ppszArgv, TCliOptions& tOpts,
             tOpts.emAction = emCliActionUpdateParser;
             return TRUE;
         }
+        else if (std::strcmp(pszArg, "--verify-runtime") == 0)
+        {
+            tOpts.emAction = emCliActionVerifyRuntime;
+            return TRUE;
+        }
         else if (std::strcmp(pszArg, "--verify") == 0)
         {
             tOpts.bVerify = TRUE;

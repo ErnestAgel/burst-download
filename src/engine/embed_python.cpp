@@ -770,6 +770,94 @@ std::string EmbedLastInitError()
     return g_last_init_error;
 }
 
+bool EmbedVerifyRuntime(std::string& strMsg)
+{
+    strMsg.clear();
+    if (!EmbedPythonInit())
+    {
+        strMsg = "Python runtime init failed";
+        const std::string strDetail = EmbedLastInitError();
+        if (!strDetail.empty())
+        {
+            strMsg += ": " + strDetail;
+        }
+        return false;
+    }
+
+    /* Offline import check: the same module set the video parser needs.
+     * The result is written to JSON and read back (same pattern as the
+     * parse/update scripts), so failures surface with the real reason. */
+    const std::string strResultFile = ResultFile();
+    std::string strScript;
+    strScript.reserve(2048);
+    strScript +=
+        "import base64, json\n"
+        "def _b(s): return base64.b64decode(s.encode('ascii')).decode("
+        "'utf-8', 'replace')\n"
+        "OUT = _b(" + B64Lit(strResultFile) + ")\n"
+        "mods = ['os', 'json', 'ssl', 'hashlib', 'socket', 'yt_dlp']\n"
+        "out = {'ok': True, 'err': '', 'yt_dlp_version': ''}\n"
+        "try:\n"
+        "    for m in mods:\n"
+        "        __import__(m)\n"
+        "    import yt_dlp\n"
+        "    out['yt_dlp_version'] = str("
+        "getattr(yt_dlp, '__version__', ''))\n"
+        "except Exception as e:\n"
+        "    out['ok'] = False\n"
+        "    out['err'] = repr(e)\n"
+        "json.dump(out, open(OUT, 'w', encoding='utf-8'), "
+        "ensure_ascii=False)\n";
+
+    auto pRc = std::make_shared<int>(0);
+    const std::string strScriptCopy = strScript;
+    const bool bRan = RunOnPythonThread(
+        [pRc, strScriptCopy] {
+            *pRc = PyRun_SimpleString(strScriptCopy.c_str());
+        },
+        60, nullptr);
+    if (!bRan)
+    {
+        strMsg = "runtime verification timed out";
+        return false;
+    }
+    if (*pRc != 0)
+    {
+        strMsg = "runtime verification script failed";
+        return false;
+    }
+
+    std::ifstream inFile(strResultFile);
+    if (!inFile.is_open())
+    {
+        strMsg = "failed to read the verification result";
+        return false;
+    }
+    std::string strContent((std::istreambuf_iterator<char>(inFile)),
+                           std::istreambuf_iterator<char>());
+    inFile.close();
+    remove(strResultFile.c_str());
+
+    const bool bOk = strContent.find("\"ok\": true") != std::string::npos;
+    const std::string strVer = ExtractJsonStr(strContent, "yt_dlp_version");
+    const std::string strErrDetail = ExtractJsonStr(strContent, "err");
+    if (!bOk)
+    {
+        strMsg = "runtime import check failed";
+        if (!strErrDetail.empty())
+        {
+            strMsg += ": " + strErrDetail;
+        }
+        return false;
+    }
+    strMsg = "runtime home: " + g_python_home;
+    if (!strVer.empty())
+    {
+        strMsg += "; yt_dlp " + strVer;
+    }
+    return true;
+}
+
 bool EmbedParseVideoUrls(const std::string& strUrl,
                          std::vector<std::string>& vecUrls,
                          const std::string& strCookiesFromBrowser,

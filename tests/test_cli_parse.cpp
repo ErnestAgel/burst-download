@@ -205,6 +205,25 @@ static void TestCliParseUpdateParser(CTestReport& cReport)
     BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionUpdateParser);
 }
 
+/** @brief Test: --verify-runtime action (first or mid argument list). */
+static void TestCliParseVerifyRuntime(CTestReport& cReport)
+{
+    cReport.BeginCase("cli_parse: verify runtime");
+    TCliOptions tOpts = {};
+    std::string strError;
+    BOOL32 bOk = FALSE;
+
+    std::vector<std::string> vecArgsFirst = {"burst", "--verify-runtime"};
+    RunParse(vecArgsFirst, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionVerifyRuntime);
+
+    std::vector<std::string> vecArgsMid = {"burst", "u", "--verify-runtime"};
+    RunParse(vecArgsMid, tOpts, bOk, strError);
+    BURST_EXPECT_TRUE(cReport, bOk == TRUE);
+    BURST_EXPECT_TRUE(cReport, tOpts.emAction == emCliActionVerifyRuntime);
+}
+
 /** @brief Test: --verify flag and its optional sha256 value. */
 static void TestCliParseVerify(CTestReport& cReport)
 {
@@ -346,6 +365,7 @@ void RunCliParseTests(CTestReport& cReport)
     TestCliParseTimeout(cReport);
     TestCliParseVideoOptions(cReport);
     TestCliParseUpdateParser(cReport);
+    TestCliParseVerifyRuntime(cReport);
     TestCliParseVerify(cReport);
     TestCliParseContinue(cReport);
     TestCliParseDeletePartial(cReport);

@@ -9,8 +9,36 @@ permissions:
   contents: write
 
 jobs:
+  verify-release-ref:
+    name: Guard - tag must match main HEAD
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main tip
+        run: git fetch --depth=1 origin main
+
+      - name: Compare tag with main
+        run: |
+          set -euo pipefail
+          TAG_SHA="$(git rev-parse HEAD)"
+          MAIN_SHA="$(git rev-parse origin/main)"
+          echo "tag  = ${TAG_SHA} (${GITHUB_REF_NAME})"
+          echo "main = ${MAIN_SHA}"
+          if [ "${TAG_SHA}" != "${MAIN_SHA}" ]; then
+            echo "::error::Release ${GITHUB_REF_NAME} would build stale code: the tag is not main HEAD."
+            echo "::error::Push main first, or move the tag with: git tag -f ${GITHUB_REF_NAME} main && git push -f origin ${GITHUB_REF_NAME}"
+            git log --oneline "${TAG_SHA}..${MAIN_SHA}" 2>/dev/null | sed 's/^/  missing from tag: /' || true
+            exit 1
+          fi
+          echo "OK: tag matches main HEAD"
+
   linux-x86_64:
     name: Linux x86_64 Release
+    needs: [verify-release-ref]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -33,6 +61,9 @@ jobs:
       - name: Package single-file release
         run: python scripts/package_release.py --platform linux-x86_64 --exe build/burst --runtime third_party/python/runtime --out burst-linux-x86_64
 
+      - name: Verify packaged binary (embedded runtime end to end)
+        run: ./burst-linux-x86_64 --verify-runtime
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -42,6 +73,7 @@ jobs:
 
   linux-arm64:
     name: Linux ARM64 Release
+    needs: [verify-release-ref]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -67,6 +99,9 @@ jobs:
       - name: Package single-file release
         run: python scripts/package_release.py --platform linux-aarch64 --exe build/burst --runtime third_party/python/runtime --out burst-linux-aarch64
 
+      - name: Verify embedded runtime footer
+        run: python3 -c "import struct; d=open('burst-linux-aarch64','rb').read(); t=d[-32:]; assert t[:8]==b'BURSTARC' and t[-8:]==b'BURSTEND'; n,h=struct.unpack('<QQ',t[8:24]); assert n==len(d)-32; print('embedded runtime footer OK, blob', n, 'bytes')"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -76,6 +111,7 @@ jobs:
 
   windows:
     name: Windows x86_64 Release
+    needs: [verify-release-ref]
     runs-on: windows-latest
     defaults:
       run:
@@ -108,6 +144,12 @@ jobs:
 
       - name: Package zip release
         run: python scripts/package_release.py --platform windows-x86_64 --exe build/burst.exe --runtime third_party/python/runtime --build-dir build --out burst-windows-x86_64.zip
+
+      - name: Verify packaged zip (embedded runtime end to end)
+        run: |
+          python -m zipfile -e burst-windows-x86_64.zip verify-stage
+          ./verify-stage/burst.exe --verify-runtime
+          rm -rf verify-stage
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

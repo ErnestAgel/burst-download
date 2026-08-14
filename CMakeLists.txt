@@ -6,7 +6,7 @@ project("burst-download")
 # ---- 应用版本号（构建进二进制，--version / GUI 关于弹窗读取） ----
 # 默认与当前发布 tag 同步；发布脚本会以 -DBURST_VERSION=<tag> 覆盖，
 # 保证发布物内的版本号与实际 Release 一致。
-set(BURST_VERSION "2.4.4" CACHE STRING "Burst Download 版本号（x.y.z）")
+set(BURST_VERSION "2.4.5" CACHE STRING "Burst Download 版本号（x.y.z）")
 string(REPLACE "." ";" BURST_VERSION_PARTS "${BURST_VERSION}")
 list(LENGTH BURST_VERSION_PARTS BURST_VERSION_PARTS_LEN)
 if(BURST_VERSION_PARTS_LEN GREATER 0)

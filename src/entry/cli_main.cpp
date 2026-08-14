@@ -59,6 +59,8 @@ void PrintUsage(const char* pszProg)
            "0)\n");
     printf("  --update-parser  update the built-in video parser to the latest "
            "version (needs network)\n");
+    printf("  --verify-runtime verify the embedded Python runtime offline and "
+           "exit (0 = ok)\n");
     printf("  --verify [sha256] compute and print the SHA-256 digest of the "
            "downloaded file after completion\n");
     printf("  --continue   resume an existing file instead of renaming it "
@@ -125,6 +127,17 @@ int RunCli(int argc, char** argv)
             return 1;
         }
         printf("%s\n", strMsg.c_str());
+        return 0;
+    }
+    if (tOpts.emAction == emCliActionVerifyRuntime)
+    {
+        std::string strMsg;
+        if (!EmbedVerifyRuntime(strMsg))
+        {
+            printf("runtime verification failed: %s\n", strMsg.c_str());
+            return 1;
+        }
+        printf("runtime verification passed: %s\n", strMsg.c_str());
         return 0;
     }
 

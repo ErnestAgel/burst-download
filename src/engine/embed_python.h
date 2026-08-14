@@ -38,6 +38,18 @@ bool EmbedPythonInit(const std::string& python_home = "");
 std::string EmbedLastInitError();
 
 /**
+ * @brief Verify the embedded Python runtime end to end without network:
+ *        initialize the interpreter and import every module the video
+ *        parser needs (os/json/ssl/hashlib/socket/yt_dlp).
+ * @param msg Output: success description (runtime home + yt_dlp version)
+ *        or the failure reason.
+ * @return TRUE when the runtime initializes and all imports succeed.
+ * @note Intended for CI smoke tests on raw builds (CURLBOLT_PYHOME) and on
+ *       packaged artifacts (embedded blob); exit code drives gating.
+ */
+bool EmbedVerifyRuntime(std::string& msg);
+
+/**
  * @brief Parse a video page with the embedded yt_dlp into media stream
  *        URLs.
  * @param url Video page URL (e.g. Bilibili/YouTube video page).

@@ -120,6 +120,7 @@
 ./burst <url> [-o filename] [-t threads] [--timeout sec] [--no-timeout]
 ./burst --video <video-url> [-o basename] [-t threads] [--timeout sec]
 ./burst --update-parser
+./burst --verify-runtime
 ./burst --version
 ```
 
@@ -138,6 +139,9 @@
 
 # 在线更新视频解析组件（网站改版导致解析失效时自愈，无需重新编译）
 ./burst --update-parser
+
+# 离线自检内嵌 Python 运行时（0 表示正常，CI 发布门禁用）
+./burst --verify-runtime
 
 # 查看帮助
 ./burst -h

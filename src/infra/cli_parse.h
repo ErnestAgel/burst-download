@@ -20,6 +20,7 @@ typedef enum tagCliAction
     emCliActionVersion,
     emCliActionHelp,
     emCliActionUpdateParser,
+    emCliActionVerifyRuntime,
     emCliActionDownload
 } TCliAction;
 

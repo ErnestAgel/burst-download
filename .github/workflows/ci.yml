@@ -93,6 +93,11 @@ jobs:
       - name: Smoke test — help
         run: ./build/burst.exe --help | head -n 40
 
+      - name: Smoke test — embedded Python runtime (source tree)
+        env:
+          CURLBOLT_PYHOME: third_party/python/runtime
+        run: ./build/burst.exe --verify-runtime
+
   tests:
     name: Unit tests (C++17, pure logic)
     runs-on: ubuntu-latest
