@@ -69,7 +69,24 @@ jobs:
         run: python scripts/package_release.py --platform linux-aarch64 --exe build/burst --runtime third_party/python/runtime --out burst-linux-aarch64
 
       - name: Verify embedded runtime footer
-        run: python3 -c "import struct; d=open('burst-linux-aarch64','rb').read(); t=d[-32:]; assert t[:8]==b'BURSTARC' and t[-8:]==b'BURSTEND'; n,h=struct.unpack('<QQ',t[8:24]); assert n==len(d)-32; print('embedded runtime footer OK, blob', n, 'bytes')"
+        run: |
+          python3 - <<'EOF'
+          import struct
+          path = 'burst-linux-aarch64'
+          d = open(path, 'rb').read()
+          t = d[-32:]
+          assert t[:8] == b'BURSTARC' and t[-8:] == b'BURSTEND', \
+              'footer magic missing'
+          n, h = struct.unpack('<QQ', t[8:24])
+          assert n <= len(d) - 32, 'blob length out of range'
+          blob = d[-32 - n:-32]
+          hv = 0xCBF29CE484222325
+          for x in blob:
+              hv ^= x
+              hv = (hv * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+          assert hv == h, 'blob hash mismatch'
+          print('embedded runtime footer OK, blob', n, 'bytes')
+          EOF
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
