@@ -236,12 +236,13 @@ cmake --build build --target burst      # produces burst
 - ⚡ Multi-threaded segmented download (1–8 threads selectable, default adaptive to CPU cores)
 - 🎬 **Video download** (Bilibili / YouTube etc.): parse → download video/audio tracks (parallel chunks) → auto-merge, with 4-stage status shown live (Parsing / Downloading video track / Downloading audio track / Merging)
 - 🗂️ **Task list with per-task controls**: **Stop** cancels and **keeps partials** (segmented resume via `.curlbolt.part` — only unfinished parts re-download), **Resume** re-queues and continues, **Delete** removes an incomplete task (cancels + deletes artifacts), **Remove** clears finished rows; URL input clears after a successful add
+- 📜 **Per-task detail log**: click a task to pin it as the log target; the collapsible Log panel shows that task's stage events and errors live (auto-scroll, one-click copy)
 - 📚 **Multi-task queue**: add tasks while downloads are running; 4 concurrent task slots share one engine (each task keeps its full chunk count in flight)
 - 📊 **3D cylinder progress bar** (battery-cell chunks): completed cells green, active cell growing, 5px separators, per-cell percentage, hover shows per-thread speed; overall % + speed bottom-right
 - 📁 Save to a directory only — filename is derived from the URL automatically; "Browse…": native folder dialog on Windows / built-in directory browser on Linux (zero deps)
 - ⚡ **Thunder links** (`thunder://`) decoded automatically
 - 🌐 Bilingual UI (menu bar shows target-language hint: `language` in Chinese UI, `中文` in English UI)
-- 🪟 Windows: frameless full-edge resize (left/right/bottom + corners, min 640×480), DPI-aware; Linux: native title bar (drag & resize)
+- 🪟 Windows: frameless full-edge resize (left/right/bottom + corners, min 640×520), DPI-aware; Linux: native title bar (drag & resize)
 - 💾 Fonts and third-party libs bundled and distributed with the repo; no extra installs
 
 ---
