@@ -6,7 +6,7 @@ GUI 中文界面字体（中英双语共用，一套字体渲染）。
 
 | 文件 | 说明 |
 |---|---|
-| `NotoSansSC-subset.ttf` | 子集字体（Bold wght=700，GB2312 全量 6763 汉字 + ASCII + 常用标点，约 2.2MB），编译期经 `xxd -i` 嵌入为 `gui/font_data.h` |
+| `NotoSansSC-subset.ttf` | 子集字体（Bold wght=700，GB2312 全量 6763 汉字 + ASCII + 常用标点 + `· → ← ↑ ↓ × ±`，约 2.2MB），编译期经 `xxd -i` 嵌入为 `gui/font_data.h` |
 | `chars.txt` | 子集化的字符表（可复现子集化） |
 | `OFL.txt` | 上游字体许可证（SIL OFL 1.1，允许再分发） |
 
@@ -37,7 +37,8 @@ f.save('NotoSansSC-Bold.ttf')
 
 # 3. 按字符表子集化（chars.txt = ASCII + GB2312 全量 + 常用标点）
 python -m fontTools.subset NotoSansSC-Bold.ttf \
-  --text-file=chars.txt --output-file=NotoSansSC-subset.ttf
+  --text-file=chars.txt --unicodes=U+00B7,U+00D7,U+00B1,U+2190-2193 \
+  --output-file=NotoSansSC-subset.ttf
 
 # 4. 生成 C 数组头（编译期嵌入）
 xxd -i NotoSansSC-subset.ttf > ../../gui/font_data.h

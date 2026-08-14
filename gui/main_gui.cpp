@@ -174,7 +174,7 @@ int RunGui(int argc, char** argv) {
      * drag/resize). */
     glfwWindowHint(GLFW_DECORATED, GLFW_TRUE);
 #endif
-    GLFWwindow* window = glfwCreateWindow(720, 640, i18n::T("window.title"),
+    GLFWwindow* window = glfwCreateWindow(680, 600, i18n::T("window.title"),
                                           NULL, NULL);
     if (window == nullptr) {
         /* OpenGL 3.3+ unavailable (VM / old driver): prompt, do not crash. */
@@ -187,8 +187,30 @@ int RunGui(int argc, char** argv) {
     glfwMakeContextCurrent(window);
     glEnable(GL_MULTISAMPLE);
     glfwSwapInterval(1);
-    /* Fixed window size per the visual spec (ui-preview width 720). */
-    glfwSetWindowSizeLimits(window, 720, 640, 720, 640);
+#ifdef _WIN32
+    /* Rounded window corners (Windows 11 DWM; silently ignored on Win10).
+     * Loaded dynamically so the linker does not need dwmapi.lib. */
+    if (HWND hwndRound = glfwGetWin32Window(window)) {
+        typedef HRESULT(WINAPI * DwmSetWindowAttributeFn)(HWND, DWORD,
+                                                          LPCVOID, DWORD);
+        HMODULE hDwm = LoadLibraryW(L"dwmapi.dll");
+        if (hDwm != nullptr) {
+            DwmSetWindowAttributeFn fnDwm =
+                (DwmSetWindowAttributeFn)GetProcAddress(
+                    hDwm, "DwmSetWindowAttribute");
+            if (fnDwm != nullptr) {
+                const DWORD dwPref = 2; /* DWMWCP_ROUND */
+                fnDwm(hwndRound, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */,
+                      &dwPref, sizeof(dwPref));
+            }
+            FreeLibrary(hDwm);
+        }
+    }
+#endif
+    /* Resizable window (min 640x520; max unlimited). The layout adapts via
+     * content-region heights; ui.cpp's custom resize grip handles the
+     * left/right/bottom edges and corners. */
+    glfwSetWindowSizeLimits(window, 640, 520, GLFW_DONT_CARE, GLFW_DONT_CARE);
     /* Focus the borderless window at startup: avoids the first click being
      * consumed just to activate the window ("needs two clicks"). */
     glfwFocusWindow(window);
@@ -264,7 +286,8 @@ int RunGui(int argc, char** argv) {
 
         /* Clear every frame: prevents ghosting after window resizes. */
         glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-        glClearColor(0.10f, 0.10f, 0.12f, 1.0f);
+        /* Window background #282C34 (spec C.1), visible during resize. */
+        glClearColor(0x28 / 255.0f, 0x2C / 255.0f, 0x34 / 255.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         ImGui_ImplOpenGL3_NewFrame();

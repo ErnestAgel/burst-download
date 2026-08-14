@@ -50,8 +50,8 @@ void ApplyBurst() {
     pCol[ImGuiCol_Border]                = cBorder;
     pCol[ImGuiCol_BorderShadow]          = C(0, 0, 0, 0);
     pCol[ImGuiCol_FrameBg]               = cPanel;
-    pCol[ImGuiCol_FrameBgHovered]        = cHover;
-    pCol[ImGuiCol_FrameBgActive]         = C(0x3F, 0x3F, 0x46, 0.55f);
+    pCol[ImGuiCol_FrameBgHovered]        = cPanel;   /* 网页输入框 hover 不变色 */
+    pCol[ImGuiCol_FrameBgActive]         = C(0x26, 0x2A, 0x33);
     pCol[ImGuiCol_TitleBg]               = cPanel;
     pCol[ImGuiCol_TitleBgActive]         = cPanel;
     pCol[ImGuiCol_TitleBgCollapsed]      = cPanel;

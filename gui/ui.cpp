@@ -48,7 +48,7 @@ namespace {
 /* Custom title bar height (borderless window, replaces the system title
  * bar). */
 #ifdef _WIN32
-const float kTitleBarH = 34.0f; /* Windows custom title bar height */
+const float kTitleBarH = 38.0f; /* Windows custom title bar height (web: py-2.5) */
 #else
 const float kTitleBarH = 0.0f;  /* Linux uses the system title bar; the
                                  * content area starts at the window top */
@@ -75,7 +75,7 @@ int g_threads = BurstDefaultThreads();   /* default = sensible 2~4 */
 void AddTaskFromForm(CTaskModel& cModel);
 void RenderTaskList(CTaskModel& cModel,
                     std::vector<CTaskModel::TTaskRow>& vecRowsOut);
-void RenderLog(const std::vector<std::string>& log);
+void RenderLog(const std::vector<std::string>& log, float fHeight);
 void RenderStatusBar(const std::vector<CTaskModel::TTaskRow>& vecRows,
                      u32 dwMaxSlots);
 void RenderLogSection(CTaskModel& cModel);
@@ -104,10 +104,14 @@ std::string g_dirbrowse_dir;
 /* Log auto-scroll */
 bool g_log_autoscroll = true;
 
+/* This frame's reserved log-section height (computed by RenderTaskList so
+ * the status bar always stays visible even with the log open). */
+float g_log_h = 0.0f;
+
 /* URL input focus request (example chips) and task-log expand state. */
 bool g_focus_url_input = false;
 bool g_log_open = false;
-float g_task_row_h = 118.0f;  /* measured row height (hover bg) */
+float g_task_row_h = 0.0f;  /* measured row height (hover bg); 0 = not yet */
 
 /** Push the 11px secondary font when available. */
 void PushSmallFont() {
@@ -217,7 +221,7 @@ void SegmentProgressBar(int nThreads, const ThreadView* pThreads,
             const int nEnd =
                 (int)((double)(i + 1) / nThreads * 100.0);
             char buf[64];
-            snprintf(buf, sizeof(buf), "%s %d | %s",
+            snprintf(buf, sizeof(buf), "%s %d · %s",
                      i18n::T("label.thread"), i + 1,
                      FormatSizeBytes((long long)(dChunkMB * 1024.0 * 1024.0))
                          .c_str());
@@ -259,21 +263,6 @@ void TotalProgressBar(float fProgress, float fWidth, float fHeight) {
                              IM_COL32(255, 255, 255, 60));
     }
     ImGui::Dummy(ImVec2(fWidth, fHeight));
-}
-
-/** @brief Capsule pill badge (status / detection chips). */
-void Pill(const char* szText, ImU32 uBg, ImU32 uFg) {
-    PushSmallFont();
-    ImGui::PushStyleColor(ImGuiCol_Button, uBg);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, uBg);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, uBg);
-    ImGui::PushStyleColor(ImGuiCol_Text, uFg);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 2.0f));
-    ImGui::Button(szText);
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(4);
-    PopSmallFont();
 }
 
 #ifdef _WIN32
@@ -646,8 +635,9 @@ bool RenderDownloadButton(const char* pszLabel, const ImVec2& size) {
                           IM_COL32(0x25, 0x63, 0xEB, 255));
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xFF, 0xFF, 0xFF, 255));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(16, 8));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
     const bool bClicked = ImGui::Button("##download_btn", size);
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(2);
     const ImVec2 rMin = ImGui::GetItemRectMin();
     const ImVec2 rMax = ImGui::GetItemRectMax();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -675,19 +665,25 @@ bool RenderTextButton(const char* pszLabel, ImU32 colText, ImU32 colHoverBg,
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colHoverBg);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, colHoverBg);
     ImGui::PushStyleColor(ImGuiCol_Text, colText);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 2.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
     const bool bClicked = ImGui::Button(pszLabel, size);
+    ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(4);
     PopSmallFont();
     return bClicked;
 }
 
-/** Rounded pill badge (mode / status), translucent background. */
+/** Rounded pill badge (mode / status), translucent background. An
+ *  optional fixed width makes badges on one row share the same capsule
+ *  size; the label stays centered. */
 void RenderPill(const char* pszId, const char* pszText, ImU32 colText,
-                ImU32 colBg, ImU32 colBorder) {
+                ImU32 colBg, ImU32 colBorder, float fWidth = 0.0f) {
     PushSmallFont();
     const ImVec2 sz = ImGui::CalcTextSize(pszText);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const ImVec2 size(sz.x + 16.0f, sz.y + 6.0f);
+    const float fW = std::max(fWidth, sz.x + 16.0f);
+    const ImVec2 size(fW, sz.y + 4.0f);
     ImGui::InvisibleButton(pszId, size);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float fRadius = size.y * 0.5f;
@@ -697,62 +693,53 @@ void RenderPill(const char* pszId, const char* pszText, ImU32 colText,
         dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), colBorder,
                     fRadius, 0, 1.0f);
     }
-    dl->AddText(ImVec2(pos.x + 8.0f, pos.y + 3.0f), colText, pszText);
+    dl->AddText(ImVec2(pos.x + (size.x - sz.x) * 0.5f,
+                       pos.y + (size.y - sz.y) * 0.5f),
+                colText, pszText);
     PopSmallFont();
 }
 
-/** Small bordered title-bar button (web mockup style). */
+/** Small bordered title-bar button (web mockup style). Text is drawn
+ *  manually so it stays visually centered (CJK glyphs otherwise sit low
+ *  inside the button frame). */
 bool TitleBarButton(const char* pszLabel, const ImVec2& size) {
     PushSmallFont();
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          IM_COL32(0x3F, 0x3F, 0x46, 102));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          IM_COL32(0x3F, 0x3F, 0x46, 140));
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xA1, 0xA1, 0xAA, 255));
-    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x3E, 0x44, 0x52, 255));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-    const bool bClicked = ImGui::Button(pszLabel, size);
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor(5);
+    const ImVec2 vMin = ImGui::GetCursorScreenPos();
+    const ImVec2 vMax(vMin.x + size.x, vMin.y + size.y);
+    ImGui::InvisibleButton(pszLabel, size);
+    const bool bHovered = ImGui::IsItemHovered();
+    const bool bClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    ImDrawList* pDraw = ImGui::GetWindowDrawList();
+    if (bHovered) {
+        pDraw->AddRectFilled(vMin, vMax,
+                             IM_COL32(0x3F, 0x3F, 0x46, 102), 4.0f);
+    }
+    pDraw->AddRect(vMin, vMax, IM_COL32(0x3F, 0x3F, 0x46, 255), 4.0f, 0,
+                   1.0f);
+    const ImVec2 ts = ImGui::CalcTextSize(pszLabel);
+    const float fLift = ts.y * 0.10f; /* CJK 字形在行框内偏下，向上补偿 */
+    pDraw->AddText(
+        ImVec2(vMin.x + (size.x - ts.x) * 0.5f,
+               vMin.y + (size.y - ts.y) * 0.5f - fLift),
+        IM_COL32(0xA1, 0xA1, 0xAA, 255), pszLabel);
     PopSmallFont();
     return bClicked;
 }
 
 /* ---- Task row rendering (spec 2.4: segmented per-thread bars) ---- */
 
-/** Status pill text for a row (queued / stopped / stages / percent). */
+/** Status pill text: percent until done (done/error keep their labels). */
 std::string StatusText(const CTaskModel::TTaskRow& tRow) {
     switch (tRow.emState) {
-        case emTaskPending:
-            return std::string(i18n::T("status.queued"));
-        case emTaskCanceled:
-            return std::string(i18n::T("status.stopped"));
         case emTaskDone:
             return std::string(i18n::T("stage.done"));
         case emTaskError:
             return std::string(i18n::T("stage.error"));
-        case emTaskRunning:
         default:
             break;
     }
-    if (tRow.bVideo != FALSE) {
-        switch (tRow.nStage) {
-            case STAGE_PARSING:
-                return std::string(i18n::T("stage.parsing"));
-            case STAGE_VIDEO_DL:
-                return std::string(i18n::T("stage.video"));
-            case STAGE_AUDIO_DL:
-                return std::string(i18n::T("stage.audio"));
-            case STAGE_MERGING:
-                return std::string(i18n::T("stage.merging"));
-            default:
-                break;
-        }
-    }
     char buf[64];
-    snprintf(buf, sizeof(buf), "%s %.0f%%", i18n::T("stage.downloading"),
-             tRow.dPercent);
+    snprintf(buf, sizeof(buf), "%.0f%%", tRow.dPercent);
     return std::string(buf);
 }
 
@@ -784,29 +771,115 @@ void StatusColors(const CTaskModel::TTaskRow& tRow, ImU32& colText,
     }
 }
 
-/** Segmented progress bar: one track per thread with a hover tooltip
- *  (ImGui tooltips are separate windows, never clipped by the list). */
-void RenderSegmentBar(const CTaskModel::TTaskRow& tRow) {
-    char szInfo[96];
-    snprintf(szInfo, sizeof(szInfo), "%.0f%% | %s", tRow.dPercent,
-             FormatSpeed(tRow.dSpeed).c_str());
+/** Progress row: segmented per-thread bar + total percent/speed + action
+ *  buttons (stop / resume / delete / remove), all vertically centered on
+ *  the 20px bar. Every button uses the shared row capsule width so the
+ *  group forms exact columns under the badges above (Delete/Remove land
+ *  under the status pill, Stop/Resume under the mode badge). Delete and
+ *  remove hover in red. */
+void RenderProgressRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow,
+                       const float fCapsuleW) {
     const float fGap = ImGui::GetStyle().ItemSpacing.x;
-    const float fRightW = 112.0f;  /* spec C.3: w-28 right-aligned */
+    char szInfo[96];
+    snprintf(szInfo, sizeof(szInfo), "%s", FormatSpeed(tRow.dSpeed).c_str());
+
+    /* Action buttons (delete/remove hover red). */
+    std::vector<const char*> vecActions;
+    if ((tRow.emState == emTaskRunning) || (tRow.emState == emTaskPending)) {
+        vecActions.push_back(i18n::T("button.stop"));
+        vecActions.push_back(i18n::T("button.delete"));
+    } else if (tRow.emState == emTaskCanceled) {
+        vecActions.push_back(i18n::T("button.resume"));
+        vecActions.push_back(i18n::T("button.delete"));
+    } else {
+        vecActions.push_back(i18n::T("button.remove"));
+    }
+
+    PushSmallFont();
+    /* Clamp the percent/speed text to the 112px column so long speeds
+     * never push into the fixed action buttons. */
+    std::string strInfo = szInfo;
+    while (!strInfo.empty() &&
+           ImGui::CalcTextSize(strInfo.c_str()).x > 108.0f) {
+        strInfo.pop_back();
+        while (!strInfo.empty() &&
+               (((unsigned char)strInfo.back() & 0xC0) == 0x80)) {
+            strInfo.pop_back();
+        }
+    }
+    if (strInfo != szInfo) {
+        strInfo += "...";
+    }
+    /* All visible action buttons share the same capsule width as the
+     * badges above, so the row reads as an aligned column under them. */
+    const float fButtonsW =
+        fCapsuleW * (float)vecActions.size() +
+        fGap * (float)((int)vecActions.size() - 1);
+    const float fTextH = ImGui::GetTextLineHeight();
+    const float fBtnH = fTextH + 4.0f;
+
+    /* Trailing gap keeps the button group's right edge aligned with the
+     * row badges (content right minus one item spacing). */
+    const float fRightW = 112.0f + fGap * 2.0f + fButtonsW;
     float fAvail = ImGui::GetContentRegionAvail().x - fRightW;
     if (fAvail < 80.0f) {
         fAvail = 80.0f;
     }
     const float fBarH = 20.0f;
+    const float fBarY = ImGui::GetCursorPosY();
     const std::vector<ThreadView> vecViews = BuildThreadViews(tRow);
     SegmentProgressBar((int)vecViews.size(), vecViews.data(), fAvail, fBarH);
+
+    /* Total percent / speed, right-aligned in the 112px column and
+     * vertically centered on the bar. */
     ImGui::SameLine();
-    const float fTextW = ImGui::CalcTextSize(szInfo).x;
+    const float fTextW = ImGui::CalcTextSize(strInfo.c_str()).x;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                          (112.0f - fGap - fTextW));
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() -
-                         (fBarH + ImGui::GetTextLineHeight()) * 0.5f);
-    PushSmallFont();
-    ImGui::Text("%s", szInfo);
+    ImGui::SetCursorPosY(fBarY + (fBarH - fTextH) * 0.5f);
+    ImGui::TextColored(
+        ImGui::ColorConvertU32ToFloat4(IM_COL32(0xA1, 0xA1, 0xAA, 255)),
+        "%s", strInfo.c_str());
+
+    /* Action buttons on the same line, centered on the bar. SameLine()
+     * alone would pin later buttons to the previous line's top and drop
+     * the first button's centering, so every button gets an explicit Y. */
+    const float fBtnTop = fBarY + (fBarH - fBtnH) * 0.5f;
+    ImGui::SameLine(0, fGap);
+    for (size_t i = 0; i < vecActions.size(); ++i) {
+        if (i > 0) {
+            ImGui::SameLine(0, fGap);
+        }
+        ImGui::SetCursorPosY(fBtnTop);
+        const char* pszAction = vecActions[i];
+        const BOOL32 bStop =
+            (strcmp(pszAction, i18n::T("button.stop")) == 0);
+        const BOOL32 bResume =
+            (strcmp(pszAction, i18n::T("button.resume")) == 0);
+        const BOOL32 bDelete =
+            (strcmp(pszAction, i18n::T("button.delete")) == 0);
+        ImU32 colText = IM_COL32(0xF8, 0x71, 0x71, 255);
+        ImU32 colHover = IM_COL32(0xEF, 0x44, 0x44, 25);
+        if (bResume) {
+            colText = IM_COL32(0x4A, 0xDE, 0x80, 255);
+            colHover = IM_COL32(0x22, 0xC5, 0x5E, 25);
+        }
+        if (RenderTextButton(pszAction, colText, colHover,
+                             ImVec2(fCapsuleW, 0))) {
+            if (bStop) {
+                cModel.CancelTask(tRow.dwModelId);
+            } else if (bResume) {
+                cModel.ResumeTask(tRow.dwModelId);
+            } else if (bDelete) {
+                cModel.DeleteTask(tRow.dwModelId);
+            } else {
+                cModel.RemoveTask(tRow.dwModelId);
+            }
+            if (g_selected_model_id == tRow.dwModelId) {
+                g_selected_model_id = 0;
+            }
+        }
+    }
     PopSmallFont();
 }
 
@@ -814,6 +887,19 @@ void RenderSegmentBar(const CTaskModel::TTaskRow& tRow) {
 void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     const float fGap = ImGui::GetStyle().ItemSpacing.x;
     const float fAvail = ImGui::GetContentRegionAvail().x;
+    /* First row: seed the hover height with the exact expected row height
+     * (rows are uniform), so the very first hover has no bleed below. */
+    if (g_task_row_h <= 0.0f) {
+        PushSmallFont();
+        const float fSmallH = ImGui::GetTextLineHeight();
+        PopSmallFont();
+        const float fMainH = ImGui::GetTextLineHeight();
+        const float fLine1 = std::max(fMainH, fSmallH + 6.0f);
+        const float fLine3 = std::max(20.0f, fSmallH + 4.0f);
+        const float fSpacing = ImGui::GetStyle().ItemSpacing.y;
+        g_task_row_h = fLine1 + fSmallH + fLine3 + fSmallH +
+                       fSpacing * 4.0f;
+    }
     /* Row hover background (web: hover:bg rgba(63,63,70,0.40)); the height
      * is the previous row's measured height, uniform across rows. */
     const float fRowTop = ImGui::GetCursorScreenPos().y;
@@ -857,28 +943,43 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     const char* pszMode = (tRow.bVideo != FALSE)
                               ? i18n::T("label.type_video")
                               : i18n::T("label.type_file");
+
     const std::string strStatus = StatusText(tRow);
     ImU32 colStatusText = 0;
     ImU32 colStatusBg = 0;
     StatusColors(tRow, colStatusText, colStatusBg);
 
-    const float fModeW = ImGui::CalcTextSize(pszMode).x + 16.0f;
-    const float fStatusW = ImGui::CalcTextSize(strStatus.c_str()).x + 16.0f;
-    const float fRightW = fModeW + fStatusW + fGap * 2.0f;
-    const float fLeftW = fAvail - fRightW;
+    /* One shared capsule width for the whole badge + action cluster:
+     * mode, status and every possible action label (stop / delete /
+     * resume / remove) are measured so the two rows always form aligned
+     * columns regardless of task state or language. */
+    PushSmallFont();
+    float fCapsuleW = std::max(ImGui::CalcTextSize(pszMode).x,
+                               ImGui::CalcTextSize(strStatus.c_str()).x);
+    const char* apszActions[] = {
+        i18n::T("button.stop"), i18n::T("button.delete"),
+        i18n::T("button.resume"), i18n::T("button.remove")};
+    for (const char* pszAction : apszActions) {
+        fCapsuleW = std::max(fCapsuleW, ImGui::CalcTextSize(pszAction).x);
+    }
+    fCapsuleW += 16.0f;
+    PopSmallFont();
+    const float fRightW = fCapsuleW * 2.0f + fGap * 2.0f;
+    const float fLeftW = fAvail - fRightW - fGap;
     const float fRowY = ImGui::GetCursorPosY();
 
-    /* Right side: mode badge + status pill (pinned to the right edge). */
-    ImGui::SetCursorPosX(fLeftW);
+    /* Right side: mode badge + status pill on the same line. */
+    ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + fLeftW + fGap);
     RenderPill("##mode_pill", pszMode, IM_COL32(0xA1, 0xA1, 0xAA, 255),
                IM_COL32(0xA1, 0xA1, 0xAA, 25),
-               IM_COL32(0x3F, 0x3F, 0x46, 255));
+               IM_COL32(0x3F, 0x3F, 0x46, 255), fCapsuleW);
     ImGui::SameLine(0, fGap);
-    Pill(strStatus.c_str(), colStatusBg, colStatusText);
+    RenderPill("##status_pill", strStatus.c_str(), colStatusText,
+               colStatusBg, 0, fCapsuleW);
 
     /* Left side: selectable file name (selects the detail log). */
     ImGui::SetCursorPosY(fRowY);
-    ImGui::SetCursorPosX(0.0f);
+    ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x);
     std::string strNameShow = strName;
     while (!strNameShow.empty() &&
            ImGui::CalcTextSize(strNameShow.c_str()).x > fLeftW) {
@@ -887,14 +988,22 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     if (strNameShow != strName) {
         strNameShow += "...";
     }
-    if (ImGui::Selectable(strNameShow.c_str(),
-                          g_selected_model_id == tRow.dwModelId, 0,
+    /* The name keeps one color for every row. The selection (auto-selected
+     * first row / clicked row) stays internal so the detail log below has
+     * a target, but it is not shown by recoloring the name. */
+    const bool bSelected = (g_selected_model_id == tRow.dwModelId);
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xE4, 0xE4, 0xE7, 255));
+    ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(0, 0, 0, 0));
+    if (ImGui::Selectable(strNameShow.c_str(), bSelected, 0,
                           ImVec2(fLeftW, 0))) {
         g_selected_model_id = tRow.dwModelId;
     }
+    ImGui::PopStyleColor(4);
     /* URL line (thunder:// prefix when decoded), truncated to fit. */
     const std::string strUrlLine =
-        (tRow.bDecoded != FALSE) ? "thunder:// -> " + tRow.strUrl
+        (tRow.bDecoded != FALSE) ? "thunder:// → " + tRow.strUrl
                                  : tRow.strUrl;
     std::string strUrlShow = strUrlLine;
     while (!strUrlShow.empty() &&
@@ -908,73 +1017,15 @@ void RenderTaskRow(CTaskModel& cModel, const CTaskModel::TTaskRow& tRow) {
     ImGui::TextDisabled("%s", strUrlShow.c_str());
     PopSmallFont();
 
-    /* Segmented per-thread progress + total percent/speed. */
-    RenderSegmentBar(tRow);
+    /* Progress row: segments + percent/speed + action buttons. */
+    RenderProgressRow(cModel, tRow, fCapsuleW);
 
-    /* Meta row: size | threads (left) + actions (right). */
+    /* Meta row: size · threads (left). */
     char szMeta[160];
-    snprintf(szMeta, sizeof(szMeta), "%s | %d %s",
+    snprintf(szMeta, sizeof(szMeta), "%s · %d %s",
              FormatSizeBytes(tRow.llFileTotal).c_str(), tRow.nThreads,
              i18n::T("unit.threads"));
-    std::vector<const char*> vecActions;
-    if ((tRow.emState == emTaskRunning) || (tRow.emState == emTaskPending)) {
-        vecActions.push_back(i18n::T("button.stop"));
-        vecActions.push_back(i18n::T("button.delete"));
-    } else if (tRow.emState == emTaskCanceled) {
-        vecActions.push_back(i18n::T("button.resume"));
-        vecActions.push_back(i18n::T("button.delete"));
-    } else {
-        vecActions.push_back(i18n::T("button.remove"));
-    }
-    float fActionsW = 0.0f;
-    for (const char* pszAction : vecActions) {
-        fActionsW += ImGui::CalcTextSize(pszAction).x + 16.0f;
-    }
-    fActionsW += fGap * (float)(vecActions.size() - 1u);
-    const float fMetaY = ImGui::GetCursorPosY();
-    ImGui::SetCursorPosX(fAvail - fActionsW);
-    for (size_t i = 0; i < vecActions.size(); ++i) {
-        if (i > 0u) {
-            ImGui::SameLine(0, fGap);
-        }
-        const char* pszAction = vecActions[i];
-        const BOOL32 bStop = (strcmp(pszAction, i18n::T("button.stop")) == 0);
-        const BOOL32 bResume =
-            (strcmp(pszAction, i18n::T("button.resume")) == 0);
-        const BOOL32 bDelete =
-            (strcmp(pszAction, i18n::T("button.delete")) == 0);
-        const BOOL32 bRemove =
-            (strcmp(pszAction, i18n::T("button.remove")) == 0);
-        const ImU32 colText =
-            bStop ? IM_COL32(0xF8, 0x71, 0x71, 255)
-                  : (bResume ? IM_COL32(0x4A, 0xDE, 0x80, 255)
-                             : (bDelete ? IM_COL32(0xA1, 0xA1, 0xAA, 255)
-                                        : IM_COL32(0xA1, 0xA1, 0xAA, 255)));
-        const ImU32 colHover =
-            bStop ? IM_COL32(0xEF, 0x44, 0x44, 25)
-                  : (bResume ? IM_COL32(0x22, 0xC5, 0x5E, 25)
-                             : (bDelete ? IM_COL32(0x3F, 0x3F, 0x46, 102)
-                                        : IM_COL32(0x3F, 0x3F, 0x46, 102)));
-        if (RenderTextButton(pszAction, colText, colHover, ImVec2(0, 0))) {
-            if (bStop) {
-                cModel.CancelTask(tRow.dwModelId);
-            } else if (bResume) {
-                cModel.ResumeTask(tRow.dwModelId);
-            } else if (bDelete) {
-                cModel.DeleteTask(tRow.dwModelId);
-                if (g_selected_model_id == tRow.dwModelId) {
-                    g_selected_model_id = 0;
-                }
-            } else if (bRemove) {
-                cModel.RemoveTask(tRow.dwModelId);
-                if (g_selected_model_id == tRow.dwModelId) {
-                    g_selected_model_id = 0;
-                }
-            }
-        }
-    }
-    ImGui::SetCursorPosY(fMetaY);
-    ImGui::SetCursorPosX(0.0f);
+    ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x);
     PushSmallFont();
     ImGui::TextDisabled("%s", szMeta);
     PopSmallFont();
@@ -1015,7 +1066,7 @@ void RenderAddForm(CTaskModel& cModel) {
     /* Web-style focus ring: blue border while the URL box is active. */
     if (bUrlActive) {
         ImGui::GetWindowDrawList()->AddRect(
-            vInputMin, vInputMax, IM_COL32(0x3B, 0x82, 0xF6, 255), 5.0f, 0,
+            vInputMin, vInputMax, IM_COL32(0x3B, 0x82, 0xF6, 255), 8.0f, 0,
             1.5f);
     }
     /* Detection chip overlaid inside the input's right edge; a solid panel
@@ -1029,7 +1080,7 @@ void RenderAddForm(CTaskModel& cModel) {
         pDraw->AddRectFilled(
             ImVec2(vInputMax.x - fChipW - 18.0f, vInputMin.y + 1.0f),
             ImVec2(vInputMax.x - 1.0f, vInputMax.y - 1.0f),
-            IM_COL32(0x21, 0x25, 0x2B, 255), 6.0f,
+            IM_COL32(0x21, 0x25, 0x2B, 255), 8.0f,
             ImDrawFlags_RoundCornersRight);
         const ImVec2 vChipPos(
             vInputMax.x - fChipW - 10.0f,
@@ -1053,12 +1104,13 @@ void RenderAddForm(CTaskModel& cModel) {
     /* Threads group pinned to the right edge (drawn first). */
     ImGui::SetCursorPosX(fAvail - fThreadsW);
     PushSmallFont();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
+    ImGui::AlignTextToFramePadding();
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(IM_COL32(0xA1, 0xA1,
                                                               0xAA, 255)),
                        "%s", i18n::T("label.threads"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(fComboW);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
     char items[128] = {0};
     int off = 0;
     for (int i = 1; i <= kHardwareMax && off < (int)sizeof(items) - 2; i++) {
@@ -1075,14 +1127,15 @@ void RenderAddForm(CTaskModel& cModel) {
     PopSmallFont();
     /* Save-to group on the left: label inline, then the path box. */
     ImGui::SetCursorPosY(fRowY);
-    ImGui::SetCursorPosX(0.0f);
+    ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x);
     PushSmallFont();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
+    ImGui::AlignTextToFramePadding();
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(IM_COL32(0xA1, 0xA1,
                                                               0xAA, 255)),
                        "%s", i18n::T("label.save_to"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(fPathW);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
     ImGui::InputTextWithHint(
         "##path", i18n::T("placeholder.path.file"), g_path, sizeof(g_path),
         ImGuiInputTextFlags_None);
@@ -1092,7 +1145,7 @@ void RenderAddForm(CTaskModel& cModel) {
         const ImVec2 vPathMin = ImGui::GetItemRectMin();
         const ImVec2 vPathMax = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddRect(
-            vPathMin, vPathMax, IM_COL32(0x3B, 0x82, 0xF6, 255), 5.0f, 0,
+            vPathMin, vPathMax, IM_COL32(0x3B, 0x82, 0xF6, 255), 8.0f, 0,
             1.5f);
     }
 #ifdef _WIN32
@@ -1237,28 +1290,44 @@ void RenderTaskList(CTaskModel& cModel,
         g_selected_model_id = vecRows[0].dwModelId;
     }
 
-    /* Slim header: clear-finished pinned right (no section label). */
+    /* Slim header: clear-finished pinned right, same right inset as the
+     * per-task Done pills. */
+    const float fGapHdr = ImGui::GetStyle().ItemSpacing.x;
     const float fClearW =
         ImGui::CalcTextSize(i18n::T("label.clear_finished")).x + 16.0f;
-    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - fClearW);
+    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - fClearW -
+                         fGapHdr);
     if (RenderTextButton(i18n::T("label.clear_finished"),
                          IM_COL32(0xA1, 0xA1, 0xAA, 255),
-                         IM_COL32(0x3E, 0x44, 0x52, 60), ImVec2(0, 0))) {
+                         IM_COL32(0x3F, 0x3F, 0x46, 102), ImVec2(0, 0))) {
         cModel.ClearFinished();
     }
 
-    /* Bounded list height; the log section + status bar reserve the rest.
-     * The list scrolls internally when rows overflow (the window itself is
-     * fixed-size and never scrolls). */
+    /* Exact height accounting: status bar (32px) always reserved, the log
+     * section header (44px) always visible so the toggle exists, the log
+     * body gets up to 150px when open (shrinks first), and the task list
+     * takes the rest. list + log + status == avail, so the status bar is
+     * never clipped by the window bottom. */
     const float fStatusH = 32.0f;
-    const float fLogH = g_log_open ? 195.0f : 0.0f;
-    float fListH =
-        ImGui::GetContentRegionAvail().y - fStatusH - fLogH - 4.0f;
-    if (fListH < 80.0f) {
-        fListH = 80.0f;
+    const float fLogHdrH = 44.0f;
+    const float fMinListH = 40.0f;
+    const float fLogMaxChildH = 150.0f;
+    const float fAvailY = ImGui::GetContentRegionAvail().y;
+    float fChildWanted = g_log_open ? fLogMaxChildH : 0.0f;
+    float fListWanted =
+        fAvailY - fStatusH - fLogHdrH - fChildWanted - 4.0f;
+    if (fListWanted < fMinListH) {
+        fChildWanted = std::max(
+            0.0f, fAvailY - fStatusH - fLogHdrH - fMinListH - 4.0f);
+        fListWanted =
+            fAvailY - fStatusH - fLogHdrH - fChildWanted - 4.0f;
     }
+    g_log_h = fChildWanted;
+    const float fListH = std::max(fListWanted, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 12));
-    ImGui::BeginChild("##tasklist", ImVec2(0, fListH), true);
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 102));
+    ImGui::BeginChild("##tasklist", ImVec2(0, fListH), true,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
     if (vecRows.empty()) {
         PushSmallFont();
         const float fEmptyW = ImGui::CalcTextSize(i18n::T("empty.tasks")).x;
@@ -1272,17 +1341,56 @@ void RenderTaskList(CTaskModel& cModel,
             ImGui::PushID(static_cast<int>(tRow.dwModelId));
             RenderTaskRow(cModel, tRow);
             ImGui::PopID();
-            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0.0f, 6.0f));
         }
     }
     ImGui::EndChild();
+    ImGui::PopStyleColor();
     ImGui::PopStyleVar();
 }
 
 /* ---- Collapsible log section for the selected task ---- */
 void RenderLogSection(CTaskModel& cModel) {
-    g_log_open = ImGui::CollapsingHeader(i18n::T("label.log"));
+    /* Header is always rendered so the toggle stays visible even when the
+     * window is too short for the log body. The bar is drawn manually so
+     * it exactly matches the log text box width below: ImGui's framed
+     * CollapsingHeader extends half a WindowPadding beyond the content
+     * area on both sides, which would make the toggle visibly wider than
+     * the log box. */
+    const float fBarH = 44.0f;
+    const float fBarW = ImGui::GetContentRegionAvail().x;
+    ImGui::InvisibleButton("##log_toggle", ImVec2(fBarW, fBarH));
+    const bool bHovered = ImGui::IsItemHovered();
+    const bool bClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const ImVec2 vMin = ImGui::GetItemRectMin();
+    const ImVec2 vMax = ImGui::GetItemRectMax();
+    ImDrawList* pDraw = ImGui::GetWindowDrawList();
+    pDraw->AddRectFilled(
+        vMin, vMax,
+        bHovered ? IM_COL32(0x2A, 0x2F, 0x37, 255)
+                 : IM_COL32(0x21, 0x25, 0x2B, 255));
+    /* Disclosure arrow (open = down, closed = right). */
+    const float cy = (vMin.y + vMax.y) * 0.5f;
+    const float cx = vMin.x + 18.0f;
+    const ImU32 colArrow = IM_COL32(0xA1, 0xA1, 0xAA, 255);
     if (g_log_open) {
+        pDraw->AddTriangleFilled(ImVec2(cx - 3.5f, cy - 2.5f),
+                                 ImVec2(cx + 3.5f, cy - 2.5f),
+                                 ImVec2(cx, cy + 3.0f), colArrow);
+    } else {
+        pDraw->AddTriangleFilled(ImVec2(cx - 2.5f, cy - 3.5f),
+                                 ImVec2(cx - 2.5f, cy + 3.5f),
+                                 ImVec2(cx + 3.0f, cy), colArrow);
+    }
+    const char* pszLabel = i18n::T("label.log");
+    const ImVec2 ts = ImGui::CalcTextSize(pszLabel);
+    const float fLift = ts.y * 0.10f; /* CJK glyphs sit low: lift up */
+    pDraw->AddText(ImVec2(vMin.x + 36.0f, cy - ts.y * 0.5f - fLift),
+                   ImGui::GetColorU32(ImGuiCol_Text), pszLabel);
+    if (bClicked) {
+        g_log_open = !g_log_open;
+    }
+    if (g_log_open && g_log_h >= 20.0f) {
         std::vector<std::string> vecLog;
         if (g_selected_model_id != 0) {
             DownloadSnapshot snap;
@@ -1291,7 +1399,7 @@ void RenderLogSection(CTaskModel& cModel) {
                 g_selected_model_id = 0;
             }
         }
-        RenderLog(vecLog);
+        RenderLog(vecLog, std::max(g_log_h - 32.0f, 8.0f));
     }
 }
 
@@ -1317,34 +1425,40 @@ void RenderStatusBar(const std::vector<CTaskModel::TTaskRow>& vecRows,
     const double dOverall =
         dTotalBytes > 0.0 ? dWeighted / dTotalBytes : 0.0;
     char szLeft[128];
-    snprintf(szLeft, sizeof(szLeft), "%u %s | %u/%u %s", dwTotal,
+    snprintf(szLeft, sizeof(szLeft), "%u %s · %u/%u %s", dwTotal,
              i18n::T("tasks.unit"), dwActive, dwMaxSlots, i18n::T("slots"));
     char szRight[160];
-    snprintf(szRight, sizeof(szRight), "%s %.0f%% | %s", i18n::T("overall"),
+    snprintf(szRight, sizeof(szRight), "%s %.0f%% · %s", i18n::T("overall"),
              dOverall, FormatSpeed(dTotalSpeed).c_str());
     const float fGap = ImGui::GetStyle().ItemSpacing.x;
     const float fBarW = 80.0f;
     const float fBarH = 6.0f;
     const ImVec2 ts = ImGui::CalcTextSize(szRight);
     const float fRightW = fBarW + fGap + ts.x;
-    ImGui::Text("%s", szLeft);
-    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - fRightW);
+    /* Same baseline for the left text and the right bar + text. */
     const float fLineY = ImGui::GetCursorPosY();
+    ImGui::TextColored(
+        ImGui::ColorConvertU32ToFloat4(IM_COL32(0xA1, 0xA1, 0xAA, 255)),
+        "%s", szLeft);
+    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - fRightW);
     ImGui::SetCursorPosY(fLineY +
                          (ImGui::GetTextLineHeight() - fBarH) * 0.5f);
     TotalProgressBar((float)(dOverall / 100.0), fBarW, fBarH);
     ImGui::SameLine();
     ImGui::SetCursorPosY(fLineY);
-    ImGui::Text("%s", szRight);
+    ImGui::TextColored(
+        ImGui::ColorConvertU32ToFloat4(IM_COL32(0xA1, 0xA1, 0xAA, 255)),
+        "%s", szRight);
     PopSmallFont();
 }
 
 /* ---- Log area (F7) ---- */
-void RenderLog(const std::vector<std::string>& log) {
+void RenderLog(const std::vector<std::string>& log, float fHeight) {
     ImGui::Separator();
-    ImGui::Text("%s", i18n::T("label.log"));
-    ImGui::SameLine();
-    if (ImGui::SmallButton(i18n::T("log.copy"))) {
+    PushSmallFont();
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 2.0f));
+    if (ImGui::Button(i18n::T("log.copy"))) {
         std::string all;
         for (const auto& line : log) {
             all += line;
@@ -1352,14 +1466,24 @@ void RenderLog(const std::vector<std::string>& log) {
         }
         ImGui::SetClipboardText(all.c_str());
     }
-    ImGui::BeginChild("##log", ImVec2(0, 140), true,
+    ImGui::PopStyleVar(2);
+    PopSmallFont();
+    /* Full width, aligned with the task-list box above. */
+    ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x);
+    ImGui::BeginChild("##log", ImVec2(0, fHeight), true,
                       ImGuiWindowFlags_HorizontalScrollbar);
-    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f) {
+    const bool bAtBottom =
+        ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f;
+    if (bAtBottom) {
         g_log_autoscroll = true;
     }
     for (const auto& line : log) {
         /* No wrapping: a horizontal scrollbar shows when lines are wide. */
         ImGui::TextUnformatted(line.c_str());
+    }
+    if (ImGui::GetIO().MouseWheel != 0.0f &&
+        ImGui::IsWindowHovered()) {
+        g_log_autoscroll = false;  /* user scrolled up: stop pinning */
     }
     if (g_log_autoscroll && ImGui::GetScrollMaxY() > 0) {
         ImGui::SetScrollY(ImGui::GetScrollMaxY());
@@ -1403,15 +1527,25 @@ void RenderAboutMenu() {
         {"issues", "https://github.com/ErnestAgel/burst-download/issues",
          TRUE},
         {"license", "MIT", FALSE},
-        {"tech_stack", "C/C++ | libcurl", FALSE},
-        {"platforms", "Windows x86_64 | Linux x86_64 | Linux ARM64", FALSE},
+        {"tech_stack", "C/C++ · libcurl", FALSE},
+        {"platforms", "Windows x86_64 · Linux x86_64 · Linux ARM64", FALSE},
     };
-    char szHead[160];
-    snprintf(szHead, sizeof(szHead), "%s - %s v%s", i18n::T("menu.about"),
-             i18n::T("window.title"), BURST_VERSION_STRING);
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(IM_COL32(0xD7, 0xDA,
-                                                              0xE0, 255)),
-                       "%s", szHead);
+    char szHead[64];
+    snprintf(szHead, sizeof(szHead), "%s", i18n::T("menu.about"));
+    /* Header strip (web: #181C23, full popup width, rounded top). */
+    const ImVec2 vHeadMin = ImGui::GetWindowPos();
+    const float fHeadH = ImGui::GetTextLineHeight() + 16.0f;
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        vHeadMin,
+        ImVec2(vHeadMin.x + ImGui::GetWindowSize().x, vHeadMin.y + fHeadH),
+        IM_COL32(0x18, 0x1C, 0x23, 255), 8.0f,
+        ImDrawFlags_RoundCornersTop);
+    ImGui::Dummy(ImVec2(0.0f, 8.0f));
+    ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 12.0f);
+    ImGui::TextColored(
+        ImGui::ColorConvertU32ToFloat4(IM_COL32(0xE4, 0xE4, 0xE7, 255)),
+        "%s", szHead);
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
     ImGui::Separator();
     /* One selectable row per entry: label left, value right-aligned
      * (links open in the browser; no nested buttons/tables). */
@@ -1535,19 +1669,18 @@ void RenderTitleBar() {
                                                         : i18n::Lang::Zh);
     }
 
-    /* Centered title text (12px -> small font). */
+    /* Centered title text (main 18px font; web mockup density). */
     char szTitle[128];
     snprintf(szTitle, sizeof(szTitle), "%s v%s", i18n::T("window.title"),
              BURST_VERSION_STRING);
-    PushSmallFont();
     const float fTitleW = ImGui::CalcTextSize(szTitle).x;
+    const float fTitleH = ImGui::GetTextLineHeight();
     ImGui::SetCursorPos(
         ImVec2((io.DisplaySize.x - fTitleW) * 0.5f,
-               (kTitleBarH - ImGui::GetTextLineHeight()) * 0.5f));
+               (kTitleBarH - fTitleH) * 0.5f - 1.0f));
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(IM_COL32(0xA1, 0xA1,
                                                               0xAA, 255)),
                        "%s", szTitle);
-    PopSmallFont();
 
     /* Title bar drag: on press, trigger native Windows window dragging
      * (WM_NCLBUTTONDOWN/HTCAPTION); non-Windows falls back to manual
@@ -1697,8 +1830,8 @@ void RenderResizeGrip() {
             if (s_dir == L || s_dir == BL) nx = x0 + (w0 - 640);
             nw = 640;
         }
-        if (nh < 480) {
-            nh = 480;
+        if (nh < 520) {
+            nh = 520;
         }
         glfwSetWindowSize(g_window, nw, nh);
         if (s_dir == L || s_dir == BL) {
@@ -1710,9 +1843,11 @@ void RenderResizeGrip() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetWindowPos();
     ImVec2 c = ImVec2(p.x + W - 2, p.y + H - kTitleBarH - 2);
-    ImU32 col = ImGui::GetColorU32(dir == BR ? ImGuiCol_SeparatorActive
-                                             : ImGuiCol_SeparatorHovered);
-    dl->AddTriangleFilled(ImVec2(c.x - 12, c.y), c, ImVec2(c.x, c.y - 12), col);
+    if (dir == BR) {
+        ImU32 col = ImGui::GetColorU32(ImGuiCol_SeparatorActive);
+        dl->AddTriangleFilled(ImVec2(c.x - 12, c.y), c,
+                              ImVec2(c.x, c.y - 12), col);
+    }
 }
 
 }  // namespace
@@ -1754,6 +1889,12 @@ bool Render(CTaskModel& cModel) {
     RenderTaskList(cModel, vecRows);
     RenderLogSection(cModel);
     RenderStatusBar(vecRows, cModel.MaxSlots());
+
+#ifdef _WIN32
+    /* Resize grip: a borderless window has no system handles; edges and
+     * corners are hit-tested here (called inside the main window). */
+    RenderResizeGrip();
+#endif
 
     ImGui::End();
     ImGui::PopStyleVar();
