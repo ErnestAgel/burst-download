@@ -14,6 +14,11 @@ void EmbedSetExePath(const std::string& exe_path);
 std::string EmbedGetExePath();
 
 /**
+ * @brief Cache root under the temp directory (may not exist yet).
+ */
+std::string EmbedRuntimeCacheRoot();
+
+/**
  * @brief Last extraction failure reason (empty when the last extraction
  *        succeeded); surfaced in task errors for diagnostics.
  */

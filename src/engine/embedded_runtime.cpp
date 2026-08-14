@@ -160,7 +160,24 @@ void EmbedSetExePath(const std::string& exe_path) { g_exe_path = exe_path; }
 
 std::string EmbedGetExePath() { return g_exe_path; }
 
+std::string EmbedRuntimeCacheRoot() { return TempCacheDir(); }
+
 std::string EmbedRuntimeLastError() { return g_runtime_last_error; }
+
+/** @brief A cache is reusable only when its critical entries are present;
+ *         partial caches (e.g. after antivirus cleanup or an interrupted
+ *         run) must be rebuilt instead of reused. */
+bool CacheContentsUsable(const std::string& strDir)
+{
+    const bool bStdlib =
+        (access((strDir + "/python311.zip").c_str(), 0) == 0) ||
+        ((access((strDir + "/stdlib").c_str(), 0) == 0) &&
+         (access((strDir + "/stdlib/encodings/__init__.pyc").c_str(), 0) ==
+          0));
+    const bool bYtDlp =
+        (access((strDir + "/yt_dlp/__init__.pyc").c_str(), 0) == 0);
+    return bStdlib && bYtDlp;
+}
 
 /** @brief Cache dir whose version marker matches the current blob and whose
  *         stdlib is present; empty when none matches. */
@@ -171,8 +188,7 @@ std::string MatchingCache(const std::string& strPrimary,
     uint64_t mh = 0;
     size_t ms = 0;
     if (ReadMarker(strDir, mh, ms) && mh == hash && ms == size &&
-        (access((strDir + "/python311.zip").c_str(), 0) == 0 ||
-         access((strDir + "/stdlib").c_str(), 0) == 0)) {
+        CacheContentsUsable(strDir)) {
       return strDir;
     }
   }

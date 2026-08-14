@@ -29,10 +29,12 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <sys/stat.h>
 #include <vector>
@@ -646,90 +648,118 @@ bool EmbedPythonInit(const std::string& strPythonHome)
         return true;
     }
 
-    /* Locate the runtime assets directory: explicit path -> exe assets/ ->
-     * environment variable -> compile-time macro. */
-    std::string strHome = strPythonHome;
-    if (!strHome.empty() && !RuntimeHomeUsable(strHome))
+    /* Self-healing: a stale or partially deleted extracted cache can make
+     * Py_Initialize fail once (antivirus cleanup / interrupted run).  When
+     * the located home is a cache dir, rebuild it and retry before giving
+     * up. */
+    std::string strHome;
+    for (int nAttempt = 0; nAttempt < 2; ++nAttempt)
     {
-        strHome.clear();  /* invalid path, keep falling back */
-    }
-    if (strHome.empty())
-    {
-        strHome = LocateRuntimeHome("");
-    }
-    if (strHome.empty())
-    {
-        const std::string strRuntimeErr = EmbedRuntimeLastError();
-        g_last_init_error =
-            "Python runtime assets not found (checked assets/ next to the "
-            "exe, python_runtime/, the embedded runtime cache and "
-            "CURLBOLT_PYHOME)";
-        if (!strRuntimeErr.empty())
+        /* Locate the runtime assets directory: explicit path -> exe
+         * assets/ -> temp cache -> environment variable -> compile-time
+         * macro. */
+        strHome = strPythonHome;
+        if (!strHome.empty() && !RuntimeHomeUsable(strHome))
         {
-            g_last_init_error += "; embedded runtime: " + strRuntimeErr;
+            strHome.clear();  /* invalid path, keep falling back */
         }
-        fprintf(stderr,
-                "[embed_python] Python runtime assets not found: checked "
-                "assets/ next to the exe, python_runtime/, the embedded "
-                "runtime cache and CURLBOLT_PYHOME.\n"
-                "[embed_python] Put assets/ (with stdlib/ and yt_dlp/) next "
-                "to the executable and run again.\n");
-        return false;
-    }
+        if (strHome.empty())
+        {
+            strHome = LocateRuntimeHome("");
+        }
+        if (strHome.empty())
+        {
+            const std::string strRuntimeErr = EmbedRuntimeLastError();
+            g_last_init_error =
+                "Python runtime assets not found (checked assets/ next to "
+                "the exe, python_runtime/, the embedded runtime cache and "
+                "CURLBOLT_PYHOME)";
+            if (!strRuntimeErr.empty())
+            {
+                g_last_init_error += "; embedded runtime: " + strRuntimeErr;
+            }
+            fprintf(stderr,
+                    "[embed_python] Python runtime assets not found: "
+                    "checked assets/ next to the exe, python_runtime/, the "
+                    "embedded runtime cache and CURLBOLT_PYHOME.\n"
+                    "[embed_python] Put assets/ (with stdlib/ and yt_dlp/) "
+                    "next to the executable and run again.\n");
+            return false;
+        }
 
-    if (!RuntimeHomeUsable(strHome))
-    {
-        g_last_init_error =
-            "Python runtime assets not usable: " + strHome;
-        fprintf(stderr,
-                "[embed_python] Python runtime assets not usable: %s\n",
-                strHome.c_str());
-        return false;
-    }
+        if (!RuntimeHomeUsable(strHome))
+        {
+            g_last_init_error =
+                "Python runtime assets not usable: " + strHome;
+            fprintf(stderr,
+                    "[embed_python] Python runtime assets not usable: %s\n",
+                    strHome.c_str());
+            return false;
+        }
 
-    PyConfig tConfig;
-    PyConfig_InitPythonConfig(&tConfig);
-    PyConfig_SetBytesString(&tConfig, &tConfig.program_name, "burst");
-    /* Explicit runtime root avoids Python printing "Could not find platform
-     * independent libraries" noise. */
-    PyConfig_SetBytesString(&tConfig, &tConfig.home, strHome.c_str());
-    tConfig.module_search_paths_set = 1;
-    /* stdlib: prefer the extracted directory (dev layout); the release
-     * layout ships python311.zip (also auto-loaded early by CPython). */
-    std::string strStdlib = strHome + "/stdlib";
-    if (access(strStdlib.c_str(), R_OK) != 0)
-    {
-        strStdlib = strHome + "/python311.zip";
-    }
-    /* Real directories come first: zipimport is not available during early
-     * initialization, so required modules (encodings etc.) load from them. */
-    PyWideStringList_Append(&tConfig.module_search_paths,
-                            Py_DecodeLocale(strHome.c_str(), nullptr));
-    PyWideStringList_Append(&tConfig.module_search_paths,
-                            Py_DecodeLocale(strStdlib.c_str(), nullptr));
-    /* Windows .pyd extension directory; harmless on Linux (no such dir). */
-    PyWideStringList_Append(&tConfig.module_search_paths,
-                            Py_DecodeLocale(
-                                (strHome + "/lib-dynload").c_str(), nullptr));
-    const PyStatus stStatus = Py_InitializeFromConfig(&tConfig);
-    if (PyStatus_Exception(stStatus))
-    {
+        PyConfig tConfig;
+        PyConfig_InitPythonConfig(&tConfig);
+        PyConfig_SetBytesString(&tConfig, &tConfig.program_name, "burst");
+        /* Explicit runtime root avoids Python printing "Could not find
+         * platform independent libraries" noise. */
+        PyConfig_SetBytesString(&tConfig, &tConfig.home, strHome.c_str());
+        tConfig.module_search_paths_set = 1;
+        /* stdlib: prefer the extracted directory (dev layout); the release
+         * layout ships python311.zip (also auto-loaded early by CPython). */
+        std::string strStdlib = strHome + "/stdlib";
+        if (access(strStdlib.c_str(), R_OK) != 0)
+        {
+            strStdlib = strHome + "/python311.zip";
+        }
+        /* Real directories come first: zipimport is not available during
+         * early initialization, so required modules (encodings etc.) load
+         * from them. */
+        PyWideStringList_Append(&tConfig.module_search_paths,
+                                Py_DecodeLocale(strHome.c_str(), nullptr));
+        PyWideStringList_Append(&tConfig.module_search_paths,
+                                Py_DecodeLocale(strStdlib.c_str(), nullptr));
+        /* Windows .pyd extension directory; harmless on Linux (no such
+         * dir). */
+        PyWideStringList_Append(
+            &tConfig.module_search_paths,
+            Py_DecodeLocale((strHome + "/lib-dynload").c_str(), nullptr));
+        const PyStatus stStatus = Py_InitializeFromConfig(&tConfig);
+        if (!PyStatus_Exception(stStatus))
+        {
+            PyConfig_Clear(&tConfig);
+            g_last_init_error.clear();
+            g_python_home = strHome;
+            g_initialized = true;
+            /* Issue R5: release the GIL so the dedicated Python worker
+             * thread can acquire it; without this its PyGILState_Ensure
+             * deadlocks. */
+            g_py_main_thread_state = PyEval_SaveThread();
+            return true;
+        }
         g_last_init_error =
             std::string("Py_Initialize failed: ") +
             (stStatus.err_msg ? stStatus.err_msg : "?");
         fprintf(stderr, "[embed_python] Py_Initialize failed: %s\n",
                 stStatus.err_msg ? stStatus.err_msg : "?");
         PyConfig_Clear(&tConfig);
-        return false;
+
+        /* Rebuild a corrupt extracted cache once and retry. */
+        const std::string strCacheRoot = EmbedRuntimeCacheRoot();
+        const bool bCacheHome =
+            !strCacheRoot.empty() &&
+            ((strHome == strCacheRoot) ||
+             ((strHome.size() > strCacheRoot.size() + 1) &&
+              (strHome.compare(0, strCacheRoot.size(), strCacheRoot) == 0) &&
+              (strHome[strCacheRoot.size()] == '-')));
+        if ((nAttempt == 0) && bCacheHome)
+        {
+            std::error_code ec;
+            std::filesystem::remove_all(strHome, ec);
+            continue;
+        }
+        break;
     }
-    PyConfig_Clear(&tConfig);
-    g_last_init_error.clear();
-    g_python_home = strHome;
-    g_initialized = true;
-    /* Issue R5: release the GIL so the dedicated Python worker thread can
-     * acquire it; without this its PyGILState_Ensure deadlocks. */
-    g_py_main_thread_state = PyEval_SaveThread();
-    return true;
+    return false;
 }
 
 /** @brief Last Python initialization failure reason (empty on success);
